@@ -247,6 +247,7 @@ export interface PersistedState {
   settings?: {
     outboundPaused?: boolean;
     aiProcessingPaused?: boolean;
+    directMessageAllowlist?: string[];
     personality?: Partial<Personality>;
   };
   runtime: {

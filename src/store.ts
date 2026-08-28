@@ -24,6 +24,7 @@ export interface Store {
   updateMetrics(update: Partial<AppMetrics>): Promise<void>;
   incrementMetric(key: keyof AppMetrics, amount?: number): Promise<void>;
   upsertGroup(group: GroupRecord): Promise<void>;
+  deleteGroup(id: string): Promise<void>;
   updateGroup(id: string, update: Partial<GroupRecord>): Promise<GroupRecord | undefined>;
   upsertMember(member: MemberRecord): Promise<void>;
   storeMessage(message: StoredMessage): Promise<boolean>;
@@ -137,6 +138,14 @@ export class FileStore implements Store {
 
   async upsertGroup(group: GroupRecord): Promise<void> {
     this.state.groups[group.id] = group;
+    await this.persist();
+  }
+
+  async deleteGroup(id: string): Promise<void> {
+    delete this.state.groups[id];
+    for (const [memberId, member] of Object.entries(this.state.members)) {
+      if (member.groupId === id) delete this.state.members[memberId];
+    }
     await this.persist();
   }
 

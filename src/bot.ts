@@ -36,8 +36,9 @@ export class BotRuntime {
     if (settings?.personality) this.config.personality = { ...this.config.personality, ...settings.personality };
     if (settings?.outboundPaused !== undefined) this.config.outboundPaused = settings.outboundPaused;
     if (settings?.aiProcessingPaused !== undefined) this.config.aiProcessingPaused = settings.aiProcessingPaused;
+    if (settings?.directMessageAllowlist !== undefined) this.config.directMessageAllowlist = [...settings.directMessageAllowlist];
     if (!settings) {
-      await this.store.updateSettings({ outboundPaused: this.config.outboundPaused, aiProcessingPaused: this.config.aiProcessingPaused, personality: this.config.personality });
+      await this.store.updateSettings({ outboundPaused: this.config.outboundPaused, aiProcessingPaused: this.config.aiProcessingPaused, directMessageAllowlist: this.config.directMessageAllowlist, personality: this.config.personality });
     }
   }
 
@@ -108,6 +109,10 @@ export class BotRuntime {
   }
 
   async syncGroups(groups: DiscoveredGroup[]): Promise<void> {
+    const discoveredIds = new Set(groups.map((group) => group.id));
+    for (const current of this.store.groups()) {
+      if (!discoveredIds.has(current.id)) await this.store.deleteGroup(current.id);
+    }
     for (const discovered of groups) {
       const current = this.store.group(discovered.id);
       const group: GroupRecord = {
@@ -124,6 +129,14 @@ export class BotRuntime {
       await this.store.upsertGroup(group);
     }
     await this.log("groups.synced", "info", { count: groups.length });
+  }
+
+  async setDirectMessageAllowlist(contacts: string[]): Promise<string[]> {
+    const allowlist = [...new Set(contacts.map((contact) => contact.trim()).filter(Boolean))];
+    this.config.directMessageAllowlist = allowlist;
+    await this.store.updateSettings({ directMessageAllowlist: allowlist });
+    await this.log("dm_allowlist.changed", "warn", { count: allowlist.length });
+    return allowlist;
   }
 
   async setGroupEnabled(id: string, enabled: boolean): Promise<GroupRecord | undefined> {
@@ -175,6 +188,7 @@ export class BotRuntime {
       connection: snapshot.runtime,
       safety: {
         groupOnlyMode: this.config.groupOnlyMode,
+        directMessageAllowlist: this.config.directMessageAllowlist,
         outboundPaused: this.config.outboundPaused,
         aiProcessingPaused: this.config.aiProcessingPaused,
         dryRun: this.config.dryRun,

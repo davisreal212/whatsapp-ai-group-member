@@ -41,7 +41,7 @@ export class PostgresStore implements Store {
       this.sql`SELECT id, event, level, message_id, group_id, details_json, created_at FROM audit_logs ORDER BY created_at DESC LIMIT 500`,
       this.sql`SELECT provider, operation, group_id, units, success, latency_ms, created_at FROM provider_usage ORDER BY created_at DESC LIMIT 1000`,
       this.sql`SELECT connection_status, pairing_code, last_connected_at, metrics_json FROM runtime_state WHERE id = 1`,
-      this.sql`SELECT outbound_paused, ai_processing_paused, personality_json FROM app_settings WHERE id = 1`,
+       this.sql`SELECT outbound_paused, ai_processing_paused, direct_message_allowlist_json, personality_json FROM app_settings WHERE id = 1`,
       this.sql`SELECT id, email, password_hash, role, created_at FROM users`,
       this.sql`SELECT token_hash, user_id, created_at, expires_at FROM sessions WHERE expires_at > ${Date.now()}`,
     ]);
@@ -66,6 +66,7 @@ export class PostgresStore implements Store {
       this.state.settings = {
         outboundPaused: Boolean(settingsRow.outbound_paused),
         aiProcessingPaused: Boolean(settingsRow.ai_processing_paused),
+        directMessageAllowlist: jsonArray(settingsRow.direct_message_allowlist_json),
         personality: jsonObject(settingsRow.personality_json, {}),
       };
     }
@@ -96,9 +97,9 @@ export class PostgresStore implements Store {
       ...update,
       ...(update.personality ? { personality: { ...this.state.settings?.personality, ...update.personality } } : {}),
     };
-    await this.sql`INSERT INTO app_settings (id, outbound_paused, ai_processing_paused, personality_json)
-      VALUES (1, ${this.state.settings.outboundPaused ?? false}, ${this.state.settings.aiProcessingPaused ?? false}, ${JSON.stringify(this.state.settings.personality ?? {})}::jsonb)
-      ON CONFLICT (id) DO UPDATE SET outbound_paused = EXCLUDED.outbound_paused, ai_processing_paused = EXCLUDED.ai_processing_paused, personality_json = EXCLUDED.personality_json`;
+    await this.sql`INSERT INTO app_settings (id, outbound_paused, ai_processing_paused, direct_message_allowlist_json, personality_json)
+      VALUES (1, ${this.state.settings.outboundPaused ?? false}, ${this.state.settings.aiProcessingPaused ?? false}, ${JSON.stringify(this.state.settings.directMessageAllowlist ?? [])}::jsonb, ${JSON.stringify(this.state.settings.personality ?? {})}::jsonb)
+      ON CONFLICT (id) DO UPDATE SET outbound_paused = EXCLUDED.outbound_paused, ai_processing_paused = EXCLUDED.ai_processing_paused, direct_message_allowlist_json = EXCLUDED.direct_message_allowlist_json, personality_json = EXCLUDED.personality_json`;
   }
 
   async updateMetrics(update: Partial<AppMetrics>): Promise<void> {
@@ -116,6 +117,15 @@ export class PostgresStore implements Store {
       VALUES (${group.id}, ${group.whatsappGroupId}, ${group.subject}, ${group.participantCount}, ${group.isAdmin}, ${group.enabled}, ${group.aiPaused}, ${group.personalityOverride ? JSON.stringify(group.personalityOverride) : null}::jsonb, ${group.lastSeenAt})
       ON CONFLICT (id) DO UPDATE SET whatsapp_group_id = EXCLUDED.whatsapp_group_id, subject = EXCLUDED.subject, participant_count = EXCLUDED.participant_count, is_admin = EXCLUDED.is_admin, enabled = EXCLUDED.enabled, ai_paused = EXCLUDED.ai_paused, personality_override_json = EXCLUDED.personality_override_json, last_seen_at = EXCLUDED.last_seen_at`;
     this.state.groups[group.id] = group;
+  }
+
+  async deleteGroup(id: string): Promise<void> {
+    await this.sql`DELETE FROM members WHERE group_id = ${id}`;
+    await this.sql`DELETE FROM groups WHERE id = ${id}`;
+    delete this.state.groups[id];
+    for (const [memberId, member] of Object.entries(this.state.members)) {
+      if (member.groupId === id) delete this.state.members[memberId];
+    }
   }
 
   async updateGroup(id: string, update: Partial<GroupRecord>): Promise<GroupRecord | undefined> {
@@ -247,7 +257,8 @@ export class PostgresStore implements Store {
     await this.sql`CREATE TABLE IF NOT EXISTS users (id text PRIMARY KEY, email text UNIQUE NOT NULL, password_hash text NOT NULL, role text NOT NULL, created_at bigint NOT NULL)`;
     await this.sql`CREATE TABLE IF NOT EXISTS sessions (token_hash text PRIMARY KEY, user_id text NOT NULL, created_at bigint NOT NULL, expires_at bigint NOT NULL)`;
     await this.sql`CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions (expires_at)`;
-    await this.sql`CREATE TABLE IF NOT EXISTS app_settings (id integer PRIMARY KEY CHECK (id = 1), outbound_paused boolean NOT NULL DEFAULT false, ai_processing_paused boolean NOT NULL DEFAULT false, personality_json jsonb NOT NULL DEFAULT '{}'::jsonb)`;
+     await this.sql`CREATE TABLE IF NOT EXISTS app_settings (id integer PRIMARY KEY CHECK (id = 1), outbound_paused boolean NOT NULL DEFAULT false, ai_processing_paused boolean NOT NULL DEFAULT false, direct_message_allowlist_json jsonb NOT NULL DEFAULT '[]'::jsonb, personality_json jsonb NOT NULL DEFAULT '{}'::jsonb)`;
+     await this.sql`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS direct_message_allowlist_json jsonb NOT NULL DEFAULT '[]'::jsonb`;
     await this.sql`CREATE TABLE IF NOT EXISTS runtime_state (id integer PRIMARY KEY CHECK (id = 1), connection_status text NOT NULL, pairing_code text, last_connected_at bigint, metrics_json jsonb NOT NULL)`;
     await this.sql`INSERT INTO schema_migrations (version, applied_at) VALUES (1, ${Date.now()}) ON CONFLICT (version) DO NOTHING`;
   }

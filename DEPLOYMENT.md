@@ -59,8 +59,8 @@ TAVILY_MAX_RESULTS=5
 8. Open the domain, select **Sign up**, and create the first administrator account.
 9. Enter the dedicated WhatsApp number in international format and select **Connect**. The button shows a spinner and disables itself while the connection request is running.
 10. On the phone, open **WhatsApp > Linked devices > Link a device > Link with phone number**, then enter the newly displayed code. Do not reuse an older code.
-11. Wait for `CONNECTED`, select **Sync groups**, and enable groups individually.
-12. If `GROUP_ONLY_MODE=false`, populate `DIRECT_MESSAGE_ALLOWLIST` with the permitted WhatsApp phone numbers or JIDs. An empty list denies every DM.
+11. Wait for `CONNECTED`, select **Sync groups**, and enable groups individually. Sync is a reconciliation: groups no longer visible to the current WhatsApp number are removed.
+12. If `GROUP_ONLY_MODE=false`, add permitted WhatsApp phone numbers or JIDs in the dashboard's **DM allowlist** panel. An empty list denies every DM.
 13. Keep `DRY_RUN=true` and `OUTBOUND_PAUSED=true` until a controlled test group is verified. Configure at least one AI provider before enabling AI processing.
 
 ## Current Koyeb deployment
@@ -85,6 +85,7 @@ The pinned dependency is `@whiskeysockets/baileys@6.7.24`. That version exports 
 - `GET /api/health` is a public liveness check.
 - All other `/api` routes require `Authorization: Bearer <ADMIN_TOKEN>` or `x-admin-token`.
 - The dashboard has an outbound kill switch and an AI-processing pause switch.
+- The dashboard's DM allowlist is persisted in the application database and can be edited without rebuilding the service.
 - Back up the persistent volume. It contains the WhatsApp auth state and local application state.
 - Monitor container logs, disk usage, connection status, provider failures, action skips, and daily action counts.
 - Keep the reverse proxy on HTTPS and restrict dashboard access by network or identity provider where possible.

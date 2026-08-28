@@ -35,5 +35,19 @@ describe("admin HTTP surface", () => {
     const status = await fetch(`${base}/api/status`, { headers: { authorization: "Bearer test-token-that-is-long-enough" } });
     expect(status.status).toBe(200);
     expect((await status.json()).safety.groupOnlyMode).toBe(true);
+
+    const allowlist = await fetch(`${base}/api/dm-allowlist`, {
+      method: "POST",
+      headers: { authorization: "Bearer test-token-that-is-long-enough", "content-type": "application/json" },
+      body: JSON.stringify({ contacts: ["+234 800 000 0000"] }),
+    });
+    expect(allowlist.status).toBe(200);
+    expect((await allowlist.json()).contacts).toEqual(["+234 800 000 0000"]);
+    expect(runtime.dashboardState().safety).toMatchObject({ directMessageAllowlist: ["+234 800 000 0000"] });
+
+    await runtime.syncGroups([{ id: "old@g.us", subject: "Old group", participantCount: 1, isAdmin: true }]);
+    expect(runtime.store.groups()).toHaveLength(1);
+    await runtime.syncGroups([]);
+    expect(runtime.store.groups()).toHaveLength(0);
   });
 });

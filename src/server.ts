@@ -120,6 +120,14 @@ export function createApp(runtime: BotRuntime, config: AppConfig) {
       next(error);
     }
   });
+  app.post("/api/dm-allowlist", async (request, response, next) => {
+    try {
+      const body = z.object({ contacts: z.array(z.string().trim().min(1).max(100)).max(200) }).parse(request.body);
+      response.json({ contacts: await runtime.setDirectMessageAllowlist(body.contacts) });
+    } catch (error) {
+      next(error);
+    }
+  });
   app.post("/api/whatsapp/connect", async (request, response, next) => {
     try {
       const body = z.object({ phoneNumber: z.string().trim().regex(/^\+?[\d\s().-]{7,25}$/).optional() }).parse(request.body);
