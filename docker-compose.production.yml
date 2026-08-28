@@ -1,0 +1,16 @@
+services:
+  whatsapp-ai:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "3000:3000"
+    volumes:
+      - whatsapp_ai_data:/var/lib/whatsapp-ai
+    init: true
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  whatsapp_ai_data:
