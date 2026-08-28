@@ -5,6 +5,8 @@ export interface WhatsAppRawMessage {
     remoteJid?: string | null;
     id?: string | null;
     participant?: string | null;
+    senderPn?: string | null;
+    participantPn?: string | null;
     fromMe?: boolean | null;
   };
   message?: Record<string, unknown> | null;
@@ -51,6 +53,7 @@ export function normalizeMessage(raw: WhatsAppRawMessage, botJid?: string): Cano
     ? (payload.contextInfo as MessageContent)
     : {};
   const senderId = raw.key?.participant ?? chatId;
+  const senderPhone = raw.key?.senderPn ?? raw.key?.participantPn;
   const group = chatId.endsWith("@g.us");
   const status = chatId === "status@broadcast";
   const mentions = Array.isArray(contextInfo.mentionedJid)
@@ -79,6 +82,7 @@ export function normalizeMessage(raw: WhatsAppRawMessage, botJid?: string): Cano
     chatId,
     ...(group ? { groupId: chatId } : {}),
     senderId,
+    ...(senderPhone ? { senderPhone } : {}),
     ...(raw.pushName ? { senderName: raw.pushName } : {}),
     timestamp: timestampMs(raw.messageTimestamp),
     type: messageType,

@@ -69,6 +69,28 @@ describe("message normalization and inbound policy", () => {
     expect(evaluateInboundPolicy({ ...message, senderId: "235@s.whatsapp.net", chatId: "235@s.whatsapp.net" }, undefined, dmConfig)).toEqual({ allowed: false, reason: "DIRECT_MESSAGE_NOT_ALLOWLISTED" });
   });
 
+  it("allows a DM when WhatsApp supplies a LID plus the sender phone number", () => {
+    const message = {
+      id: "dm-lid", chatId: "1234567890@lid", senderId: "1234567890@lid", senderPhone: "2349067818982@s.whatsapp.net",
+      timestamp: Date.now(), type: "text" as const, mentionedIds: [], isGroup: false, isStatus: false, isFromBot: false,
+    };
+    const dmConfig = { ...config, groupOnlyMode: false, directMessageAllowlist: ["+2349067818982"] };
+    expect(evaluateInboundPolicy(message, undefined, dmConfig)).toEqual({ allowed: true, reason: "ALLOWED" });
+  });
+
+  it("preserves the phone JID supplied alongside a LID", () => {
+    const message = normalizeMessage({
+      key: {
+        remoteJid: "1234567890@lid",
+        id: "dm-lid-1",
+        senderPn: "2349067818982@s.whatsapp.net",
+      },
+      message: { conversation: "hello" },
+    });
+    expect(message?.senderId).toBe("1234567890@lid");
+    expect(message?.senderPhone).toBe("2349067818982@s.whatsapp.net");
+  });
+
   it("defaults unapproved and disabled groups to denial", () => {
     const message = {
       id: "group-1", chatId: group.id, groupId: group.id, senderId: "member", timestamp: Date.now(), type: "text" as const,

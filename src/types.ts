@@ -79,6 +79,7 @@ export interface CanonicalMessage {
   chatId: string;
   groupId?: string;
   senderId: string;
+  senderPhone?: string;
   senderName?: string;
   timestamp: number;
   type: MessageType;

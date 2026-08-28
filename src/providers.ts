@@ -13,6 +13,8 @@ export interface ProviderInput {
 
 export interface AIProvider {
   readonly name: string;
+  readonly model: string;
+  readonly fallbackModel?: string;
   readonly available: boolean;
   classify(input: ProviderInput): Promise<DecisionPlan>;
   generateResponse(input: ProviderInput): Promise<string | undefined>;
@@ -26,7 +28,7 @@ abstract class BaseProvider implements AIProvider {
   abstract readonly name: string;
   abstract readonly available: boolean;
 
-  constructor(protected readonly model: string, protected readonly apiKey: string | undefined) {}
+  constructor(readonly model: string, protected readonly apiKey: string | undefined, readonly fallbackModel?: string) {}
 
   async classify(input: ProviderInput): Promise<DecisionPlan> {
     const text = await this.complete(this.classificationPrompt(input), true);
@@ -109,34 +111,54 @@ export class OpenAICompatibleProvider extends BaseProvider {
     private readonly baseUrl: string,
     model: string,
     apiKey?: string,
+    fallbackModel?: string,
   ) {
-    super(model, apiKey);
+    super(model, apiKey, fallbackModel);
     this.available = Boolean(apiKey);
   }
 
   protected async complete(prompt: string, json: boolean): Promise<string> {
     if (!this.apiKey) throw new Error(`${this.name} API key is not configured`);
-    const response = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${this.apiKey}`,
-        ...(this.name === "openrouter" ? { "HTTP-Referer": "http://localhost:3000", "X-Title": "WhatsApp AI Group Member" } : {}),
-      },
-      body: JSON.stringify({
-        model: this.model,
-        temperature: 0.3,
-        messages: [{ role: "user", content: prompt }],
-        ...(json ? { response_format: { type: "json_object" } } : {}),
-      }),
-      signal: AbortSignal.timeout(45_000),
-    });
-    if (!response.ok) throw new Error(`${this.name} returned HTTP ${response.status}`);
-    const body = await response.json() as { choices?: Array<{ message?: JsonResponse }> };
-    const content = body.choices?.[0]?.message?.content;
-    const text = typeof content === "string" ? content : content?.map((part) => part.text ?? "").join("");
-    if (!text) throw new Error(`${this.name} returned no text`);
-    return text;
+    const models = [...new Set([this.model, this.fallbackModel].filter((value): value is string => Boolean(value)))];
+    const failures: string[] = [];
+
+    for (const [index, model] of models.entries()) {
+      let retryNext = index < models.length - 1;
+      try {
+        const response = await fetch(`${this.baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${this.apiKey}`,
+            ...(this.name === "openrouter" ? { "HTTP-Referer": "http://localhost:3000", "X-Title": "WhatsApp AI Group Member" } : {}),
+          },
+          body: JSON.stringify({
+            model,
+            temperature: 0.3,
+            messages: [{ role: "user", content: prompt }],
+            ...(json ? { response_format: { type: "json_object" } } : {}),
+          }),
+          signal: AbortSignal.timeout(45_000),
+        });
+        if (!response.ok) {
+          const failure = `${this.name} model ${model} returned HTTP ${response.status}`;
+          failures.push(failure);
+          retryNext = retryNext && shouldTryNextModel(response.status);
+          throw new Error(failures.join("; "));
+        }
+        const body = await response.json() as { choices?: Array<{ message?: JsonResponse }> };
+        const content = body.choices?.[0]?.message?.content;
+        const text = typeof content === "string" ? content : content?.map((part) => part.text ?? "").join("");
+        if (!text) throw new Error(`${this.name} model ${model} returned no text`);
+        return text;
+      } catch (error) {
+        const failure = error instanceof Error ? error.message : `${this.name} model ${model} failed`;
+        if (!failures.includes(failure)) failures.push(failure);
+        if (retryNext) continue;
+        throw new Error(failures.join("; "));
+      }
+    }
+    throw new Error(failures.join("; ") || `${this.name} has no configured model`);
   }
 }
 
@@ -147,7 +169,7 @@ export class ProviderRouter {
     this.providers = providers ?? [
       new OpenAICompatibleProvider("groq", "https://api.groq.com/openai/v1", config.groqModel, config.groqApiKey),
       new GeminiProvider(config.geminiModel, config.geminiApiKey),
-      new OpenAICompatibleProvider("openrouter", "https://openrouter.ai/api/v1", config.openRouterModel, config.openRouterApiKey),
+      new OpenAICompatibleProvider("openrouter", "https://openrouter.ai/api/v1", config.openRouterModel, config.openRouterApiKey, "z-ai/glm-5.2:free"),
     ];
   }
 
@@ -159,8 +181,13 @@ export class ProviderRouter {
     return this.tryProviders("generateResponse", input, groupId, this.providers.filter((provider) => provider.name === "gemini" || provider.name === "openrouter" || provider.name === "groq"));
   }
 
-  statuses(): Array<{ name: string; available: boolean }> {
-    return this.providers.map((provider) => ({ name: provider.name, available: provider.available }));
+  statuses(): Array<{ name: string; model: string; fallbackModel?: string; available: boolean }> {
+    return this.providers.map((provider) => ({
+      name: provider.name,
+      model: provider.model,
+      ...(provider.fallbackModel ? { fallbackModel: provider.fallbackModel } : {}),
+      available: provider.available,
+    }));
   }
 
   private async tryProviders<T extends "classify" | "generateResponse">(
@@ -184,7 +211,13 @@ export class ProviderRouter {
           event: "provider.failure",
           level: "warn",
           ...(groupId ? { groupId } : {}),
-          details: { provider: provider.name, operation, error: error instanceof Error ? error.message : "unknown error" },
+          details: {
+            provider: provider.name,
+            model: provider.model,
+            ...(provider.fallbackModel ? { fallbackModel: provider.fallbackModel } : {}),
+            operation,
+            error: error instanceof Error ? error.message : "unknown error",
+          },
           createdAt: Date.now(),
         });
       }
@@ -196,4 +229,8 @@ export class ProviderRouter {
     await this.store.addProviderUsage(usage);
     if (usage.success) await this.store.incrementMetric("aiCalls");
   }
+}
+
+function shouldTryNextModel(status: number): boolean {
+  return [400, 402, 404, 408, 429, 500, 502, 503, 504].includes(status);
 }

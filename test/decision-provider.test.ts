@@ -1,13 +1,45 @@
 import { describe, expect, it } from "vitest";
 import { localRelevance, parseDecisionPlan } from "../src/decision.js";
 import { isCurrentInformationQuestion } from "../src/policy.js";
+import { OpenAICompatibleProvider } from "../src/providers.js";
 import { normalizePairingPhoneNumber } from "../src/whatsapp.js";
+
+class ProviderProbe extends OpenAICompatibleProvider {
+  run(): Promise<string> {
+    return this.complete("prompt", true);
+  }
+}
 
 describe("decision safety helpers", () => {
   it("parses only the supported structured action vocabulary", () => {
     const plan = parseDecisionPlan('```json\n{"decision":"IGNORE","confidence":0.8,"reason":"uncertain","delayMs":0,"needsWeb":false,"needsMedia":false,"responseStyle":"uncertain"}\n```');
     expect(plan.decision).toBe("IGNORE");
     expect(() => parseDecisionPlan({ decision: "DELETE_GROUP", confidence: 1, reason: "bad", delayMs: 0, needsWeb: false, needsMedia: false, responseStyle: "short_casual" })).toThrow();
+  });
+
+  it("normalizes equivalent response style names returned by providers", () => {
+    const plan = parseDecisionPlan({ decision: "REPLY", confidence: 0.9, reason: "answer", text: "Hi", delayMs: 0, needsWeb: false, needsMedia: false, responseStyle: "short-casual" });
+    expect(plan.responseStyle).toBe("short_casual");
+    expect(parseDecisionPlan({ decision: "REPLY", confidence: 0.9, reason: "answer", text: "Hi", delayMs: 0, needsWeb: false, needsMedia: false, responseStyle: "detailed" }).responseStyle).toBe("helpful");
+    expect(parseDecisionPlan({ decision: "REPLY", confidence: 0.9, reason: "answer", text: "Hi", delayMs: 0, needsWeb: false, needsMedia: false, responseStyle: "unknown-style" }).responseStyle).toBe("short_casual");
+  });
+
+  it("retries OpenRouter with its free model after a credit rejection", async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: string[] = [];
+    globalThis.fetch = (async (_input, init) => {
+      requests.push(String(init?.body));
+      if (requests.length === 1) return new Response(null, { status: 402 });
+      return new Response(JSON.stringify({ choices: [{ message: { content: "{\"decision\":\"IGNORE\",\"confidence\":1,\"reason\":\"quiet\"}" } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    try {
+      const provider = new ProviderProbe("openrouter", "https://openrouter.ai/api/v1", "openai/gpt-4o-mini", "test-key", "z-ai/glm-5.2:free");
+      await expect(provider.run()).resolves.toContain('"decision":"IGNORE"');
+      expect(JSON.parse(requests[0]).model).toBe("openai/gpt-4o-mini");
+      expect(JSON.parse(requests[1]).model).toBe("z-ai/glm-5.2:free");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("recognizes direct addressing and current-fact questions locally", () => {

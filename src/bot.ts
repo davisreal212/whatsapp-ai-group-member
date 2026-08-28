@@ -72,7 +72,16 @@ export class BotRuntime {
     const group = message.groupId ? this.store.group(message.groupId) : undefined;
     const policy = evaluateInboundPolicy(message, group, this.config);
     if (!policy.allowed) {
-      await this.log("message.filtered", "info", { reason: policy.reason }, message);
+      await this.log("message.filtered", "info", {
+        reason: policy.reason,
+        ...(message.isGroup
+          ? {}
+          : {
+              chatId: message.chatId,
+              senderId: message.senderId,
+              ...(message.senderPhone ? { senderPhone: message.senderPhone } : {}),
+            }),
+      }, message);
       return;
     }
 

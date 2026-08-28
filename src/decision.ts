@@ -15,7 +15,7 @@ const decisionSchema = z.object({
   delayMs: z.coerce.number().int().min(0).max(60_000).default(0),
   needsWeb: z.boolean().default(false),
   needsMedia: z.boolean().default(false),
-  responseStyle: z.enum(["short_casual", "helpful", "playful", "uncertain"]).default("short_casual"),
+  responseStyle: z.preprocess((value) => normalizeResponseStyle(value), z.enum(["short_casual", "helpful", "playful", "uncertain"]).default("short_casual")),
 });
 
 export function parseDecisionPlan(input: string | unknown): DecisionPlan {
@@ -108,4 +108,14 @@ export function ignorePlan(reason: string): DecisionPlan {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeResponseStyle(value: unknown): unknown {
+  if (typeof value !== "string") return "short_casual";
+  const normalized = value.trim().toLowerCase().replace(/[^a-z]+/g, "_").replace(/^_|_$/g, "");
+  if (["short", "casual", "concise", "brief", "short_response", "concise_casual", "short_casual"].includes(normalized)) return "short_casual";
+  if (["long", "detailed", "informative", "helpful"].includes(normalized)) return "helpful";
+  if (["playful", "fun", "humorous"].includes(normalized)) return "playful";
+  if (["uncertain", "unsure", "cautious"].includes(normalized)) return "uncertain";
+  return "short_casual";
 }

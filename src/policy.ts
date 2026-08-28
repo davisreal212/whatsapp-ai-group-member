@@ -41,14 +41,15 @@ export function evaluateInboundPolicy(
 }
 
 export function isDirectMessageAllowed(message: CanonicalMessage, allowlist: string[]): boolean {
+  const candidates = [message.senderId, message.chatId, message.senderPhone].filter((value): value is string => Boolean(value));
   const exactValues = new Set(allowlist.map((value) => value.trim().toLowerCase()));
-  const exactSender = message.senderId.trim().toLowerCase();
-  const exactChat = message.chatId.trim().toLowerCase();
-  if (exactValues.has(exactSender) || exactValues.has(exactChat)) return true;
+  if (candidates.some((candidate) => exactValues.has(candidate.trim().toLowerCase()))) return true;
 
-  const senderNumber = contactNumber(exactSender);
-  if (!senderNumber) return false;
-  return allowlist.some((value) => contactNumber(value) === senderNumber);
+  const candidateNumbers = candidates.map(contactNumber).filter((value): value is string => Boolean(value));
+  return allowlist.some((value) => {
+    const number = contactNumber(value);
+    return Boolean(number && candidateNumbers.includes(number));
+  });
 }
 
 function contactNumber(value: string): string | undefined {

@@ -41,7 +41,7 @@ const envSchema = z.object({
   GROQ_API_KEY: optionalString,
   GROQ_MODEL: z.string().default("openai/gpt-oss-20b"),
   OPENROUTER_API_KEY: optionalString,
-  OPENROUTER_MODEL: z.string().default("openai/gpt-4o-mini"),
+  OPENROUTER_MODEL: z.string().default("z-ai/glm-5.2:free"),
 });
 
 export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppConfig {
