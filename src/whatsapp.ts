@@ -123,8 +123,7 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
         socket.end(undefined);
       }
     }
-    await this.credentialsSave.catch(() => undefined);
-    await rm(this.authDir, { recursive: true, force: true });
+    await this.clearAuthState();
     this.reconnectAttempts = 0;
     await this.store.setConnection("DISCONNECTED");
     if (logoutError) {
@@ -200,7 +199,17 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
       ? (error as { output?: { statusCode?: number } }).output?.statusCode
       : undefined;
     if (statusCode === DisconnectReason.loggedOut) {
+      this.authRegistered = false;
+      this.pairingPhoneNumber = undefined;
+      await this.clearAuthState();
       await this.store.setConnection("REQUIRES_REPAIR");
+      await this.store.addLog({
+        id: crypto.randomUUID(),
+        event: "whatsapp.session_unlinked",
+        level: "warn",
+        details: { reason: "whatsapp_logged_out" },
+        createdAt: Date.now(),
+      });
       return;
     }
     if (this.reconnectAttempts >= 5) {
@@ -269,6 +278,11 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     } finally {
       if (this.pairingCodeRequest === request) this.pairingCodeRequest = undefined;
     }
+  }
+
+  private async clearAuthState(): Promise<void> {
+    await this.credentialsSave.catch(() => undefined);
+    await rm(this.authDir, { recursive: true, force: true });
   }
 }
 
