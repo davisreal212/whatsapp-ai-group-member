@@ -11,6 +11,8 @@ import type {
   PersistedState,
   ProviderUsageRecord,
   StoredMessage,
+  SessionRecord,
+  UserRecord,
 } from "./types.js";
 
 export interface Store {
@@ -31,6 +33,13 @@ export interface Store {
   updateAction(id: string, update: Partial<ActionRecord>): Promise<ActionRecord | undefined>;
   addLog(log: AuditLog): Promise<void>;
   addProviderUsage(usage: ProviderUsageRecord): Promise<void>;
+  createUser(user: UserRecord): Promise<boolean>;
+  userByEmail(email: string): UserRecord | undefined;
+  userById(id: string): UserRecord | undefined;
+  userCount(): number;
+  createSession(session: SessionRecord): Promise<void>;
+  sessionByTokenHash(tokenHash: string): SessionRecord | undefined;
+  deleteSession(tokenHash: string): Promise<void>;
   recentMessages(groupId: string, limit: number): StoredMessage[];
   message(id: string): StoredMessage | undefined;
   group(id: string): GroupRecord | undefined;
@@ -60,6 +69,8 @@ export const emptyState = (): PersistedState => ({
   actions: {},
   logs: [],
   providerUsage: [],
+  users: {},
+  sessions: {},
   runtime: { connectionStatus: "DISCONNECTED", metrics: emptyMetrics() },
 });
 
@@ -79,6 +90,8 @@ export class FileStore implements Store {
     try {
       const raw = await readFile(this.filePath, "utf8");
       this.state = { ...emptyState(), ...JSON.parse(raw) } as PersistedState;
+      this.state.users = { ...emptyState().users, ...this.state.users };
+      this.state.sessions = { ...emptyState().sessions, ...this.state.sessions };
       this.state.runtime = {
         ...emptyState().runtime,
         ...this.state.runtime,
@@ -187,6 +200,39 @@ export class FileStore implements Store {
   async addProviderUsage(usage: ProviderUsageRecord): Promise<void> {
     this.state.providerUsage.push(usage);
     this.state.providerUsage = this.state.providerUsage.slice(-1000);
+    await this.persist();
+  }
+
+  async createUser(user: UserRecord): Promise<boolean> {
+    if (Object.values(this.state.users).some((item) => item.email === user.email)) return false;
+    this.state.users[user.id] = user;
+    await this.persist();
+    return true;
+  }
+
+  userByEmail(email: string): UserRecord | undefined {
+    return Object.values(this.state.users).find((user) => user.email === email);
+  }
+
+  userById(id: string): UserRecord | undefined {
+    return this.state.users[id];
+  }
+
+  userCount(): number {
+    return Object.keys(this.state.users).length;
+  }
+
+  async createSession(session: SessionRecord): Promise<void> {
+    this.state.sessions[session.tokenHash] = session;
+    await this.persist();
+  }
+
+  sessionByTokenHash(tokenHash: string): SessionRecord | undefined {
+    return this.state.sessions[tokenHash];
+  }
+
+  async deleteSession(tokenHash: string): Promise<void> {
+    delete this.state.sessions[tokenHash];
     await this.persist();
   }
 

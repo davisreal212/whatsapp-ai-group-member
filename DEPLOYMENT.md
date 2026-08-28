@@ -17,6 +17,10 @@ This service uses an unofficial WhatsApp Web/linked-device integration. Use a de
 11. Keep `DRY_RUN=true` and `OUTBOUND_PAUSED=true` while verifying logs and group authorization.
 12. After controlled test-group verification, set both to `false` and recreate the container.
 
+## Dashboard account
+
+On the landing page, select **Sign up** and create the administrator with an email address and a password of at least eight characters. Only the first account can sign up; later visits use **Sign in**. Passwords are scrypt-hashed and sessions use an HttpOnly cookie. Keep the dashboard behind HTTPS and restrict who can reach it.
+
 ## Pairing-code path
 
 The pinned dependency is `@whiskeysockets/baileys@6.7.24`. That version exports `requestPairingCode(phoneNumber)`. The adapter calls it only for an unregistered auth state, uses `printQRInTerminal: false`, strips `+`, spaces, parentheses, and hyphens, and stores the resulting code in the authenticated dashboard status response. Auth files stay in the persistent volume and are not sent to the browser.

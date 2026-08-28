@@ -6,89 +6,57 @@
   <title>Group Member Control Room</title>
   <style>
     :root { color-scheme: dark; --bg: #101414; --panel: #171e1e; --line: #2b3837; --text: #e9efeb; --muted: #9daaa4; --green: #9fe870; --amber: #f3c969; --red: #ff8f7a; }
-    * { box-sizing: border-box; }
-    body { margin: 0; background: radial-gradient(circle at 75% -20%, #283d34, transparent 42%), var(--bg); color: var(--text); font: 15px/1.5 system-ui, sans-serif; }
+    * { box-sizing: border-box; } body { margin: 0; background: radial-gradient(circle at 75% -20%, #283d34, transparent 42%), var(--bg); color: var(--text); font: 15px/1.5 system-ui, sans-serif; }
     header { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 22px 5vw; border-bottom: 1px solid var(--line); }
-    h1, h2, p { margin: 0; } h1 { font-size: clamp(23px, 3vw, 36px); letter-spacing: -.04em; } h2 { font-size: 16px; margin-bottom: 14px; }
-    .eyebrow { color: var(--green); text-transform: uppercase; letter-spacing: .18em; font-size: 11px; font-weight: 700; }
-    .subtitle { color: var(--muted); margin-top: 5px; }
-    main { width: min(1180px, 90vw); margin: 34px auto 70px; display: grid; gap: 18px; }
-    .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; } .two { display: grid; grid-template-columns: 1.25fr .75fr; gap: 18px; }
+    h1, h2, p { margin: 0; } h1 { font-size: clamp(25px, 4vw, 52px); letter-spacing: -.05em; line-height: 1.05; } h2 { font-size: 16px; margin-bottom: 14px; }
+    .eyebrow { color: var(--green); text-transform: uppercase; letter-spacing: .18em; font-size: 11px; font-weight: 700; } .subtitle { color: var(--muted); margin-top: 8px; }
+    .landing { width: min(1080px, 90vw); margin: 70px auto; display: grid; grid-template-columns: 1.25fr .75fr; gap: 64px; align-items: center; } .landing-copy { max-width: 620px; }
+    .landing-copy p { color: var(--muted); font-size: 18px; margin-top: 22px; max-width: 540px; } .landing-copy .note { font-size: 13px; margin-top: 26px; }
+    main { width: min(1180px, 90vw); margin: 34px auto 70px; display: grid; gap: 18px; } .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; } .two { display: grid; grid-template-columns: 1.25fr .75fr; gap: 18px; }
     .panel { background: color-mix(in srgb, var(--panel) 93%, transparent); border: 1px solid var(--line); border-radius: 16px; padding: 20px; box-shadow: 0 18px 50px #0002; }
+    .auth-card { padding: 26px; } .tabs { display: flex; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 10px; margin-bottom: 20px; } .tabs button { flex: 1; border: 0; background: transparent; } .tabs button.active { background: #2a3933; color: var(--green); }
     .metric { min-height: 110px; } .metric strong { display: block; font-size: 30px; margin-top: 10px; } .metric small { color: var(--muted); }
     .row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 13px 0; border-top: 1px solid var(--line); } .row:first-child { border-top: 0; padding-top: 0; }
-    .row strong { display: block; } .row small, .note { color: var(--muted); }
-    button, input { border: 1px solid var(--line); border-radius: 9px; background: #202a29; color: var(--text); padding: 9px 12px; font: inherit; }
+    .row strong { display: block; } .row small, .note { color: var(--muted); } button, input { border: 1px solid var(--line); border-radius: 9px; background: #202a29; color: var(--text); padding: 9px 12px; font: inherit; }
     button { cursor: pointer; font-weight: 700; } button:hover { border-color: var(--green); } button.primary { background: var(--green); color: #132016; border-color: var(--green); } button.danger { color: var(--red); }
-    input { min-width: 0; width: 100%; } label { color: var(--muted); display: block; font-size: 12px; margin-bottom: 6px; } .form { display: flex; gap: 8px; align-items: end; }
+    input { min-width: 0; width: 100%; } label { color: var(--muted); display: block; font-size: 12px; margin-bottom: 6px; } .form { display: flex; gap: 8px; align-items: end; } .stack { display: grid; gap: 12px; }
     .pill { display: inline-flex; padding: 4px 9px; border-radius: 999px; font-size: 12px; background: #263331; color: var(--green); } .pill.warn { color: var(--amber); } .pill.bad { color: var(--red); }
-    #groups:empty::after, #logs:empty::after { content: "Nothing recorded yet"; color: var(--muted); display: block; padding: 4px 0; }
-    .log { font: 12px/1.4 ui-monospace, monospace; color: var(--muted); } .log b { color: var(--text); font-weight: 600; }
-    .hidden { display: none; } .error { color: var(--red); margin-top: 10px; } .success { color: var(--green); margin-top: 10px; }
-    @media (max-width: 800px) { header { align-items: flex-start; flex-direction: column; } .grid, .two { grid-template-columns: 1fr 1fr; } }
-    @media (max-width: 520px) { main { width: 92vw; margin-top: 22px; } .grid, .two { grid-template-columns: 1fr; } .form { align-items: stretch; flex-direction: column; } }
+    #groups:empty::after, #logs:empty::after { content: "Nothing recorded yet"; color: var(--muted); display: block; padding: 4px 0; } .log { font: 12px/1.4 ui-monospace, monospace; color: var(--muted); } .log b { color: var(--text); font-weight: 600; }
+    .hidden { display: none !important; } .error { color: var(--red); margin-top: 10px; } .success { color: var(--green); margin-top: 10px; }
+    @media (max-width: 800px) { header { align-items: flex-start; flex-direction: column; } .landing, .two { grid-template-columns: 1fr; } .landing { margin: 34px auto; gap: 28px; } .grid { grid-template-columns: 1fr 1fr; } }
+    @media (max-width: 520px) { main, .landing { width: 92vw; } .grid { grid-template-columns: 1fr; } .form { align-items: stretch; flex-direction: column; } }
   </style>
 </head>
 <body>
-  <header>
-    <div><div class="eyebrow">Safety-first WhatsApp AI</div><h1>Group Member Control Room</h1><p class="subtitle">Observe first. Speak only when the group context earns it.</p></div>
-    <span id="connection" class="pill">Loading</span>
-  </header>
-  <main>
-    <section class="panel">
-      <h2>Administrator access</h2>
-      <div class="form"><div style="flex:1"><label for="token">Dashboard token (kept for this browser session only)</label><input id="token" type="password" autocomplete="off" placeholder="Optional in development"></div><button id="saveToken" class="primary">Open dashboard</button></div>
-      <p id="message" class="note" style="margin-top:10px">The dashboard never receives provider keys or WhatsApp session credentials.</p>
-    </section>
-    <section class="grid">
-      <div class="panel metric"><small>Connection</small><strong id="metricConnection">-</strong></div>
-      <div class="panel metric"><small>Enabled groups</small><strong id="metricGroups">-</strong></div>
-      <div class="panel metric"><small>Observed events</small><strong id="metricObserved">-</strong></div>
-      <div class="panel metric"><small>Actions sent</small><strong id="metricSent">-</strong></div>
-    </section>
-    <section class="two">
-      <div class="panel"><h2>Safety controls</h2><div class="row"><div><strong>Outbound kill switch</strong><small>Keep observing, but block every send.</small></div><button id="outbound" class="danger">-</button></div><div class="row"><div><strong>AI processing</strong><small>Stop provider calls while logs continue.</small></div><button id="processing" class="danger">-</button></div><div class="row"><div><strong>Mode</strong><small>Direct messages are rejected by policy.</small></div><span id="mode" class="pill">-</span></div></div>
-      <div class="panel"><h2>WhatsApp connection</h2><div class="form"><div style="flex:1"><label for="phone">Phone number for pairing</label><input id="phone" placeholder="+234..." inputmode="tel"></div><button id="connect" class="primary">Connect</button></div><div class="form" style="margin-top:10px"><button id="disconnect">Disconnect</button><button id="sync">Sync groups</button></div><p id="pairing" class="success"></p></div>
-    </section>
-    <section class="two">
-      <div class="panel"><div class="row" style="padding-top:0"><h2 style="margin:0">Group allowlist</h2><span class="note">Disabled by default</span></div><div id="groups"></div></div>
-      <div class="panel"><h2>Provider health</h2><div id="providers"></div><p class="note" style="margin-top:14px">Groq handles fast decisions. Gemini is primary for reasoning. OpenRouter is fallback.</p></div>
-    </section>
+  <header><div><div class="eyebrow">Safety-first WhatsApp AI</div><p style="font-size:19px;font-weight:700">Group Member Control Room</p></div><div id="account" class="hidden"><span id="accountEmail" class="note"></span> <button id="signout">Sign out</button></div></header>
+  <section id="landing" class="landing">
+    <div class="landing-copy"><div class="eyebrow">Private group intelligence</div><h1>Let the group set the pace.</h1><p>A quiet, safety-first AI member for selected WhatsApp groups. It learns communication patterns, checks current facts, and stays silent when a reply would add noise.</p><p class="note">Create the first administrator account to open the control room. Additional public signups are disabled.</p></div>
+    <div class="panel auth-card"><div class="tabs"><button id="signupTab" class="active">Sign up</button><button id="signinTab">Sign in</button></div><form id="authForm" class="stack"><div><label for="email">Email</label><input id="email" type="email" autocomplete="email" required placeholder="you@example.com"></div><div><label for="password">Password</label><input id="password" type="password" autocomplete="new-password" minlength="8" required placeholder="At least 8 characters"></div><button id="authSubmit" class="primary" type="submit">Create administrator account</button></form><p id="authMessage" class="note" style="margin-top:12px">Your password is stored as a one-way hash. The session uses an HttpOnly cookie.</p></div>
+  </section>
+  <main id="dashboard" class="hidden">
+    <section class="grid"><div class="panel metric"><small>Connection</small><strong id="metricConnection">-</strong></div><div class="panel metric"><small>Enabled groups</small><strong id="metricGroups">-</strong></div><div class="panel metric"><small>Observed events</small><strong id="metricObserved">-</strong></div><div class="panel metric"><small>Actions sent</small><strong id="metricSent">-</strong></div></section>
+    <section class="two"><div class="panel"><h2>Safety controls</h2><div class="row"><div><strong>Outbound kill switch</strong><small>Keep observing, but block every send.</small></div><button id="outbound" class="danger">-</button></div><div class="row"><div><strong>AI processing</strong><small>Stop provider calls while logs continue.</small></div><button id="processing" class="danger">-</button></div><div class="row"><div><strong>Mode</strong><small>Direct messages are rejected by policy.</small></div><span id="mode" class="pill">-</span></div></div><div class="panel"><h2>WhatsApp connection</h2><div class="form"><div style="flex:1"><label for="phone">Phone number for pairing</label><input id="phone" placeholder="+234..." inputmode="tel"></div><button id="connect" class="primary">Connect</button></div><div class="form" style="margin-top:10px"><button id="disconnect">Disconnect</button><button id="sync">Sync groups</button></div><p id="pairing" class="success"></p></div></section>
+    <section class="two"><div class="panel"><div class="row" style="padding-top:0"><h2 style="margin:0">Group allowlist</h2><span class="note">Disabled by default</span></div><div id="groups"></div></div><div class="panel"><h2>Provider health</h2><div id="providers"></div><p class="note" style="margin-top:14px">Groq handles fast decisions. Gemini is primary for reasoning. OpenRouter is fallback.</p></div></section>
     <section class="panel"><h2>Recent audit events</h2><div id="logs"></div></section>
   </main>
   <script>
-    const $ = (id) => document.getElementById(id);
-    const state = { token: sessionStorage.getItem('wa-admin-token') || '' };
-    $('token').value = state.token;
-    function setMessage(text, type = '') { $('message').textContent = text; $('message').className = type || 'note'; }
-    async function api(path, options = {}) {
-      const headers = { 'content-type': 'application/json', ...(state.token ? { authorization: 'Bearer ' + state.token } : {}), ...(options.headers || {}) };
-      const response = await fetch(path, { ...options, headers });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.error || 'Request failed');
-      return body;
-    }
+    const $ = (id) => document.getElementById(id); let authMode = 'signup';
+    function setAuthMode(mode) { authMode = mode; $('signupTab').className = mode === 'signup' ? 'active' : ''; $('signinTab').className = mode === 'signin' ? 'active' : ''; $('authSubmit').textContent = mode === 'signup' ? 'Create administrator account' : 'Sign in'; $('password').autocomplete = mode === 'signup' ? 'new-password' : 'current-password'; }
+    function setAuthMessage(text, type = 'note') { $('authMessage').textContent = text; $('authMessage').className = type; }
+    async function api(path, options = {}) { const response = await fetch(path, { ...options, credentials: 'include', headers: { 'content-type': 'application/json', ...(options.headers || {}) } }); const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.error || 'Request failed'); return body; }
+    function showDashboard(user) { $('landing').classList.add('hidden'); $('dashboard').classList.remove('hidden'); $('account').classList.remove('hidden'); $('accountEmail').textContent = user.email; refresh(); }
+    function showLanding() { $('dashboard').classList.add('hidden'); $('account').classList.add('hidden'); $('landing').classList.remove('hidden'); }
+    $('signupTab').onclick = () => setAuthMode('signup'); $('signinTab').onclick = () => setAuthMode('signin');
+    $('authForm').onsubmit = async (event) => { event.preventDefault(); setAuthMessage('Working...'); try { const result = await api('/api/auth/' + authMode, { method: 'POST', body: JSON.stringify({ email: $('email').value, password: $('password').value }) }); setAuthMessage('Signed in.', 'success'); showDashboard(result.user); } catch (error) { setAuthMessage(error.message, 'error'); } };
+    $('signout').onclick = async () => { await api('/api/auth/signout', { method: 'POST' }).catch(() => {}); showLanding(); };
     function pill(text, bad = false, warn = false) { const el = document.createElement('span'); el.className = 'pill' + (bad ? ' bad' : warn ? ' warn' : ''); el.textContent = text; return el; }
-    function render(data) {
-      const runtime = data.connection || {}; const metrics = data.metrics || {}; const safety = data.safety || {};
-      $('connection').textContent = runtime.connectionStatus || 'DISCONNECTED'; $('connection').className = 'pill ' + (runtime.connectionStatus === 'CONNECTED' ? '' : 'warn');
-      $('metricConnection').textContent = runtime.connectionStatus || '-'; $('metricGroups').textContent = (data.groups || []).filter(g => g.enabled).length; $('metricObserved').textContent = metrics.observed || 0; $('metricSent').textContent = metrics.actionsSent || 0;
-      $('outbound').textContent = safety.outboundPaused ? 'Resume sending' : 'Pause sending'; $('processing').textContent = safety.aiProcessingPaused ? 'Resume AI' : 'Pause AI'; $('mode').textContent = safety.groupOnlyMode ? 'Group-only' : 'All chats';
-      $('pairing').textContent = runtime.pairingCode ? 'Pairing code: ' + runtime.pairingCode : '';
-      $('groups').replaceChildren(); (data.groups || []).forEach(group => { const row = document.createElement('div'); row.className = 'row'; const info = document.createElement('div'); const title = document.createElement('strong'); title.textContent = group.subject || group.whatsappGroupId; const meta = document.createElement('small'); meta.textContent = group.participantCount + ' members'; info.append(title, meta); const button = document.createElement('button'); button.textContent = group.enabled ? 'Enabled' : 'Enable'; button.className = group.enabled ? 'primary' : ''; button.onclick = () => toggleGroup(group); row.append(info, button); $('groups').append(row); });
-      $('providers').replaceChildren(); (data.providers || []).forEach(provider => { const row = document.createElement('div'); row.className = 'row'; const name = document.createElement('strong'); name.textContent = provider.name; row.append(name, pill(provider.available ? 'Configured' : 'Not configured', !provider.available, !provider.available)); $('providers').append(row); });
-      $('logs').replaceChildren(); (data.recentLogs || []).forEach(log => { const row = document.createElement('div'); row.className = 'log row'; const when = new Date(log.createdAt).toLocaleString(); row.innerHTML = ''; const text = document.createElement('span'); const details = Object.entries(log.details || {}).map(([key, value]) => key + '=' + String(value)).join(' '); text.textContent = when + ' '; const bold = document.createElement('b'); bold.textContent = log.event; text.append(bold, ' ' + details); row.append(text); $('logs').append(row); });
-    }
-    async function refresh() { try { render(await api('/api/status')); setMessage('Dashboard connected.'); } catch (error) { setMessage(error.message, 'error'); } }
-    async function toggleGroup(group) { try { await api('/api/groups/' + encodeURIComponent(group.id) + '/enabled', { method: 'POST', body: JSON.stringify({ enabled: !group.enabled }) }); await refresh(); } catch (error) { setMessage(error.message, 'error'); } }
-    async function control(name, value) { try { await api('/api/controls', { method: 'POST', body: JSON.stringify({ [name]: value }) }); await refresh(); } catch (error) { setMessage(error.message, 'error'); } }
-    $('saveToken').onclick = () => { state.token = $('token').value.trim(); sessionStorage.setItem('wa-admin-token', state.token); refresh(); };
-    $('outbound').onclick = () => control('outboundPaused', !$('outbound').textContent.startsWith('Resume'));
-    $('processing').onclick = () => control('aiProcessingPaused', !$('processing').textContent.startsWith('Resume'));
-    $('connect').onclick = async () => { try { await api('/api/whatsapp/connect', { method: 'POST', body: JSON.stringify({ phoneNumber: $('phone').value }) }); await refresh(); } catch (error) { setMessage(error.message, 'error'); } };
-    $('disconnect').onclick = async () => { if (!confirm('Disconnect this WhatsApp session?')) return; try { await api('/api/whatsapp/disconnect', { method: 'POST' }); await refresh(); } catch (error) { setMessage(error.message, 'error'); } };
-    $('sync').onclick = async () => { try { await api('/api/groups/sync', { method: 'POST' }); await refresh(); } catch (error) { setMessage(error.message, 'error'); } };
-    refresh(); setInterval(refresh, 10000);
+    function render(data) { const runtime = data.connection || {}; const metrics = data.metrics || {}; const safety = data.safety || {}; $('metricConnection').textContent = runtime.connectionStatus || '-'; $('metricGroups').textContent = (data.groups || []).filter(g => g.enabled).length; $('metricObserved').textContent = metrics.observed || 0; $('metricSent').textContent = metrics.actionsSent || 0; $('outbound').textContent = safety.outboundPaused ? 'Resume sending' : 'Pause sending'; $('processing').textContent = safety.aiProcessingPaused ? 'Resume AI' : 'Pause AI'; $('mode').textContent = safety.groupOnlyMode ? 'Group-only' : 'All chats'; $('pairing').textContent = runtime.pairingCode ? 'Pairing code: ' + runtime.pairingCode : ''; $('groups').replaceChildren(); (data.groups || []).forEach(group => { const row = document.createElement('div'); row.className = 'row'; const info = document.createElement('div'); const title = document.createElement('strong'); title.textContent = group.subject || group.whatsappGroupId; const meta = document.createElement('small'); meta.textContent = group.participantCount + ' members'; info.append(title, meta); const button = document.createElement('button'); button.textContent = group.enabled ? 'Enabled' : 'Enable'; button.className = group.enabled ? 'primary' : ''; button.onclick = () => toggleGroup(group); row.append(info, button); $('groups').append(row); }); $('providers').replaceChildren(); (data.providers || []).forEach(provider => { const row = document.createElement('div'); row.className = 'row'; const name = document.createElement('strong'); name.textContent = provider.name; row.append(name, pill(provider.available ? 'Configured' : 'Not configured', !provider.available, !provider.available)); $('providers').append(row); }); $('logs').replaceChildren(); (data.recentLogs || []).forEach(log => { const row = document.createElement('div'); row.className = 'log row'; const text = document.createElement('span'); text.textContent = new Date(log.createdAt).toLocaleString() + ' '; const bold = document.createElement('b'); bold.textContent = log.event; text.append(bold, ' ' + Object.entries(log.details || {}).map(([key, value]) => key + '=' + String(value)).join(' ')); row.append(text); $('logs').append(row); }); }
+    async function refresh() { try { render(await api('/api/status')); } catch (error) { if (error.message === 'Authentication required' || error.message === 'Not signed in') showLanding(); } }
+    async function toggleGroup(group) { try { await api('/api/groups/' + encodeURIComponent(group.id) + '/enabled', { method: 'POST', body: JSON.stringify({ enabled: !group.enabled }) }); refresh(); } catch (error) { setAuthMessage(error.message, 'error'); } }
+    async function control(name, value) { try { await api('/api/controls', { method: 'POST', body: JSON.stringify({ [name]: value }) }); refresh(); } catch (error) { setAuthMessage(error.message, 'error'); } }
+    $('outbound').onclick = () => control('outboundPaused', !$('outbound').textContent.startsWith('Resume')); $('processing').onclick = () => control('aiProcessingPaused', !$('processing').textContent.startsWith('Resume'));
+    $('connect').onclick = async () => { try { await api('/api/whatsapp/connect', { method: 'POST', body: JSON.stringify({ phoneNumber: $('phone').value }) }); refresh(); } catch (error) { setAuthMessage(error.message, 'error'); } }; $('disconnect').onclick = async () => { if (confirm('Disconnect this WhatsApp session?')) { await api('/api/whatsapp/disconnect', { method: 'POST' }); refresh(); } }; $('sync').onclick = async () => { await api('/api/groups/sync', { method: 'POST' }); refresh(); };
+    api('/api/auth/me').then(result => showDashboard(result.user)).catch(() => showLanding());
   </script>
 </body>
 </html>

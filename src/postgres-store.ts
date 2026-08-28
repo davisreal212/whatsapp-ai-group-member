@@ -11,7 +11,9 @@ import type {
   MemoryRecord,
   PersistedState,
   ProviderUsageRecord,
+  SessionRecord,
   StoredMessage,
+  UserRecord,
 } from "./types.js";
 
 type Sql = ReturnType<typeof neon>;
@@ -30,7 +32,7 @@ export class PostgresStore implements Store {
     if (this.initialized) return;
     await this.createSchema();
     this.state = emptyState();
-    const [groups, members, messages, memories, actions, logs, usage, runtime, settings] = await Promise.all([
+    const [groups, members, messages, memories, actions, logs, usage, runtime, settings, users, sessions] = await Promise.all([
       this.sql`SELECT id, whatsapp_group_id, subject, participant_count, is_admin, enabled, ai_paused, personality_override_json, last_seen_at FROM groups`,
       this.sql`SELECT id, group_id, whatsapp_member_id, display_name, behavior_profile_json, confidence_json, first_seen_at, last_seen_at FROM members`,
       this.sql`SELECT id, chat_id, group_id, sender_id, sender_name, timestamp_ms, message_type, text_or_transcript, quoted_message_id, quoted_sender_id, mentioned_member_ids_json, media_metadata_json, is_group, is_status, is_from_bot, stored_at FROM messages`,
@@ -40,6 +42,8 @@ export class PostgresStore implements Store {
       this.sql`SELECT provider, operation, group_id, units, success, latency_ms, created_at FROM provider_usage ORDER BY created_at DESC LIMIT 1000`,
       this.sql`SELECT connection_status, pairing_code, last_connected_at, metrics_json FROM runtime_state WHERE id = 1`,
       this.sql`SELECT outbound_paused, ai_processing_paused, personality_json FROM app_settings WHERE id = 1`,
+      this.sql`SELECT id, email, password_hash, role, created_at FROM users`,
+      this.sql`SELECT token_hash, user_id, created_at, expires_at FROM sessions WHERE expires_at > ${Date.now()}`,
     ]);
     for (const row of groups as Row[]) this.state.groups[String(row.id)] = groupFromRow(row);
     for (const row of members as Row[]) this.state.members[String(row.id)] = memberFromRow(row);
@@ -65,6 +69,8 @@ export class PostgresStore implements Store {
         personality: jsonObject(settingsRow.personality_json, {}),
       };
     }
+    for (const row of users as Row[]) this.state.users[String(row.id)] = userFromRow(row);
+    for (const row of sessions as Row[]) this.state.sessions[String(row.token_hash)] = sessionFromRow(row);
     this.initialized = true;
   }
 
@@ -183,6 +189,36 @@ export class PostgresStore implements Store {
     this.state.providerUsage = this.state.providerUsage.slice(-1000);
   }
 
+  async createUser(user: UserRecord): Promise<boolean> {
+    const rows = await this.sql`INSERT INTO users (id, email, password_hash, role, created_at)
+      VALUES (${user.id}, ${user.email}, ${user.passwordHash}, ${user.role}, ${user.createdAt})
+      ON CONFLICT (email) DO NOTHING RETURNING id`;
+    if (!(rows as Row[]).length) return false;
+    this.state.users[user.id] = user;
+    return true;
+  }
+
+  userByEmail(email: string): UserRecord | undefined {
+    return Object.values(this.state.users).find((user) => user.email === email);
+  }
+
+  userById(id: string): UserRecord | undefined { return this.state.users[id]; }
+  userCount(): number { return Object.keys(this.state.users).length; }
+
+  async createSession(session: SessionRecord): Promise<void> {
+    await this.sql`INSERT INTO sessions (token_hash, user_id, created_at, expires_at)
+      VALUES (${session.tokenHash}, ${session.userId}, ${session.createdAt}, ${session.expiresAt})
+      ON CONFLICT (token_hash) DO UPDATE SET user_id = EXCLUDED.user_id, created_at = EXCLUDED.created_at, expires_at = EXCLUDED.expires_at`;
+    this.state.sessions[session.tokenHash] = session;
+  }
+
+  sessionByTokenHash(tokenHash: string): SessionRecord | undefined { return this.state.sessions[tokenHash]; }
+
+  async deleteSession(tokenHash: string): Promise<void> {
+    await this.sql`DELETE FROM sessions WHERE token_hash = ${tokenHash}`;
+    delete this.state.sessions[tokenHash];
+  }
+
   recentMessages(groupId: string, limit: number): StoredMessage[] {
     return Object.values(this.state.messages).filter((message) => message.groupId === groupId).sort((a, b) => b.timestamp - a.timestamp).slice(0, limit).reverse();
   }
@@ -208,6 +244,9 @@ export class PostgresStore implements Store {
     await this.sql`CREATE TABLE IF NOT EXISTS audit_logs (id text PRIMARY KEY, event text NOT NULL, level text NOT NULL, message_id text, group_id text, details_json jsonb NOT NULL, created_at bigint NOT NULL)`;
     await this.sql`CREATE INDEX IF NOT EXISTS audit_logs_time_idx ON audit_logs (created_at DESC)`;
     await this.sql`CREATE TABLE IF NOT EXISTS provider_usage (id bigserial PRIMARY KEY, provider text NOT NULL, operation text NOT NULL, group_id text, units integer NOT NULL, success boolean NOT NULL, latency_ms integer NOT NULL, created_at bigint NOT NULL)`;
+    await this.sql`CREATE TABLE IF NOT EXISTS users (id text PRIMARY KEY, email text UNIQUE NOT NULL, password_hash text NOT NULL, role text NOT NULL, created_at bigint NOT NULL)`;
+    await this.sql`CREATE TABLE IF NOT EXISTS sessions (token_hash text PRIMARY KEY, user_id text NOT NULL, created_at bigint NOT NULL, expires_at bigint NOT NULL)`;
+    await this.sql`CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions (expires_at)`;
     await this.sql`CREATE TABLE IF NOT EXISTS app_settings (id integer PRIMARY KEY CHECK (id = 1), outbound_paused boolean NOT NULL DEFAULT false, ai_processing_paused boolean NOT NULL DEFAULT false, personality_json jsonb NOT NULL DEFAULT '{}'::jsonb)`;
     await this.sql`CREATE TABLE IF NOT EXISTS runtime_state (id integer PRIMARY KEY CHECK (id = 1), connection_status text NOT NULL, pairing_code text, last_connected_at bigint, metrics_json jsonb NOT NULL)`;
     await this.sql`INSERT INTO schema_migrations (version, applied_at) VALUES (1, ${Date.now()}) ON CONFLICT (version) DO NOTHING`;
@@ -259,6 +298,14 @@ function logFromRow(row: Row): AuditLog {
 
 function usageFromRow(row: Row): ProviderUsageRecord {
   return { provider: String(row.provider), operation: String(row.operation), ...(row.group_id ? { groupId: String(row.group_id) } : {}), units: Number(row.units), success: Boolean(row.success), latencyMs: Number(row.latency_ms), createdAt: Number(row.created_at) };
+}
+
+function userFromRow(row: Row): UserRecord {
+  return { id: String(row.id), email: String(row.email), passwordHash: String(row.password_hash), role: String(row.role) as UserRecord["role"], createdAt: Number(row.created_at) };
+}
+
+function sessionFromRow(row: Row): SessionRecord {
+  return { tokenHash: String(row.token_hash), userId: String(row.user_id), createdAt: Number(row.created_at), expiresAt: Number(row.expires_at) };
 }
 
 function jsonArray(value: unknown): string[] {

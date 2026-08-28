@@ -1,6 +1,7 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import { join } from "node:path";
 import { z } from "zod";
+import { AuthService, sessionCookieName } from "./auth.js";
 import type { AppConfig } from "./types.js";
 import type { BotRuntime } from "./bot.js";
 
@@ -15,7 +16,39 @@ export function createApp(runtime: BotRuntime, config: AppConfig) {
   });
 
   app.use("/api", rateLimit());
-  app.use("/api", requireAdmin(config));
+  const auth = new AuthService(runtime.store);
+  app.post("/api/auth/signup", async (request, response) => {
+    try {
+      const body = authCredentialsSchema.parse(request.body);
+      const result = await auth.signUp(body.email, body.password);
+      setSessionCookie(response, result.token, config.nodeEnv === "production");
+      response.status(201).json({ user: result.user });
+    } catch (error) {
+      response.status(error instanceof z.ZodError ? 400 : 409).json({ error: error instanceof Error ? error.message : "Unable to create account" });
+    }
+  });
+  app.post("/api/auth/signin", async (request, response) => {
+    try {
+      const body = authCredentialsSchema.parse(request.body);
+      const result = await auth.signIn(body.email, body.password);
+      setSessionCookie(response, result.token, config.nodeEnv === "production");
+      response.json({ user: result.user });
+    } catch (error) {
+      response.status(error instanceof z.ZodError ? 400 : 401).json({ error: error instanceof Error ? error.message : "Unable to sign in" });
+    }
+  });
+  app.get("/api/auth/me", (request, response) => {
+    const user = auth.authenticate(readSessionCookie(request));
+    if (!user) return response.status(401).json({ error: "Not signed in" });
+    response.json({ user });
+  });
+  app.post("/api/auth/signout", async (request, response) => {
+    await auth.signOut(readSessionCookie(request));
+    response.setHeader("set-cookie", `${sessionCookieName}=; Path=/; HttpOnly; Max-Age=0; SameSite=Lax${config.nodeEnv === "production" ? "; Secure" : ""}`);
+    response.status(204).end();
+  });
+
+  app.use("/api", requireAdmin(config, auth));
   app.get("/api/status", (_request, response) => response.json(runtime.dashboardState()));
   app.get("/api/groups", (_request, response) => response.json(runtime.store.groups()));
   app.post("/api/groups/sync", async (_request, response, next) => {
@@ -126,14 +159,31 @@ const personalitySchema = z.object({
   responseLength: z.enum(["short", "medium", "long"]),
 });
 
-function requireAdmin(config: AppConfig) {
+function requireAdmin(config: AppConfig, auth: AuthService) {
   return (request: Request, response: Response, next: NextFunction) => {
     if (!config.adminToken && config.nodeEnv !== "production") return next();
     const header = request.header("authorization");
     const token = header?.startsWith("Bearer ") ? header.slice(7) : request.header("x-admin-token");
-    if (!token || token !== config.adminToken) return response.status(401).json({ error: "Authentication required" });
+    if (token && token === config.adminToken) return next();
+    const user = auth.authenticate(readSessionCookie(request));
+    if (!user || user.role !== "admin") return response.status(401).json({ error: "Authentication required" });
     next();
   };
+}
+
+const authCredentialsSchema = z.object({
+  email: z.string().trim().email().max(320),
+  password: z.string().min(8).max(128),
+});
+
+function readSessionCookie(request: Request): string | undefined {
+  const cookies = request.header("cookie")?.split(";").map((cookie) => cookie.trim()) ?? [];
+  const session = cookies.find((cookie) => cookie.startsWith(`${sessionCookieName}=`));
+  return session?.slice(sessionCookieName.length + 1);
+}
+
+function setSessionCookie(response: Response, token: string, secure: boolean): void {
+  response.setHeader("set-cookie", `${sessionCookieName}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800${secure ? "; Secure" : ""}`);
 }
 
 function rateLimit(windowMs = 60_000, maxRequests = 120) {

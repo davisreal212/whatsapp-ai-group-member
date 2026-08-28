@@ -15,6 +15,7 @@ A safety-first WhatsApp group agent based on the supplied implementation manual.
 - Structured action plans, same-group target validation, daily limits, cooldowns, dry-run mode, and idempotency.
 - Neon PostgreSQL persistence in production through `DATABASE_URL`, with local durable JSON state only when no database URL is configured.
 - Admin dashboard for connection, group authorization, kill switches, provider status, logs, and memory deletion.
+- Landing page with email/password signup and sign-in. The first account becomes the administrator; public signup closes after that.
 - Tests for transport normalization, hard policy gates, action safety, and structured decisions.
 
 ## Run locally
@@ -26,7 +27,7 @@ A safety-first WhatsApp group agent based on the supplied implementation manual.
 5. Run `npm install` and then `npm run dev`.
 6. Open `http://localhost:3000`.
 
-In development, the dashboard does not require an admin token and the local JSON store is used if `DATABASE_URL` is blank. In production, set a strong `ADMIN_TOKEN` and Neon `DATABASE_URL`; the server refuses to start without either. WhatsApp session credentials stay on the server under `WHATSAPP_AUTH_DIR` and are never sent to browser JavaScript.
+In development, the dashboard does not require an admin token and the local JSON store is used if `DATABASE_URL` is blank. In production, set a strong `ADMIN_TOKEN` and Neon `DATABASE_URL`; the server refuses to start without either. The landing page creates an administrator using a hashed password and an HttpOnly session cookie. WhatsApp session credentials stay on the server under `WHATSAPP_AUTH_DIR` and are never sent to browser JavaScript.
 
 ## Pair a dedicated WhatsApp account
 

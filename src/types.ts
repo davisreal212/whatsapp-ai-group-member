@@ -187,6 +187,23 @@ export interface ProviderUsageRecord {
   createdAt: number;
 }
 
+export type UserRole = "admin" | "user";
+
+export interface UserRecord {
+  id: string;
+  email: string;
+  passwordHash: string;
+  role: UserRole;
+  createdAt: number;
+}
+
+export interface SessionRecord {
+  tokenHash: string;
+  userId: string;
+  createdAt: number;
+  expiresAt: number;
+}
+
 export interface EvidenceSource {
   url: string;
   title?: string;
@@ -224,6 +241,8 @@ export interface PersistedState {
   actions: Record<string, ActionRecord>;
   logs: AuditLog[];
   providerUsage: ProviderUsageRecord[];
+  users: Record<string, UserRecord>;
+  sessions: Record<string, SessionRecord>;
   settings?: {
     outboundPaused?: boolean;
     aiProcessingPaused?: boolean;
