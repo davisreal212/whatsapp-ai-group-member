@@ -60,6 +60,7 @@ export function createApp(runtime: BotRuntime, config: AppConfig) {
       next(error);
     }
   });
+  app.post("/api/dms/sync", (_request, response) => response.json({ contacts: runtime.listDirectMessages() }));
   app.post("/api/groups/:id/enabled", async (request, response, next) => {
     try {
       const body = z.object({ enabled: z.boolean() }).parse(request.body);

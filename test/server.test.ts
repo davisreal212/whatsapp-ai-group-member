@@ -19,7 +19,7 @@ describe("admin HTTP surface", () => {
   it("serves health publicly and protects mutating APIs in production", async () => {
     const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-server-test-"));
     const config = loadConfig({ NODE_ENV: "production", ADMIN_TOKEN: "test-token-that-is-long-enough", DATA_DIR: dir, WHATSAPP_AUTH_DIR: join(dir, "auth"), DATABASE_URL: "postgresql://test" });
-    const transport = { connected: false, sendText: async () => {}, sendReaction: async () => {}, sendMedia: async () => {} };
+    const transport = { connected: false, sendText: async () => {}, sendReaction: async () => {}, sendMedia: async () => {}, listDirectMessages: () => [{ id: "234@s.whatsapp.net", displayName: "Test contact" }] };
     const runtime = new BotRuntime(new (await import("../src/store.js")).FileStore(dir), config, transport);
     await runtime.init();
     const server = createServer(createApp(runtime, config));
@@ -44,6 +44,10 @@ describe("admin HTTP surface", () => {
     expect(allowlist.status).toBe(200);
     expect((await allowlist.json()).contacts).toEqual(["+234 800 000 0000"]);
     expect(runtime.dashboardState().safety).toMatchObject({ directMessageAllowlist: ["+234 800 000 0000"] });
+
+    const dms = await fetch(`${base}/api/dms/sync`, { method: "POST", headers: { authorization: "Bearer test-token-that-is-long-enough" } });
+    expect(dms.status).toBe(200);
+    expect((await dms.json()).contacts).toEqual([{ id: "234@s.whatsapp.net", displayName: "Test contact" }]);
 
     await runtime.syncGroups([{ id: "old@g.us", subject: "Old group", participantCount: 1, isAdmin: true }]);
     expect(runtime.store.groups()).toHaveLength(1);

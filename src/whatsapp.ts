@@ -20,6 +20,11 @@ export interface DiscoveredGroup {
   isAdmin: boolean;
 }
 
+export interface DiscoveredDirectMessage {
+  id: string;
+  displayName?: string;
+}
+
 export interface WhatsAppEvents {
   onRawMessage(raw: WAMessage): Promise<void>;
   onGroups(groups: DiscoveredGroup[]): Promise<void>;
@@ -141,6 +146,17 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     if (!this.socket) return [];
     const groups = await this.socket.groupFetchAllParticipating();
     return Object.values(groups).map((group) => toDiscoveredGroup(group, this.socket?.user?.id));
+  }
+
+  listDirectMessages(): DiscoveredDirectMessage[] {
+    const contacts = new Map<string, DiscoveredDirectMessage>();
+    for (const raw of this.rawMessages.values()) {
+      const id = raw.key.remoteJid;
+      if (!id || !id.endsWith("@s.whatsapp.net") || raw.key.fromMe) continue;
+      const pushName = (raw as WAMessage & { pushName?: string }).pushName;
+      contacts.set(id, { id, ...(pushName ? { displayName: pushName } : {}) });
+    }
+    return [...contacts.values()].sort((a, b) => (a.displayName ?? a.id).localeCompare(b.displayName ?? b.id));
   }
 
   async sendText(groupId: string, text: string, quotedMessageId?: string, mentionedIds?: string[]): Promise<void> {

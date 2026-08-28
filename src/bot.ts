@@ -9,7 +9,7 @@ import { ProviderRouter, type ProviderInput } from "./providers.js";
 import { ResearchService, TavilyProvider } from "./research.js";
 import type { Store } from "./store.js";
 import { normalizeMessage } from "./normalize.js";
-import type { DiscoveredGroup } from "./whatsapp.js";
+import type { DiscoveredDirectMessage, DiscoveredGroup } from "./whatsapp.js";
 
 export class BotRuntime {
   readonly memory: MemoryService;
@@ -55,6 +55,11 @@ export class BotRuntime {
   async listGroups(): Promise<DiscoveredGroup[]> {
     if (!("listGroups" in this.transport)) return [];
     return (this.transport as unknown as { listGroups(): Promise<DiscoveredGroup[]> }).listGroups();
+  }
+
+  listDirectMessages(): DiscoveredDirectMessage[] {
+    if (!("listDirectMessages" in this.transport)) return [];
+    return (this.transport as unknown as { listDirectMessages(): DiscoveredDirectMessage[] }).listDirectMessages();
   }
 
   async handleRawMessage(raw: WAMessage): Promise<void> {
