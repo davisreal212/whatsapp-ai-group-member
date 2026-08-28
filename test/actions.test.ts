@@ -66,4 +66,20 @@ describe("validated outbound actions", () => {
     expect((await service.execute(plan, source, group)).reason).toBe("dry_run");
     expect(called).toBe(false);
   });
+
+  it("sends only to an allowlisted DM when group-only mode is disabled", async () => {
+    const { store } = await setup();
+    const dm: CanonicalMessage = {
+      id: "dm-source", chatId: "234@s.whatsapp.net", senderId: "234@s.whatsapp.net", timestamp: Date.now(), type: "text",
+      text: "Are you there?", mentionedIds: [], isGroup: false, isStatus: false, isFromBot: false,
+    };
+    await store.storeMessage({ ...dm, storedAt: Date.now() });
+    const config = loadConfig({ NODE_ENV: "test", DATA_DIR: "/tmp/ignored", DRY_RUN: "false", GROUP_ONLY_MODE: "false", DIRECT_MESSAGE_ALLOWLIST: "+234", GROUP_COOLDOWN_MS: "0" });
+    const sent: string[] = [];
+    const transport = { connected: true, sendText: async (chatId: string, text: string) => { sent.push(`${chatId}:${text}`); }, sendReaction: async () => {}, sendMedia: async () => {} };
+    const service = new ActionService(store, config, transport);
+    const plan = { decision: "REPLY" as const, confidence: 1, reason: "test", text: "Yes.", delayMs: 0, needsWeb: false, needsMedia: false, responseStyle: "short_casual" as const };
+    expect((await service.execute(plan, dm, undefined)).reason).toBe("sent");
+    expect(sent).toEqual(["234@s.whatsapp.net:Yes."]);
+  });
 });

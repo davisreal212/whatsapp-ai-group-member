@@ -38,6 +38,7 @@ ADMIN_TOKEN=<random secret with at least 24 characters>
 BOT_NAME=Kola
 BOT_JID=
 GROUP_ONLY_MODE=true
+DIRECT_MESSAGE_ALLOWLIST=<comma-separated WhatsApp numbers or JIDs; leave empty to deny all DMs>
 DRY_RUN=true
 OUTBOUND_PAUSED=true
 AI_PROCESSING_PAUSED=false
@@ -59,7 +60,8 @@ TAVILY_MAX_RESULTS=5
 9. Enter the dedicated WhatsApp number in international format and select **Connect**. The button shows a spinner and disables itself while the connection request is running.
 10. On the phone, open **WhatsApp > Linked devices > Link a device > Link with phone number**, then enter the newly displayed code. Do not reuse an older code.
 11. Wait for `CONNECTED`, select **Sync groups**, and enable groups individually.
-12. Keep `DRY_RUN=true` and `OUTBOUND_PAUSED=true` until a controlled test group is verified. Configure at least one AI provider before enabling AI processing.
+12. If `GROUP_ONLY_MODE=false`, populate `DIRECT_MESSAGE_ALLOWLIST` with the permitted WhatsApp phone numbers or JIDs. An empty list denies every DM.
+13. Keep `DRY_RUN=true` and `OUTBOUND_PAUSED=true` until a controlled test group is verified. Configure at least one AI provider before enabling AI processing.
 
 ## Current Koyeb deployment
 

@@ -48,6 +48,7 @@ export interface AppConfig {
   botName: string;
   botJid?: string;
   groupOnlyMode: boolean;
+  directMessageAllowlist: string[];
   dryRun: boolean;
   outboundPaused: boolean;
   aiProcessingPaused: boolean;

@@ -3,7 +3,7 @@ import { normalizeMessage } from "../src/normalize.js";
 import { evaluateInboundPolicy } from "../src/policy.js";
 import type { AppConfig, GroupRecord } from "../src/types.js";
 
-const config = { groupOnlyMode: true, aiProcessingPaused: false } satisfies Pick<AppConfig, "groupOnlyMode" | "aiProcessingPaused">;
+const config = { groupOnlyMode: true, directMessageAllowlist: [], aiProcessingPaused: false } satisfies Pick<AppConfig, "groupOnlyMode" | "directMessageAllowlist" | "aiProcessingPaused">;
 const group: GroupRecord = {
   id: "123@g.us",
   whatsappGroupId: "123@g.us",
@@ -57,6 +57,16 @@ describe("message normalization and inbound policy", () => {
       mentionedIds: [], isGroup: false, isStatus: false, isFromBot: false,
     };
     expect(evaluateInboundPolicy(message, undefined, config)).toEqual({ allowed: false, reason: "DIRECT_MESSAGE" });
+  });
+
+  it("allows only listed DMs when group-only mode is disabled", () => {
+    const message = {
+      id: "dm-2", chatId: "234@s.whatsapp.net", senderId: "234@s.whatsapp.net", timestamp: Date.now(), type: "text" as const,
+      mentionedIds: [], isGroup: false, isStatus: false, isFromBot: false,
+    };
+    const dmConfig = { ...config, groupOnlyMode: false, directMessageAllowlist: ["+234"] };
+    expect(evaluateInboundPolicy(message, undefined, dmConfig)).toEqual({ allowed: true, reason: "ALLOWED" });
+    expect(evaluateInboundPolicy({ ...message, senderId: "235@s.whatsapp.net", chatId: "235@s.whatsapp.net" }, undefined, dmConfig)).toEqual({ allowed: false, reason: "DIRECT_MESSAGE_NOT_ALLOWLISTED" });
   });
 
   it("defaults unapproved and disabled groups to denial", () => {

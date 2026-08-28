@@ -1,4 +1,4 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import makeWASocket, {
   Browsers,
   DisconnectReason,
@@ -107,14 +107,35 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     this.reconnectTimer = undefined;
     this.manuallyDisconnected = true;
     const socket = this.socket;
+    const wasConnected = this.isOpen && this.authRegistered;
     this.socket = undefined;
     this.isOpen = false;
     this.authRegistered = false;
     this.pairingCodeRequest = undefined;
     this.pairingPhoneNumber = undefined;
-    socket?.end(undefined);
+    let logoutError: string | undefined;
+    if (socket) {
+      try {
+        if (wasConnected) await socket.logout();
+        else socket.end(undefined);
+      } catch (error) {
+        logoutError = error instanceof Error ? error.message : "unknown error";
+        socket.end(undefined);
+      }
+    }
+    await this.credentialsSave.catch(() => undefined);
+    await rm(this.authDir, { recursive: true, force: true });
     this.reconnectAttempts = 0;
     await this.store.setConnection("DISCONNECTED");
+    if (logoutError) {
+      await this.store.addLog({
+        id: crypto.randomUUID(),
+        event: "whatsapp.logout_failure",
+        level: "error",
+        details: { error: logoutError },
+        createdAt: Date.now(),
+      });
+    }
   }
 
   async listGroups(): Promise<DiscoveredGroup[]> {

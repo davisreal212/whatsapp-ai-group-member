@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { AppConfig, CanonicalMessage, DecisionPlan, GroupRecord } from "./types.js";
 import type { Store } from "./store.js";
+import { isDirectMessageAllowed } from "./policy.js";
 
 export interface OutboundTransport {
   readonly connected: boolean;
@@ -37,17 +38,25 @@ export function validateActionPlan(
   group: GroupRecord | undefined,
   store: Store,
   outboundPaused: boolean,
+  groupOnlyMode = true,
+  directMessageAllowlist: string[] = [],
 ): ActionValidation {
   const parsed = planSchema.safeParse(plan);
   if (!parsed.success) return { valid: false, reason: "malformed_action_plan" };
   if (plan.decision === "IGNORE") return { valid: true, reason: "ignore", plan };
-  if (!sourceMessage.isGroup || !sourceMessage.groupId || !group) return { valid: false, reason: "group_not_authorized" };
-  if (!group.enabled || group.aiPaused) return { valid: false, reason: "group_not_enabled" };
+  if (!sourceMessage.isGroup) {
+    if (groupOnlyMode || !isDirectMessageAllowed(sourceMessage, directMessageAllowlist)) {
+      return { valid: false, reason: "direct_message_not_allowlisted" };
+    }
+  } else {
+    if (!sourceMessage.groupId || !group) return { valid: false, reason: "group_not_authorized" };
+    if (!group.enabled || group.aiPaused) return { valid: false, reason: "group_not_enabled" };
+  }
   if (outboundPaused) return { valid: false, reason: "outbound_paused" };
 
   const targetId = plan.targetMessageId ?? sourceMessage.id;
   const target = store.message(targetId);
-  if (!target || target.groupId !== sourceMessage.groupId) return { valid: false, reason: "target_not_in_group" };
+  if (!target || target.chatId !== sourceMessage.chatId || target.groupId !== sourceMessage.groupId) return { valid: false, reason: "target_not_in_group" };
   if (["REPLY", "REPLY_QUOTED", "MENTION_REPLY"].includes(plan.decision) && !plan.text) {
     return { valid: false, reason: "text_required" };
   }
@@ -68,7 +77,7 @@ export class ActionService {
   ) {}
 
   async execute(plan: DecisionPlan, sourceMessage: CanonicalMessage, group: GroupRecord | undefined): Promise<ActionValidation> {
-    const validation = validateActionPlan(plan, sourceMessage, group, this.store, this.config.outboundPaused);
+    const validation = validateActionPlan(plan, sourceMessage, group, this.store, this.config.outboundPaused, this.config.groupOnlyMode, this.config.directMessageAllowlist);
     if (!validation.valid || plan.decision === "IGNORE") {
       await this.store.incrementMetric(validation.valid ? "actionsSkipped" : "actionsSkipped");
       await this.store.addLog({
@@ -83,10 +92,10 @@ export class ActionService {
       return validation;
     }
 
-    const groupId = sourceMessage.groupId as string;
-    const idempotencyKey = `${groupId}:${sourceMessage.id}:${plan.decision}`;
+    const conversationId = sourceMessage.groupId ?? sourceMessage.chatId;
+    const idempotencyKey = `${conversationId}:${sourceMessage.id}:${plan.decision}`;
     const now = Date.now();
-    const recentActions = this.store.actions(1000).filter((action) => action.groupId === groupId);
+    const recentActions = this.store.actions(1000).filter((action) => action.groupId === conversationId);
     const dayStart = new Date(now);
     dayStart.setHours(0, 0, 0, 0);
     if (recentActions.filter((action) => action.scheduledFor >= dayStart.getTime() && action.status === "SENT").length >= this.config.dailyActionLimit) {
@@ -99,7 +108,7 @@ export class ActionService {
     const action = {
       id: randomUUID(),
       idempotencyKey,
-      groupId,
+      groupId: conversationId,
       sourceMessageId: sourceMessage.id,
       actionType: plan.decision,
       ...(plan.targetMessageId ? { targetMessageId: plan.targetMessageId } : {}),
@@ -118,11 +127,11 @@ export class ActionService {
     if (plan.delayMs > 0) await wait(plan.delayMs);
     try {
       if (plan.decision === "REACT") {
-        await this.transport.sendReaction(groupId, plan.targetMessageId ?? sourceMessage.id, plan.reaction as string);
+        await this.transport.sendReaction(conversationId, plan.targetMessageId ?? sourceMessage.id, plan.reaction as string);
       } else if (plan.decision === "SEND_IMAGE" || plan.decision === "SEND_AUDIO") {
-        await this.transport.sendMedia(groupId, plan.mediaUrl as string, plan.mediaMimeType ?? (plan.decision === "SEND_IMAGE" ? "image/jpeg" : "audio/ogg"), plan.text);
+        await this.transport.sendMedia(conversationId, plan.mediaUrl as string, plan.mediaMimeType ?? (plan.decision === "SEND_IMAGE" ? "image/jpeg" : "audio/ogg"), plan.text);
       } else {
-        await this.transport.sendText(groupId, plan.text as string, ["REPLY_QUOTED", "MENTION_REPLY"].includes(plan.decision) ? plan.targetMessageId ?? sourceMessage.id : undefined, plan.decision === "MENTION_REPLY" ? [sourceMessage.senderId] : undefined);
+        await this.transport.sendText(conversationId, plan.text as string, ["REPLY_QUOTED", "MENTION_REPLY"].includes(plan.decision) ? plan.targetMessageId ?? sourceMessage.id : undefined, plan.decision === "MENTION_REPLY" ? [sourceMessage.senderId] : undefined);
       }
       await this.store.updateAction(action.id, { status: "SENT", executedAt: Date.now() });
       await this.store.incrementMetric("actionsSent");

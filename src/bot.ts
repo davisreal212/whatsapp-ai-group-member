@@ -76,9 +76,9 @@ export class BotRuntime {
       return;
     }
     await this.memory.observe(message);
-    const authorizedGroup = group as GroupRecord;
-    const context = this.memory.context(authorizedGroup, message.senderId, this.personality(authorizedGroup));
-    const result = await this.decisions.decide(message, authorizedGroup, context, this.config);
+    const contextGroup = group ?? directMessageContext(message.chatId);
+    const context = this.memory.context(contextGroup, message.senderId, this.personality(contextGroup));
+    const result = await this.decisions.decide(message, contextGroup, context, this.config);
     if (!result.local.relevant) {
       await this.store.incrementMetric("ignoredLocally");
       await this.log("decision.ignore_local", "info", { reason: result.plan.reason }, message);
@@ -104,7 +104,7 @@ export class BotRuntime {
       const response = await this.providers.generateResponse(input, message.groupId);
       if (response) plan = { ...plan, text: response };
     }
-    await this.actions.execute(plan, message, authorizedGroup);
+    await this.actions.execute(plan, message, group);
   }
 
   async syncGroups(groups: DiscoveredGroup[]): Promise<void> {
@@ -209,4 +209,17 @@ export class BotRuntime {
       createdAt: Date.now(),
     });
   }
+}
+
+function directMessageContext(chatId: string): GroupRecord {
+  return {
+    id: chatId,
+    whatsappGroupId: chatId,
+    subject: "Direct message",
+    participantCount: 1,
+    isAdmin: false,
+    enabled: true,
+    aiPaused: false,
+    lastSeenAt: Date.now(),
+  };
 }
