@@ -40,12 +40,12 @@
     <section class="panel"><h2>Recent audit events</h2><div id="logs"></div></section>
   </main>
   <script>
-    const $ = (id) => document.getElementById(id); let authMode = 'signup';
+    const $ = (id) => document.getElementById(id); let authMode = 'signup'; let refreshTimer;
     function setAuthMode(mode) { authMode = mode; $('signupTab').className = mode === 'signup' ? 'active' : ''; $('signinTab').className = mode === 'signin' ? 'active' : ''; $('authSubmit').textContent = mode === 'signup' ? 'Create administrator account' : 'Sign in'; $('password').autocomplete = mode === 'signup' ? 'new-password' : 'current-password'; }
     function setAuthMessage(text, type = 'note') { $('authMessage').textContent = text; $('authMessage').className = type; }
     async function api(path, options = {}) { const response = await fetch(path, { ...options, credentials: 'include', headers: { 'content-type': 'application/json', ...(options.headers || {}) } }); const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.error || 'Request failed'); return body; }
-    function showDashboard(user) { $('landing').classList.add('hidden'); $('dashboard').classList.remove('hidden'); $('account').classList.remove('hidden'); $('accountEmail').textContent = user.email; refresh(); }
-    function showLanding() { $('dashboard').classList.add('hidden'); $('account').classList.add('hidden'); $('landing').classList.remove('hidden'); }
+    function showDashboard(user) { $('landing').classList.add('hidden'); $('dashboard').classList.remove('hidden'); $('account').classList.remove('hidden'); $('accountEmail').textContent = user.email; refresh(); if (!refreshTimer) refreshTimer = setInterval(refresh, 10000); }
+    function showLanding() { $('dashboard').classList.add('hidden'); $('account').classList.add('hidden'); $('landing').classList.remove('hidden'); if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = undefined; } }
     $('signupTab').onclick = () => setAuthMode('signup'); $('signinTab').onclick = () => setAuthMode('signin');
     $('authForm').onsubmit = async (event) => { event.preventDefault(); setAuthMessage('Working...'); try { const result = await api('/api/auth/' + authMode, { method: 'POST', body: JSON.stringify({ email: $('email').value, password: $('password').value }) }); setAuthMessage('Signed in.', 'success'); showDashboard(result.user); } catch (error) { setAuthMessage(error.message, 'error'); } };
     $('signout').onclick = async () => { await api('/api/auth/signout', { method: 'POST' }).catch(() => {}); showLanding(); };
