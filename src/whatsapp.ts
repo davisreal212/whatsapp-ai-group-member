@@ -31,6 +31,8 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
   private reconnectAttempts = 0;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private isOpen = false;
+  private authRegistered = false;
+  private pairingCodeRequested = false;
 
   constructor(
     private readonly authDir: string,
@@ -43,10 +45,16 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
   }
 
   async connect(phoneNumber?: string): Promise<void> {
-    if (this.socket) return;
+    if (this.socket) {
+      if (phoneNumber && !this.authRegistered && !this.pairingCodeRequested) {
+        await this.requestPairingCode(this.socket, phoneNumber);
+      }
+      return;
+    }
     await mkdir(this.authDir, { recursive: true });
     await this.store.setConnection(this.reconnectAttempts ? "RECONNECTING" : "CONNECTING");
     const { state, saveCreds } = await useMultiFileAuthState(this.authDir);
+    this.authRegistered = state.creds.registered;
     const { version } = await fetchLatestBaileysVersion();
     const socket = makeWASocket({
       version,
@@ -68,14 +76,7 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
       void this.handleConnectionUpdate(update.connection === "open" || update.connection === "close" ? update.connection : undefined, update.lastDisconnect?.error, phoneNumber);
     });
 
-    if (phoneNumber && !state.creds.registered) {
-      await this.store.setConnection("PAIRING");
-      const normalized = normalizePairingPhoneNumber(phoneNumber);
-      if (!normalized) throw new Error("A valid phone number is required for pairing");
-      // Baileys pairing codes require country code digits only.
-      const pairingCode = await socket.requestPairingCode(normalized);
-      await this.store.setConnection("PAIRING", pairingCode);
-    }
+    if (phoneNumber && !state.creds.registered) await this.requestPairingCode(socket, phoneNumber);
   }
 
   async disconnect(): Promise<void> {
@@ -84,6 +85,8 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     this.socket?.end(undefined);
     this.socket = undefined;
     this.isOpen = false;
+    this.authRegistered = false;
+    this.pairingCodeRequested = false;
     this.reconnectAttempts = 0;
     await this.store.setConnection("DISCONNECTED");
   }
@@ -134,6 +137,8 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
   ): Promise<void> {
     if (connection === "open") {
       this.isOpen = true;
+      this.authRegistered = true;
+      this.pairingCodeRequested = false;
       this.reconnectAttempts = 0;
       await this.store.setConnection("CONNECTED");
       await this.events.onGroups(await this.listGroups());
@@ -142,6 +147,7 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     if (connection !== "close") return;
     this.socket = undefined;
     this.isOpen = false;
+    this.pairingCodeRequested = false;
     const statusCode = error && typeof error === "object" && "output" in error
       ? (error as { output?: { statusCode?: number } }).output?.statusCode
       : undefined;
@@ -168,6 +174,29 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
         });
       });
     }, delay);
+  }
+
+  private async requestPairingCode(socket: WASocket, phoneNumber: string): Promise<void> {
+    if (this.pairingCodeRequested) return;
+    const normalized = normalizePairingPhoneNumber(phoneNumber);
+    if (!normalized) throw new Error("A valid phone number is required for pairing");
+    this.pairingCodeRequested = true;
+    await this.store.setConnection("PAIRING");
+    try {
+      // Baileys pairing codes require country code digits only.
+      const pairingCode = await socket.requestPairingCode(normalized);
+      await this.store.setConnection("PAIRING", pairingCode);
+      await this.store.addLog({
+        id: crypto.randomUUID(),
+        event: "whatsapp.pairing_code_created",
+        level: "info",
+        details: { phoneDigits: `${normalized.slice(0, 3)}***${normalized.slice(-2)}` },
+        createdAt: Date.now(),
+      });
+    } catch (error) {
+      this.pairingCodeRequested = false;
+      throw error;
+    }
   }
 }
 

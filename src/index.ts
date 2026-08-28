@@ -21,6 +21,15 @@ async function main(): Promise<void> {
   server.listen(config.port, () => {
     console.log(`WhatsApp AI group member listening on http://localhost:${config.port}`);
     console.log(`Safety: group-only=${config.groupOnlyMode} dry-run=${config.dryRun} outbound-paused=${config.outboundPaused}`);
+    void whatsapp.connect().catch(async (error) => {
+      await store.addLog({
+        id: crypto.randomUUID(),
+        event: "whatsapp.startup_connection_failure",
+        level: "error",
+        details: { error: error instanceof Error ? error.message : "unknown error" },
+        createdAt: Date.now(),
+      });
+    });
   });
 
   const shutdown = async () => {
