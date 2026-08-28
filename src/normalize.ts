@@ -61,6 +61,12 @@ export function normalizeMessage(raw: WhatsAppRawMessage, botJid?: string): Cano
   const text = asString(message.conversation)
     ?? asString((message.extendedTextMessage as MessageContent | undefined)?.text)
     ?? asString(payload.caption)
+    ?? asString((message.buttonsMessage as MessageContent | undefined)?.contentText)
+    ?? asString((message.listMessage as MessageContent | undefined)?.description)
+    ?? asString((message.templateMessage as MessageContent | undefined)?.hydratedTemplate && ((message.templateMessage as MessageContent).hydratedTemplate as MessageContent).hydratedContentText)
+    ?? asString((message.interactiveMessage as MessageContent | undefined)?.body && ((message.interactiveMessage as MessageContent).body as MessageContent).text)
+    ?? asString((message.contactMessage as MessageContent | undefined)?.displayName)
+    ?? asString((message.locationMessage as MessageContent | undefined)?.name)
     ?? asString((message.buttonsResponseMessage as MessageContent | undefined)?.selectedDisplayText)
     ?? asString((message.listResponseMessage as MessageContent | undefined)?.title);
 
@@ -91,6 +97,23 @@ function toMessageType(kind: string | undefined): MessageType {
   switch (kind) {
     case "conversation":
     case "extendedTextMessage":
+    case "buttonsMessage":
+    case "listMessage":
+    case "templateMessage":
+    case "interactiveMessage":
+    case "interactiveResponseMessage":
+    case "nativeFlowResponseMessage":
+    case "contactMessage":
+    case "contactsArrayMessage":
+    case "locationMessage":
+    case "liveLocationMessage":
+    case "pollCreationMessage":
+    case "pollUpdateMessage":
+    case "orderMessage":
+    case "productMessage":
+    case "groupInviteMessage":
+    case "eventMessage":
+    case "requestPhoneNumberMessage":
     case "buttonsResponseMessage":
     case "listResponseMessage":
       return "text";

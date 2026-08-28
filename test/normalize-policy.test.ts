@@ -78,4 +78,12 @@ describe("message normalization and inbound policy", () => {
     expect(evaluateInboundPolicy(message, { ...group, enabled: false }, config).reason).toBe("DISABLED_GROUP");
     expect(evaluateInboundPolicy(message, group, config)).toEqual({ allowed: true, reason: "ALLOWED" });
   });
+
+  it("accepts message types it does not need to interpret locally", () => {
+    const message = {
+      id: "location-1", chatId: group.id, groupId: group.id, senderId: "member", timestamp: Date.now(), type: "unknown" as const,
+      mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false,
+    };
+    expect(evaluateInboundPolicy(message, group, config)).toEqual({ allowed: true, reason: "ALLOWED" });
+  });
 });

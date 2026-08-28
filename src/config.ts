@@ -37,9 +37,9 @@ const envSchema = z.object({
   TAVILY_API_KEY: optionalString,
   TAVILY_MAX_RESULTS: z.coerce.number().int().min(1).max(10).default(5),
   GEMINI_API_KEY: optionalString,
-  GEMINI_MODEL: z.string().default("gemini-2.0-flash"),
+  GEMINI_MODEL: z.string().default("gemini-2.5-flash"),
   GROQ_API_KEY: optionalString,
-  GROQ_MODEL: z.string().default("llama-3.1-8b-instant"),
+  GROQ_MODEL: z.string().default("openai/gpt-oss-20b"),
   OPENROUTER_API_KEY: optionalString,
   OPENROUTER_MODEL: z.string().default("openai/gpt-4o-mini"),
 });

@@ -143,6 +143,22 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     }
   }
 
+  async stop(): Promise<void> {
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = undefined;
+    this.manuallyDisconnected = true;
+    const socket = this.socket;
+    this.socket = undefined;
+    this.isOpen = false;
+    this.authRegistered = false;
+    this.pairingCodeRequest = undefined;
+    this.pairingPhoneNumber = undefined;
+    this.rawMessages.clear();
+    socket?.end(undefined);
+    await this.credentialsSave.catch(() => undefined);
+    await this.store.setConnection("DISCONNECTED");
+  }
+
   async listGroups(): Promise<DiscoveredGroup[]> {
     if (!this.socket) return [];
     const groups = await this.socket.groupFetchAllParticipating();

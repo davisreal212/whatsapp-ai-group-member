@@ -18,8 +18,6 @@ export interface InboundPolicyDecision {
   reason: PolicyReason;
 }
 
-const supportedTypes = new Set(["text", "image", "video", "audio", "document", "sticker", "reaction"]);
-
 export function evaluateInboundPolicy(
   message: CanonicalMessage,
   group: GroupRecord | undefined,
@@ -39,7 +37,6 @@ export function evaluateInboundPolicy(
     if (group.aiPaused) return { allowed: false, reason: "GROUP_PAUSED" };
   }
   if (message.isFromBot) return { allowed: false, reason: "BOT_OWN_MESSAGE" };
-  if (!supportedTypes.has(message.type)) return { allowed: false, reason: "UNSUPPORTED_MESSAGE" };
   return { allowed: true, reason: "ALLOWED" };
 }
 

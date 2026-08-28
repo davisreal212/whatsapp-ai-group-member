@@ -33,7 +33,7 @@ async function main(): Promise<void> {
   });
 
   const shutdown = async () => {
-    await whatsapp.disconnect();
+    await whatsapp.stop();
     server.close();
   };
   process.once("SIGINT", () => void shutdown());
