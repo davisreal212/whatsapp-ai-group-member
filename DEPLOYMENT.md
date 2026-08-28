@@ -17,6 +17,50 @@ This service uses an unofficial WhatsApp Web/linked-device integration. Use a de
 11. Keep `DRY_RUN=true` and `OUTBOUND_PAUSED=true` while verifying logs and group authorization.
 12. After controlled test-group verification, set both to `false` and recreate the container.
 
+## Manual Railway deployment
+
+Use this path when deploying from the Railway dashboard instead of the CLI.
+
+1. Open Railway and select the `Davis Harley's Projects` workspace.
+2. Create a new project or open the target project, then choose **Deploy from GitHub repo**.
+3. Select `Phoenix1185/whatsapp-ai-group-member` and deploy the `main` branch.
+4. Let Railway build from the repository `Dockerfile`. Do not replace the start command; it already runs `node dist/index.js`.
+5. Add a Railway volume mounted at `/var/lib/whatsapp-ai`. The WhatsApp auth files and application data must survive restarts.
+6. Add these service variables:
+
+```text
+NODE_ENV=production
+PORT=3000
+DATA_DIR=/var/lib/whatsapp-ai/data
+WHATSAPP_AUTH_DIR=/var/lib/whatsapp-ai/whatsapp-auth
+DATABASE_URL=<Neon pooled connection string with sslmode=require>
+ADMIN_TOKEN=<random secret with at least 24 characters>
+BOT_NAME=Kola
+BOT_JID=
+GROUP_ONLY_MODE=true
+DRY_RUN=true
+OUTBOUND_PAUSED=true
+AI_PROCESSING_PAUSED=false
+GROUP_COOLDOWN_MS=30000
+DAILY_ACTION_LIMIT=50
+MESSAGE_RETENTION_DAYS=30
+GEMINI_API_KEY=<optional>
+GEMINI_MODEL=gemini-2.0-flash
+GROQ_API_KEY=<optional>
+GROQ_MODEL=llama-3.1-8b-instant
+OPENROUTER_API_KEY=<optional>
+OPENROUTER_MODEL=openai/gpt-4o-mini
+TAVILY_API_KEY=<Tavily key>
+TAVILY_MAX_RESULTS=5
+```
+
+7. Generate a public domain for the service. Railway should expose port `3000`; verify `https://<your-domain>/api/health` returns a healthy response.
+8. Open the domain, select **Sign up**, and create the first administrator account.
+9. Enter the dedicated WhatsApp number in international format and select **Connect**. The button shows a spinner and disables itself while the connection request is running.
+10. On the phone, open **WhatsApp > Linked devices > Link a device > Link with phone number**, then enter the newly displayed code. Do not reuse an older code.
+11. Wait for `CONNECTED`, select **Sync groups**, and enable groups individually.
+12. Keep `DRY_RUN=true` and `OUTBOUND_PAUSED=true` until a controlled test group is verified. Configure at least one AI provider before enabling AI processing.
+
 ## Current Koyeb deployment
 
 - Koyeb app: `whatsapp-ai`
