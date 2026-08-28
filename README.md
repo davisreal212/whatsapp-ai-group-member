@@ -53,3 +53,5 @@ The service defaults to silence when no provider is configured, when a provider 
 - Validate the real WhatsApp adapter against a controlled account separately from the AI brain.
 
 For Docker deployment, use [`DEPLOYMENT.md`](./DEPLOYMENT.md) and `.env.production.example`. The production profile requires a Neon `DATABASE_URL`, an absolute persistent auth path, and an admin token of at least 24 characters. It starts with both dry-run and outbound pause enabled; remove those safeguards only after controlled verification.
+
+The deployed Koyeb landing page is at https://whatsapp-ai-suhailtechlnfo-27ca2e5b.koyeb.app. Koyeb deployment details and the scale-to-zero warning are in [`DEPLOYMENT.md`](./DEPLOYMENT.md).

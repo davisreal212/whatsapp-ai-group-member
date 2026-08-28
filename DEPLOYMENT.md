@@ -17,6 +17,15 @@ This service uses an unofficial WhatsApp Web/linked-device integration. Use a de
 11. Keep `DRY_RUN=true` and `OUTBOUND_PAUSED=true` while verifying logs and group authorization.
 12. After controlled test-group verification, set both to `false` and recreate the container.
 
+## Current Koyeb deployment
+
+- Koyeb app: `whatsapp-ai`
+- Koyeb service: `whatsapp-ai-bot`
+- Live URL: https://whatsapp-ai-suhailtechlnfo-27ca2e5b.koyeb.app
+- Git source: `github.com/Phoenix1185/whatsapp-ai-group-member`, branch `main`
+
+The current Koyeb organization only permits the `free` instance type, which enforces scale-to-zero. That is suitable for checking the landing page and API, but it is not suitable for a continuously connected WhatsApp session. Upgrade the Koyeb plan and change the service to an always-on instance with minimum scale `1` before pairing the bot for unattended production use.
+
 ## Dashboard account
 
 On the landing page, select **Sign up** and create the administrator with an email address and a password of at least eight characters. Only the first account can sign up; later visits use **Sign in**. Passwords are scrypt-hashed and sessions use an HttpOnly cookie. Keep the dashboard behind HTTPS and restrict who can reach it.
