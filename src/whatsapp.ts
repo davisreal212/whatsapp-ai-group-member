@@ -32,7 +32,10 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private isOpen = false;
   private authRegistered = false;
-  private pairingCodeRequested = false;
+  private pairingCodeRequest?: Promise<void>;
+  private pairingPhoneNumber?: string;
+  private credentialsSave = Promise.resolve();
+  private manuallyDisconnected = false;
 
   constructor(
     private readonly authDir: string,
@@ -45,16 +48,33 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
   }
 
   async connect(phoneNumber?: string): Promise<void> {
+    const normalizedPhoneNumber = phoneNumber ? normalizePairingPhoneNumber(phoneNumber) : undefined;
+    if (phoneNumber && !normalizedPhoneNumber) throw new Error("A valid phone number is required for pairing");
+    if (normalizedPhoneNumber) this.pairingPhoneNumber = normalizedPhoneNumber;
+    this.manuallyDisconnected = false;
+
     if (this.socket) {
-      if (phoneNumber && !this.authRegistered && !this.pairingCodeRequested) {
-        await this.requestPairingCode(this.socket, phoneNumber);
+      if (this.pairingPhoneNumber && !this.authRegistered) {
+        await this.requestPairingCode(this.socket, this.pairingPhoneNumber);
       }
       return;
     }
     await mkdir(this.authDir, { recursive: true });
-    await this.store.setConnection(this.reconnectAttempts ? "RECONNECTING" : "CONNECTING");
     const { state, saveCreds } = await useMultiFileAuthState(this.authDir);
     this.authRegistered = state.creds.registered;
+    if (!this.authRegistered && !this.pairingPhoneNumber) {
+      // An unfinished pairing attempt leaves a temporary `me` value in auth state.
+      // Do not let the next boot treat that stale value as a logged-in session.
+      if (state.creds.me || state.creds.pairingCode) {
+        delete state.creds.me;
+        delete state.creds.pairingCode;
+        await saveCreds();
+      }
+      await this.store.setConnection("DISCONNECTED");
+      return;
+    }
+    await this.store.setConnection(this.reconnectAttempts ? "RECONNECTING" : "CONNECTING");
+    this.credentialsSave = Promise.resolve();
     const { version } = await fetchLatestBaileysVersion();
     const socket = makeWASocket({
       version,
@@ -65,7 +85,9 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
       generateHighQualityLinkPreview: false,
     });
     this.socket = socket;
-    socket.ev.on("creds.update", saveCreds);
+    socket.ev.on("creds.update", () => {
+      this.credentialsSave = this.credentialsSave.then(() => saveCreds());
+    });
     socket.ev.on("messages.upsert", async ({ messages }) => {
       for (const raw of messages) {
         if (raw.key.id) this.rawMessages.set(raw.key.id, raw);
@@ -73,20 +95,24 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
       }
     });
     socket.ev.on("connection.update", (update) => {
-      void this.handleConnectionUpdate(update.connection === "open" || update.connection === "close" ? update.connection : undefined, update.lastDisconnect?.error, phoneNumber);
+      if (update.isNewLogin) void this.handleNewLogin(socket);
+      void this.handleConnectionUpdate(socket, update.connection === "open" || update.connection === "close" ? update.connection : undefined, update.lastDisconnect?.error);
     });
 
-    if (phoneNumber && !state.creds.registered) await this.requestPairingCode(socket, phoneNumber);
+    if (this.pairingPhoneNumber && !state.creds.registered) await this.requestPairingCode(socket, this.pairingPhoneNumber);
   }
 
   async disconnect(): Promise<void> {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
-    this.socket?.end(undefined);
+    this.manuallyDisconnected = true;
+    const socket = this.socket;
     this.socket = undefined;
     this.isOpen = false;
     this.authRegistered = false;
-    this.pairingCodeRequested = false;
+    this.pairingCodeRequest = undefined;
+    this.pairingPhoneNumber = undefined;
+    socket?.end(undefined);
     this.reconnectAttempts = 0;
     await this.store.setConnection("DISCONNECTED");
   }
@@ -131,14 +157,14 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
   }
 
   private async handleConnectionUpdate(
+    socket: WASocket,
     connection: "open" | "close" | undefined,
     error: unknown,
-    phoneNumber?: string,
   ): Promise<void> {
+    if (this.socket !== socket) return;
     if (connection === "open") {
       this.isOpen = true;
       this.authRegistered = true;
-      this.pairingCodeRequested = false;
       this.reconnectAttempts = 0;
       await this.store.setConnection("CONNECTED");
       await this.events.onGroups(await this.listGroups());
@@ -147,7 +173,8 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     if (connection !== "close") return;
     this.socket = undefined;
     this.isOpen = false;
-    this.pairingCodeRequested = false;
+    this.pairingCodeRequest = undefined;
+    if (this.manuallyDisconnected) return;
     const statusCode = error && typeof error === "object" && "output" in error
       ? (error as { output?: { statusCode?: number } }).output?.statusCode
       : undefined;
@@ -164,7 +191,7 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     const delay = Math.min(60_000, 1_000 * 2 ** (this.reconnectAttempts - 1)) + Math.floor(Math.random() * 500);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
-      void this.connect(phoneNumber).catch(async (connectError) => {
+      void this.connect(this.pairingPhoneNumber).catch(async (connectError) => {
         await this.store.addLog({
           id: crypto.randomUUID(),
           event: "whatsapp.reconnect_failure",
@@ -176,13 +203,34 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     }, delay);
   }
 
+  private async handleNewLogin(socket: WASocket): Promise<void> {
+    try {
+      // Baileys emits isNewLogin before it can use the newly saved credentials.
+      await this.credentialsSave;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      if (this.socket === socket && !this.manuallyDisconnected) socket.end(undefined);
+    } catch (error) {
+      await this.store.addLog({
+        id: crypto.randomUUID(),
+        event: "whatsapp.pairing_restart_failure",
+        level: "error",
+        details: { error: error instanceof Error ? error.message : "unknown error" },
+        createdAt: Date.now(),
+      });
+    }
+  }
+
   private async requestPairingCode(socket: WASocket, phoneNumber: string): Promise<void> {
-    if (this.pairingCodeRequested) return;
     const normalized = normalizePairingPhoneNumber(phoneNumber);
     if (!normalized) throw new Error("A valid phone number is required for pairing");
-    this.pairingCodeRequested = true;
-    await this.store.setConnection("PAIRING");
-    try {
+    if (this.pairingCodeRequest) return this.pairingCodeRequest;
+
+    const request = (async () => {
+      await this.store.setConnection("PAIRING");
+      // The WebSocket must finish the Noise handshake before requestPairingCode can send data.
+      await socket.waitForSocketOpen();
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
+      if (this.socket !== socket) throw new Error("WhatsApp connection closed before pairing code was created");
       // Baileys pairing codes require country code digits only.
       const pairingCode = await socket.requestPairingCode(normalized);
       await this.store.setConnection("PAIRING", pairingCode);
@@ -193,9 +241,12 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
         details: { phoneDigits: `${normalized.slice(0, 3)}***${normalized.slice(-2)}` },
         createdAt: Date.now(),
       });
-    } catch (error) {
-      this.pairingCodeRequested = false;
-      throw error;
+    })();
+    this.pairingCodeRequest = request;
+    try {
+      await request;
+    } finally {
+      if (this.pairingCodeRequest === request) this.pairingCodeRequest = undefined;
     }
   }
 }
