@@ -118,6 +118,7 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     this.authRegistered = false;
     this.pairingCodeRequest = undefined;
     this.pairingPhoneNumber = undefined;
+    this.rawMessages.clear();
     let logoutError: string | undefined;
     if (socket) {
       try {
@@ -217,6 +218,7 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     if (statusCode === DisconnectReason.loggedOut) {
       this.authRegistered = false;
       this.pairingPhoneNumber = undefined;
+      this.rawMessages.clear();
       await this.clearAuthState();
       await this.store.setConnection("REQUIRES_REPAIR");
       await this.store.addLog({
