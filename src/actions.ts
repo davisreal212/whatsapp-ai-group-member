@@ -146,6 +146,13 @@ export class ActionService {
     if (recentActions.some((action) => action.status === "SENT" && now - (action.executedAt ?? action.scheduledFor) < this.config.groupCooldownMs)) {
       return this.rejectRuntime(sourceMessage, plan, "group_cooldown");
     }
+    if (recentActions.some((action) => action.idempotencyKey === idempotencyKey)) {
+      return this.rejectRuntime(sourceMessage, plan, "duplicate_action");
+    }
+    const normalizedText = plan.text?.trim().toLowerCase();
+    if (normalizedText && recentActions.some((action) => action.status === "SENT" && action.actionType === plan.decision && now - (action.executedAt ?? action.scheduledFor) < 10 * 60_000 && typeof action.payload.text === "string" && action.payload.text.trim().toLowerCase() === normalizedText)) {
+      return this.rejectRuntime(sourceMessage, plan, "repetitive_response");
+    }
 
     const action = {
       id: randomUUID(),

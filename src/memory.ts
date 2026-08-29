@@ -5,6 +5,7 @@ import type { Store } from "./store.js";
 export interface ContextSnapshot {
   group: Pick<GroupRecord, "id" | "subject" | "participantCount">;
   recentMessages: Array<{ sender: string; text: string; type: string; timestamp: number }>;
+  recentActions?: Array<{ type: string; text: string; timestamp: number }>;
   member?: Pick<MemberRecord, "displayName" | "behaviorProfile" | "confidence">;
   memories: Array<{ type: string; value: Record<string, unknown>; confidence: number }>;
   personality: Personality;
@@ -89,10 +90,18 @@ export class MemoryService {
     }
   }
 
-  context(group: GroupRecord, senderId: string, personality: Personality): ContextSnapshot {
+  context(group: GroupRecord, senderId: string, personality: Personality, query = ""): ContextSnapshot {
     const memberId = `${group.id}:${senderId}`;
     const member = this.store.members(group.id).find((item) => item.id === memberId);
-    const memories = this.store.memories(group.id).concat(this.store.memories(memberId));
+    const queryWords = new Set(query.toLowerCase().match(/[a-z][a-z0-9-]{3,}/g) ?? []);
+    const memories = this.store.memories(group.id).concat(this.store.memories(memberId))
+      .filter((item) => !item.expiresAt || item.expiresAt > Date.now())
+      .sort((left, right) => memoryScore(right, queryWords) - memoryScore(left, queryWords))
+      .slice(0, 20);
+    const recentActions = this.store.actions(100)
+      .filter((action) => action.groupId === group.id && action.status === "SENT")
+      .slice(0, 10)
+      .map((action) => ({ type: action.actionType, text: typeof action.payload.text === "string" ? action.payload.text.slice(0, 500) : "", timestamp: action.executedAt ?? action.scheduledFor }));
     return {
       group: { id: group.id, subject: group.subject, participantCount: group.participantCount },
       recentMessages: (group.id.endsWith("@g.us") ? this.store.recentMessages(group.id, 20) : this.store.recentChatMessages(group.id, 20)).map((message) => ({
@@ -104,13 +113,17 @@ export class MemoryService {
       ...(member
         ? { member: { displayName: member.displayName, behaviorProfile: member.behaviorProfile, confidence: member.confidence } }
         : {}),
-      memories: memories
-        .filter((item) => !item.expiresAt || item.expiresAt > Date.now())
-        .slice(0, 20)
-        .map((item) => ({ type: item.memoryType, value: item.value, confidence: item.confidence })),
+      memories: memories.map((item) => ({ type: item.memoryType, value: item.value, confidence: item.confidence })),
+      ...(recentActions.length ? { recentActions } : {}),
       personality,
     };
   }
+}
+
+function memoryScore(memory: MemoryRecord, queryWords: Set<string>): number {
+  const searchable = JSON.stringify(memory.value).toLowerCase();
+  const matches = [...queryWords].filter((word) => searchable.includes(word)).length;
+  return matches * 2 + memory.confidence + memory.lastConfirmedAt / 1e15;
 }
 
 function emojiCount(text: string): number {

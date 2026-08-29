@@ -144,7 +144,7 @@ export class BotRuntime {
     }
     await this.memory.observe(message);
     const contextGroup = group ?? directMessageContext(message.chatId);
-    const context = this.memory.context(contextGroup, message.senderId, this.personality(contextGroup));
+    const context = this.memory.context(contextGroup, message.senderId, this.personality(contextGroup), message.text ?? message.media?.caption ?? "");
     if (!message.isGroup) {
       const task = await this.tasks.handleMessage(message);
       if (task.handled) {
