@@ -90,7 +90,10 @@ export class DecisionEngine {
       context,
     };
     const plan = await this.router.classify(input, group.id);
-    return { plan: plan ?? ignorePlan("No healthy AI provider is configured; choosing silence."), local, usedAi: Boolean(plan) };
+    const safePlan = plan && plan.targetMessageId && plan.targetMessageId !== message.id
+      ? { ...plan, targetMessageId: message.id }
+      : plan;
+    return { plan: safePlan ?? ignorePlan("No healthy AI provider is configured; choosing silence."), local, usedAi: Boolean(safePlan) };
   }
 }
 

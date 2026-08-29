@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { localRelevance, parseDecisionPlan } from "../src/decision.js";
+import { DecisionEngine, localRelevance, parseDecisionPlan } from "../src/decision.js";
+import { loadConfig } from "../src/config.js";
 import { isCurrentInformationQuestion } from "../src/policy.js";
-import { OpenAICompatibleProvider } from "../src/providers.js";
+import { OpenAICompatibleProvider, type ProviderRouter } from "../src/providers.js";
+import type { ContextSnapshot } from "../src/memory.js";
+import type { DecisionPlan, GroupRecord } from "../src/types.js";
 import { normalizePairingPhoneNumber } from "../src/whatsapp.js";
 
 class ProviderProbe extends OpenAICompatibleProvider {
@@ -40,6 +43,16 @@ describe("decision safety helpers", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it("anchors provider-selected targets to the current message", async () => {
+    const message = { id: "current-message", chatId: "g@g.us", groupId: "g@g.us", senderId: "member", timestamp: Date.now(), type: "text" as const, text: "@Kola reply", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+    const plan: DecisionPlan = { decision: "REPLY_QUOTED", confidence: 1, reason: "reply", targetMessageId: "invented-id", text: "Reply", delayMs: 0, needsWeb: false, needsMedia: false, responseStyle: "short_casual" };
+    const group: GroupRecord = { id: "g@g.us", whatsappGroupId: "g@g.us", subject: "Test", participantCount: 1, isAdmin: true, enabled: true, aiPaused: false, lastSeenAt: Date.now() };
+    const context: ContextSnapshot = { group, recentMessages: [], memories: [], personality: loadConfig({ NODE_ENV: "test" }).personality };
+    const router = { classify: async () => plan } as unknown as ProviderRouter;
+    const result = await new DecisionEngine(router).decide(message, group, context, { botName: "Kola" });
+    expect(result.plan.targetMessageId).toBe(message.id);
   });
 
   it("recognizes direct addressing and current-fact questions locally", () => {

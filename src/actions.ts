@@ -86,7 +86,13 @@ export class ActionService {
         level: validation.valid ? "info" : "warn",
         messageId: sourceMessage.id,
         ...(sourceMessage.groupId ? { groupId: sourceMessage.groupId } : {}),
-        details: { decision: plan.decision, reason: validation.reason },
+        details: {
+          decision: plan.decision,
+          reason: validation.reason,
+          chatId: sourceMessage.chatId,
+          isGroup: sourceMessage.isGroup,
+          targetMessageId: plan.targetMessageId ?? sourceMessage.id,
+        },
         createdAt: Date.now(),
       });
       return validation;
