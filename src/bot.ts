@@ -33,7 +33,7 @@ export class BotRuntime {
   async init(): Promise<void> {
     await this.store.init();
     const pruned = await this.store.pruneExpired(this.config.messageRetentionDays);
-    if (Object.values(pruned).some((count) => count > 0)) await this.log("retention.pruned", "info", pruned);
+    if (Object.values(pruned).some((count) => count > 0)) await this.log("retention.pruned", "info", { ...pruned });
     const settings = this.store.settings();
     if (settings?.personality) this.config.personality = { ...this.config.personality, ...settings.personality };
     if (settings?.outboundPaused !== undefined) this.config.outboundPaused = settings.outboundPaused;
