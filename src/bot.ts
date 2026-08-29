@@ -261,7 +261,7 @@ export class BotRuntime {
       queue: this.transport.queueStats?.() ?? { pending: 0, processing: 0, failed: 0 },
       recentLogs: this.store.logs(30),
       recentActions: this.store.actions(30),
-      recentTasks: this.store.tasks().slice(0, 30),
+      tasks: this.store.tasks().slice(0, 100),
     };
   }
 
