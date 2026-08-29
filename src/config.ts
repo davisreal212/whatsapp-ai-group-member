@@ -2,6 +2,7 @@ import "dotenv/config";
 import { isAbsolute } from "node:path";
 import { z } from "zod";
 import type { AppConfig, Personality } from "./types.js";
+import { DEFAULT_PARTICIPATION } from "./participation.js";
 
 const optionalString = z.preprocess(
   (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
@@ -31,7 +32,15 @@ const envSchema = z.object({
   DRY_RUN: booleanString.default(true),
   OUTBOUND_PAUSED: booleanString.default(false),
   AI_PROCESSING_PAUSED: booleanString.default(false),
-  GROUP_COOLDOWN_MS: z.coerce.number().int().min(0).max(86_400_000).default(30_000),
+  GROUP_COOLDOWN_MS: z.coerce.number().int().min(0).max(86_400_000).default(DEFAULT_PARTICIPATION.groupCooldownMs),
+  DIRECT_REPLY_BYPASS: booleanString.default(DEFAULT_PARTICIPATION.directReplyBypass),
+  DIRECT_MENTION_BYPASS: booleanString.default(DEFAULT_PARTICIPATION.directMentionBypass),
+  DIRECT_REPLY_DELAY_MIN_MS: z.coerce.number().int().min(0).max(60_000).default(DEFAULT_PARTICIPATION.directReplyDelayMinMs),
+  DIRECT_REPLY_DELAY_MAX_MS: z.coerce.number().int().min(0).max(60_000).default(DEFAULT_PARTICIPATION.directReplyDelayMaxMs),
+  DIRECT_MENTION_DELAY_MIN_MS: z.coerce.number().int().min(0).max(60_000).default(DEFAULT_PARTICIPATION.directMentionDelayMinMs),
+  DIRECT_MENTION_DELAY_MAX_MS: z.coerce.number().int().min(0).max(60_000).default(DEFAULT_PARTICIPATION.directMentionDelayMaxMs),
+  ADAPTIVE_ACTIVITY: booleanString.default(DEFAULT_PARTICIPATION.adaptiveActivity),
+  GROUP_MENTION_ALL_COOLDOWN_MS: z.coerce.number().int().min(0).max(86_400_000).default(DEFAULT_PARTICIPATION.groupMentionAllCooldownMs),
   DAILY_ACTION_LIMIT: z.coerce.number().int().min(0).max(10_000).default(50),
   ACTIONS_PER_MINUTE: z.coerce.number().int().min(0).max(1_000).default(10),
   ACTIONS_PER_HOUR: z.coerce.number().int().min(0).max(10_000).default(50),
@@ -70,6 +79,8 @@ const envSchema = z.object({
 
 export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppConfig {
   const values = envSchema.parse(environment);
+  if (values.DIRECT_REPLY_DELAY_MAX_MS < values.DIRECT_REPLY_DELAY_MIN_MS) throw new Error("DIRECT_REPLY_DELAY_MAX_MS must be at least DIRECT_REPLY_DELAY_MIN_MS");
+  if (values.DIRECT_MENTION_DELAY_MAX_MS < values.DIRECT_MENTION_DELAY_MIN_MS) throw new Error("DIRECT_MENTION_DELAY_MAX_MS must be at least DIRECT_MENTION_DELAY_MIN_MS");
   if (values.NODE_ENV === "production" && (!values.ADMIN_TOKEN || values.ADMIN_TOKEN.length < 24)) {
     throw new Error("ADMIN_TOKEN must be at least 24 characters when NODE_ENV=production");
   }
@@ -109,6 +120,17 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     outboundPaused: values.OUTBOUND_PAUSED,
     aiProcessingPaused: values.AI_PROCESSING_PAUSED,
     groupCooldownMs: values.GROUP_COOLDOWN_MS,
+    participation: {
+      groupCooldownMs: values.GROUP_COOLDOWN_MS,
+      directReplyBypass: values.DIRECT_REPLY_BYPASS,
+      directMentionBypass: values.DIRECT_MENTION_BYPASS,
+      directReplyDelayMinMs: values.DIRECT_REPLY_DELAY_MIN_MS,
+      directReplyDelayMaxMs: values.DIRECT_REPLY_DELAY_MAX_MS,
+      directMentionDelayMinMs: values.DIRECT_MENTION_DELAY_MIN_MS,
+      directMentionDelayMaxMs: values.DIRECT_MENTION_DELAY_MAX_MS,
+      adaptiveActivity: values.ADAPTIVE_ACTIVITY,
+      groupMentionAllCooldownMs: values.GROUP_MENTION_ALL_COOLDOWN_MS,
+    },
     dailyActionLimit: values.DAILY_ACTION_LIMIT,
     actionsPerMinute: values.ACTIONS_PER_MINUTE,
     actionsPerHour: values.ACTIONS_PER_HOUR,

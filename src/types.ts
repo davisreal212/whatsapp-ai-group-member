@@ -38,6 +38,18 @@ export interface Personality {
   responseLength: "short" | "medium" | "long";
 }
 
+export interface ParticipationSettings {
+  groupCooldownMs: number;
+  directReplyBypass: boolean;
+  directMentionBypass: boolean;
+  directReplyDelayMinMs: number;
+  directReplyDelayMaxMs: number;
+  directMentionDelayMinMs: number;
+  directMentionDelayMaxMs: number;
+  adaptiveActivity: boolean;
+  groupMentionAllCooldownMs: number;
+}
+
 export interface AppConfig {
   nodeEnv: "development" | "test" | "production";
   port: number;
@@ -54,6 +66,7 @@ export interface AppConfig {
   outboundPaused: boolean;
   aiProcessingPaused: boolean;
   groupCooldownMs: number;
+  participation: ParticipationSettings;
   dailyActionLimit: number;
   actionsPerMinute: number;
   actionsPerHour: number;
@@ -131,6 +144,7 @@ export interface GroupRecord {
   enabled: boolean;
   aiPaused: boolean;
   personalityOverride?: Partial<Personality>;
+  participationOverride?: Partial<ParticipationSettings>;
   lastSeenAt: number;
 }
 
@@ -196,6 +210,9 @@ export interface DecisionPlan {
   delayMs: number;
   needsWeb: boolean;
   needsMedia: boolean;
+  priority?: "LOW" | "NORMAL" | "HIGH" | "CRITICAL";
+  bypassCooldown?: boolean;
+  mentionAll?: boolean;
   responseStyle: "short_casual" | "helpful" | "playful" | "uncertain";
 }
 
@@ -329,6 +346,7 @@ export interface PersistedState {
     aiProcessingPaused?: boolean;
     directMessageAllowlist?: string[];
     personality?: Partial<Personality>;
+    participation?: Partial<ParticipationSettings>;
   };
   runtime: {
     connectionStatus: ConnectionStatus;

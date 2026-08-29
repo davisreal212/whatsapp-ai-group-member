@@ -178,6 +178,22 @@ export function createApp(runtime: BotRuntime, config: AppConfig) {
       next(error);
     }
   });
+  app.post("/api/participation", async (request, response, next) => {
+    try {
+      response.json(await runtime.setParticipation(participationSchema.parse(request.body)));
+    } catch (error) {
+      next(error);
+    }
+  });
+  app.post("/api/groups/:id/participation", async (request, response, next) => {
+    try {
+      const group = await runtime.setGroupParticipation(request.params.id, participationPatchSchema.parse(request.body));
+      if (!group) return response.status(404).json({ error: "Group not found" });
+      response.json(group);
+    } catch (error) {
+      next(error);
+    }
+  });
   app.post("/api/dm-allowlist", async (request, response, next) => {
     try {
       const body = z.object({ contacts: z.array(z.string().trim().min(1).max(100)).max(200) }).parse(request.body);
@@ -224,6 +240,20 @@ const personalitySchema = z.object({
   initiative: z.number().min(0).max(1),
   responseLength: z.enum(["short", "medium", "long"]),
 });
+
+const participationFieldsSchema = z.object({
+  groupCooldownMs: z.coerce.number().int().min(0).max(86_400_000),
+  directReplyBypass: z.boolean(),
+  directMentionBypass: z.boolean(),
+  directReplyDelayMinMs: z.coerce.number().int().min(0).max(60_000),
+  directReplyDelayMaxMs: z.coerce.number().int().min(0).max(60_000),
+  directMentionDelayMinMs: z.coerce.number().int().min(0).max(60_000),
+  directMentionDelayMaxMs: z.coerce.number().int().min(0).max(60_000),
+  adaptiveActivity: z.boolean(),
+  groupMentionAllCooldownMs: z.coerce.number().int().min(0).max(86_400_000),
+});
+const participationSchema = participationFieldsSchema.refine((value) => value.directReplyDelayMaxMs >= value.directReplyDelayMinMs && value.directMentionDelayMaxMs >= value.directMentionDelayMinMs, "Delay maximum must be at least its minimum");
+const participationPatchSchema = participationFieldsSchema.partial();
 
 function requireAdmin(config: AppConfig, auth: AuthService) {
   return (request: Request, response: Response, next: NextFunction) => {

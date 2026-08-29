@@ -27,13 +27,13 @@
     @media (max-width: 1050px) { .status-grid { grid-template-columns: repeat(3, 1fr); } .two-col { grid-template-columns: 1fr; } }
     @media (max-width: 760px) { .app { display: block; } .sidebar { position: sticky; top: 0; z-index: 2; padding: 12px 14px 10px; border-right: 0; border-bottom: 1px solid var(--line); } .brand { padding: 0 4px 10px; } .side-foot { display: none; } .nav { display: flex; overflow-x: auto; gap: 3px; } .nav button { min-width: max-content; padding: 8px 9px; } .nav button span { display: none; } .topbar { min-height: 65px; padding: 12px 18px; } .account { display: none; } .workspace { padding: 28px 16px 50px; } .view-head { align-items: start; flex-direction: column; } .status-grid, .metric-grid, .detail-grid { grid-template-columns: 1fr 1fr; } .hero-card .hero-mark { display: none; } }
     @media (max-width: 480px) { .status-grid, .metric-grid, .detail-grid { grid-template-columns: 1fr; } .form { align-items: stretch; flex-direction: column; } .top-actions { gap: 5px; } .top-actions button { padding: 8px; } .hero-card { padding: 20px; } }
-    .sidebar { position: sticky; top: 0; height: 100vh; align-self: start; } .status-grid, .metric-grid { grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); } .audit-tools { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; } .audit-tools button { padding: 5px 8px; color: var(--muted); font-size: 10px; } .audit-tools button.active { color: var(--lime); border-color: #55764b; background: #24362d; } .audit-level { flex: 0 0 auto; padding: 3px 7px; border-radius: 999px; font-size: 10px; font-weight: 800; text-transform: uppercase; } .audit-level.info { color: var(--blue); background: #1c3037; } .audit-level.warn { color: var(--amber); background: #3a3020; } .audit-level.error { color: var(--red); background: #3a2421; } .audit-row.warn, .audit-row.error { border-left: 3px solid var(--amber); padding-left: 10px; } .audit-row.error { border-left-color: var(--red); } @media (max-width: 760px) { .sidebar { height: auto; } }
+    .sidebar { position: sticky; top: 0; height: 100vh; align-self: start; transition: width .2s ease, transform .2s ease; } .app.sidebar-collapsed { grid-template-columns: 72px minmax(0, 1fr); } .app.sidebar-collapsed .brand { justify-content: center; padding-left: 0; padding-right: 0; } .app.sidebar-collapsed .brand > div:last-child, .app.sidebar-collapsed .side-foot { display: none; } .app.sidebar-collapsed .nav button { justify-content: center; padding-left: 8px; padding-right: 8px; } .app.sidebar-collapsed .nav button b { display: none; } .app.sidebar-collapsed .nav button span { width: auto; } .sidebar-toggle { min-width: 42px; padding: 7px 10px; color: var(--muted); } .sidebar-backdrop { display: none; } .status-grid, .metric-grid { grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); } .audit-tools { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; } .audit-tools button { padding: 5px 8px; color: var(--muted); font-size: 10px; } .audit-tools button.active { color: var(--lime); border-color: #55764b; background: #24362d; } .audit-level { flex: 0 0 auto; padding: 3px 7px; border-radius: 999px; font-size: 10px; font-weight: 800; text-transform: uppercase; } .audit-level.info { color: var(--blue); background: #1c3037; } .audit-level.warn { color: var(--amber); background: #3a3020; } .audit-level.error { color: var(--red); background: #3a2421; } .audit-row.warn, .audit-row.error { border-left: 3px solid var(--amber); padding-left: 10px; } .audit-row.error { border-left-color: var(--red); } .timing-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; } .timing-grid .field { margin-bottom: 0; } .switch-row { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 11px 0; border-top: 1px solid var(--line); } .switch-row input { width: auto; accent-color: var(--lime); } @media (max-width: 760px) { .sidebar { position: fixed; left: 0; z-index: 5; width: min(280px, 86vw); height: 100vh; transform: translateX(-105%); box-shadow: 24px 0 70px #0008; } .app.sidebar-open .sidebar { transform: translateX(0); } .app.sidebar-open .sidebar-backdrop { display: block; position: fixed; inset: 0; z-index: 4; background: #0009; } .app.sidebar-collapsed { grid-template-columns: 1fr; } .app.sidebar-collapsed .sidebar { width: min(280px, 86vw); } .app.sidebar-collapsed .brand > div:last-child, .app.sidebar-collapsed .side-foot, .app.sidebar-collapsed .nav button b { display: block; } .app.sidebar-collapsed .nav button { justify-content: flex-start; padding-left: 11px; padding-right: 11px; } .sidebar { height: 100vh; } }
   </style>
   <style>.nav::before { content: 'Workspace'; padding: 2px 11px 7px; color: #53645d; font-size: 10px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }</style>
 </head>
 <body>
   <section id="landing" class="landing"><div class="landing-grid"><div class="landing-copy"><div class="eyebrow">Private group intelligence</div><h1>Let the group set the pace.</h1><p>A calm, safety-first AI member for selected WhatsApp groups. It learns the room, checks current facts, and knows when silence is the better reply.</p><p class="landing-note">The control room keeps authorization, memory, providers, tasks, and outbound safety in one place.</p></div><div class="auth-card"><div class="tabs"><button id="signupTab" class="active">Create account</button><button id="signinTab">Sign in</button></div><form id="authForm" class="stack"><div class="field"><label for="email">ADMIN EMAIL</label><input id="email" type="email" autocomplete="email" required placeholder="you@example.com"></div><div class="field"><label for="password">PASSWORD</label><input id="password" type="password" autocomplete="new-password" minlength="8" required placeholder="At least 8 characters"></div><button id="authSubmit" class="primary" type="submit">Open the control room</button></form><p id="authMessage" class="muted" style="margin-top:15px;font-size:12px">The first account becomes the administrator. Sessions use an HttpOnly cookie.</p></div></div></section>
-  <div id="app" class="app hidden"><aside class="sidebar"><div class="brand"><div class="brand-mark">K</div><div><strong>Kola / Control Room</strong><small>WhatsApp AI member</small></div></div><nav class="nav"><button class="active" data-page="overview"><span>01</span>Overview</button><button data-page="whatsapp"><span>02</span>WhatsApp</button><button data-page="groups"><span>03</span>Groups</button><button data-page="members"><span>04</span>Members</button><button data-page="brain"><span>05</span>AI Brain</button><button data-page="memory"><span>06</span>Memory</button><button data-page="tasks"><span>07</span>Tasks & Alerts</button><button data-page="providers"><span>08</span>Providers</button><button data-page="logs"><span>09</span>Logs</button><button data-page="settings"><span>10</span>Settings</button></nav><div class="side-foot"><div class="eyebrow">Safety baseline</div><small>Allowlist first. Every send validated.</small></div></aside><section class="app-main"><header class="topbar"><div class="crumb"><span class="eyebrow" id="sectionCode">01</span><span class="slash">/</span><strong id="sectionName">Overview</strong></div><div class="top-actions"><span id="connectionChip" class="connection">DISCONNECTED</span><span id="accountEmail" class="account"></span><button id="refresh" class="ghost" title="Refresh">Refresh</button><button id="signout" class="ghost">Sign out</button></div></header><div id="notice" class="notice"></div><main class="workspace">
+  <div id="app" class="app hidden"><div id="sidebarBackdrop" class="sidebar-backdrop"></div><aside class="sidebar"><div class="brand"><div class="brand-mark">K</div><div><strong>Kola / Control Room</strong><small>WhatsApp AI member</small></div></div><nav class="nav"><button class="active" data-page="overview"><span>01</span><b>Overview</b></button><button data-page="whatsapp"><span>02</span><b>WhatsApp</b></button><button data-page="groups"><span>03</span><b>Groups</b></button><button data-page="members"><span>04</span><b>Members</b></button><button data-page="brain"><span>05</span><b>AI Brain</b></button><button data-page="memory"><span>06</span><b>Memory</b></button><button data-page="tasks"><span>07</span><b>Tasks & Alerts</b></button><button data-page="providers"><span>08</span><b>Providers</b></button><button data-page="logs"><span>09</span><b>Logs</b></button><button data-page="settings"><span>10</span><b>Settings</b></button></nav><div class="side-foot"><div class="eyebrow">Safety baseline</div><small>Allowlist first. Every send validated.</small></div></aside><section class="app-main"><header class="topbar"><div class="crumb"><button id="sidebarToggle" class="sidebar-toggle ghost" type="button" aria-label="Collapse sidebar" title="Collapse sidebar">&lt;&lt;</button><span class="eyebrow" id="sectionCode">01</span><span class="slash">/</span><strong id="sectionName">Overview</strong></div><div class="top-actions"><span id="connectionChip" class="connection">DISCONNECTED</span><span id="accountEmail" class="account"></span><button id="refresh" class="ghost" title="Refresh">Refresh</button><button id="signout" class="ghost">Sign out</button></div></header><div id="notice" class="notice"></div><main class="workspace">
     <section class="view active" data-view="overview"><div class="view-head"><div><div class="eyebrow">System overview</div><h1>Control room</h1><p>One place to see what Kola knows, what it can do, and whether it is safe to send.</p></div><div class="head-actions"><button id="overviewConnect" class="primary">Connect WhatsApp</button><button id="overviewPause" class="danger">Pause sending</button></div></div><div class="status-grid"><div id="statusWhatsapp" class="status-card"><div class="status-title">WhatsApp <span>01</span></div><strong>-</strong><em>Session</em></div><div id="statusBrain" class="status-card"><div class="status-title">AI brain <span>02</span></div><strong>-</strong><em>Provider routing</em></div><div id="statusSearch" class="status-card"><div class="status-title">Web search <span>03</span></div><strong>-</strong><em>Tavily / DuckDuckGo</em></div><div id="statusVoice" class="status-card"><div class="status-title">Voice <span>04</span></div><strong>-</strong><em>Speech and TTS</em></div><div id="statusQueue" class="status-card"><div class="status-title">Queue <span>05</span></div><strong>-</strong><em>Inbound / outbound</em></div></div><div class="metric-grid"><div class="metric"><small>Authorized groups</small><strong id="metricGroups">-</strong></div><div class="metric"><small>Observed events</small><strong id="metricObserved">-</strong></div><div class="metric"><small>AI replies sent</small><strong id="metricSent">-</strong></div><div class="metric"><small>Active tasks</small><strong id="metricTasks">-</strong></div></div><div class="two-col"><div class="card"><div class="card-head"><h2>Group pulse</h2><small>Authorization is explicit</small></div><div id="overviewGroups" class="list"></div></div><div class="card"><div class="card-head"><h2>Response behavior</h2><small>Live policy</small></div><div id="overviewBehavior"></div></div></div><div class="two-col"><div class="card"><div class="card-head"><h2>Latest decision</h2><small>Admin diagnostics</small></div><div id="overviewDiagnostics" class="list"></div></div><div class="card"><div class="card-head"><h2>Recent activity</h2><small>Last 6 events</small></div><div id="overviewLogs" class="list"></div></div></div></section>
     <section class="view" data-view="whatsapp"><div class="view-head"><div><div class="eyebrow">Session layer</div><h1>WhatsApp</h1><p>Pair a dedicated number, inspect connection health, and reconcile the groups visible to that session.</p></div></div><div class="hero-card"><div><div class="eyebrow">Linked device</div><h2 id="waState">DISCONNECTED</h2><p id="pairing">No active WhatsApp session.</p></div><div class="hero-mark">[]</div></div><div class="two-col"><div class="card"><div class="card-head"><h2>Connection actions</h2><span class="pill" id="waSessionPill">Offline</span></div><div class="field"><label for="phone">PHONE NUMBER FOR PAIRING</label><input id="phone" placeholder="+234..." inputmode="tel"></div><div class="form"><button id="connect" class="primary">Connect</button><button id="disconnect">Disconnect</button><button id="sync">Sync groups</button></div></div><div class="card"><div class="card-head"><h2>Session notes</h2></div><div class="row"><div><strong>Auth files</strong><small>Stay on the server volume</small></div><span class="pill">Private</span></div><div class="row"><div><strong>Readiness</strong><small id="waReady">Waiting for connection</small></div><span id="waReadyPill" class="pill warn">Not ready</span></div></div></div></section>
     <section class="view" data-view="groups"><div class="view-head"><div><div class="eyebrow">Authorization</div><h1>Groups</h1><p>New groups are disabled by default. Enable only the rooms where Kola is allowed to participate.</p></div><button id="groupsSync" class="primary">Sync groups</button></div><div id="groupsList" class="detail-grid"></div></section>
@@ -159,6 +159,105 @@
         ensureAuditControls();
         renderAudit(data.recentLogs || []);
       };
+    })();
+  </script>
+  <script>
+    (() => {
+      const app = $('app');
+      const sidebarKey = 'kola_sidebar_collapsed';
+      let sidebarCollapsed = localStorage.getItem(sidebarKey) === '1';
+      const applySidebar = () => {
+        app.classList.toggle('sidebar-collapsed', sidebarCollapsed);
+        $('sidebarToggle').textContent = sidebarCollapsed ? '>>' : '<<';
+        $('sidebarToggle').title = sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar';
+        $('sidebarToggle').setAttribute('aria-label', $('sidebarToggle').title);
+      };
+      $('sidebarToggle').onclick = () => {
+        if (window.matchMedia('(max-width: 760px)').matches) {
+          app.classList.toggle('sidebar-open');
+          return;
+        }
+        sidebarCollapsed = !sidebarCollapsed;
+        localStorage.setItem(sidebarKey, sidebarCollapsed ? '1' : '0');
+        applySidebar();
+      };
+      $('sidebarBackdrop').onclick = () => app.classList.remove('sidebar-open');
+      const originalShowPage = showPage;
+      showPage = (name) => {
+        originalShowPage(name);
+        app.classList.remove('sidebar-open');
+      };
+
+      function ensureParticipationCard() {
+        if ($('participationCard')) return;
+        const settings = document.querySelector('[data-view="settings"]');
+        const card = document.createElement('div');
+        card.id = 'participationCard';
+        card.className = 'card large-card';
+        card.innerHTML = `<div class="card-head"><h2>Chapter 31 participation</h2><span class="pill">Configurable</span></div><p class="muted" style="margin-bottom:18px">Cooldown controls when Kola may speak again. Direct replies and mentions can bypass it; busy conversations are handled more selectively.</p><div class="timing-grid"><div class="field"><label for="participationCooldown">GROUP COOLDOWN (SECONDS)</label><input id="participationCooldown" type="number" min="0" step="1"></div><div class="field"><label for="participationMentionAllCooldown">MENTION-ALL COOLDOWN (MINUTES)</label><input id="participationMentionAllCooldown" type="number" min="0" step="1"></div><div class="field"><label for="replyDelayMin">DIRECT REPLY DELAY MIN (MS)</label><input id="replyDelayMin" type="number" min="0" step="100"></div><div class="field"><label for="replyDelayMax">DIRECT REPLY DELAY MAX (MS)</label><input id="replyDelayMax" type="number" min="0" step="100"></div><div class="field"><label for="mentionDelayMin">DIRECT MENTION DELAY MIN (MS)</label><input id="mentionDelayMin" type="number" min="0" step="100"></div><div class="field"><label for="mentionDelayMax">DIRECT MENTION DELAY MAX (MS)</label><input id="mentionDelayMax" type="number" min="0" step="100"></div></div><div class="switch-row"><span>Direct reply bypass</span><input id="replyBypass" type="checkbox"></div><div class="switch-row"><span>Direct mention bypass</span><input id="mentionBypass" type="checkbox"></div><div class="switch-row"><span>Adaptive activity protection</span><input id="adaptiveActivity" type="checkbox"></div><button id="saveParticipation" class="primary" type="button">Save participation policy</button>`;
+        settings.append(card);
+        $('saveParticipation').onclick = async () => {
+          const value = {
+            groupCooldownMs: Number($('participationCooldown').value) * 1000,
+            directReplyBypass: $('replyBypass').checked,
+            directMentionBypass: $('mentionBypass').checked,
+            directReplyDelayMinMs: Number($('replyDelayMin').value),
+            directReplyDelayMaxMs: Number($('replyDelayMax').value),
+            directMentionDelayMinMs: Number($('mentionDelayMin').value),
+            directMentionDelayMaxMs: Number($('mentionDelayMax').value),
+            adaptiveActivity: $('adaptiveActivity').checked,
+            groupMentionAllCooldownMs: Number($('participationMentionAllCooldown').value) * 60_000,
+          };
+          try { await api('/api/participation', { method: 'POST', body: JSON.stringify(value) }); message('Participation policy saved.'); refresh(); } catch (error) { message(error.message, 'error'); }
+        };
+      }
+
+      function renderParticipation(data) {
+        ensureParticipationCard();
+        const value = data.participation || {};
+        $('participationCooldown').value = Math.round((value.groupCooldownMs || 0) / 1000);
+        $('participationMentionAllCooldown').value = Math.round((value.groupMentionAllCooldownMs || 0) / 60_000);
+        $('replyDelayMin').value = value.directReplyDelayMinMs || 0;
+        $('replyDelayMax').value = value.directReplyDelayMaxMs || 0;
+        $('mentionDelayMin').value = value.directMentionDelayMinMs || 0;
+        $('mentionDelayMax').value = value.directMentionDelayMaxMs || 0;
+        $('replyBypass').checked = value.directReplyBypass !== false;
+        $('mentionBypass').checked = value.directMentionBypass !== false;
+        $('adaptiveActivity').checked = value.adaptiveActivity !== false;
+      }
+
+      const originalRenderGroups = renderGroups;
+      renderGroups = (groups) => {
+        originalRenderGroups(groups);
+        const activity = appState?.groupActivity || {};
+        document.querySelectorAll('#groupsList > .card').forEach((card, index) => {
+          const group = groups[index];
+          if (!group || card.querySelector('.group-participation')) return;
+          const state = activity[group.id] || {};
+          const current = { ...(appState?.participation || {}), ...(group.participationOverride || {}) };
+          const meta = card.querySelector('.muted');
+          if (meta) meta.textContent += ` / ${state.activityLevel || 'LOW'} activity / ${state.messagesLast10Seconds || 0} msgs in 10s`;
+          const details = document.createElement('details');
+          details.className = 'group-participation';
+          details.style.marginTop = '18px';
+          details.innerHTML = `<summary class="muted" style="cursor:pointer">Chapter 31 timing override</summary><div class="timing-grid" style="margin-top:14px"><div class="field"><label>COOLDOWN (SECONDS)</label><input class="group-cooldown" type="number" min="0" step="1" value="${Math.round((current.groupCooldownMs || 0) / 1000)}"></div><div class="field"><label>MENTION-ALL (MINUTES)</label><input class="group-mention-all" type="number" min="0" step="1" value="${Math.round((current.groupMentionAllCooldownMs || 0) / 60000)}"></div></div><div class="switch-row"><span>Direct reply bypass</span><input class="group-reply-bypass" type="checkbox" ${current.directReplyBypass !== false ? 'checked' : ''}></div><div class="switch-row"><span>Direct mention bypass</span><input class="group-mention-bypass" type="checkbox" ${current.directMentionBypass !== false ? 'checked' : ''}></div><div class="switch-row"><span>Adaptive activity</span><input class="group-adaptive" type="checkbox" ${current.adaptiveActivity !== false ? 'checked' : ''}></div><button class="primary group-save" type="button">Save group policy</button>`;
+          details.querySelector('.group-save').onclick = async () => {
+            const value = {
+              groupCooldownMs: Number(details.querySelector('.group-cooldown').value) * 1000,
+              groupMentionAllCooldownMs: Number(details.querySelector('.group-mention-all').value) * 60_000,
+              directReplyBypass: details.querySelector('.group-reply-bypass').checked,
+              directMentionBypass: details.querySelector('.group-mention-bypass').checked,
+              adaptiveActivity: details.querySelector('.group-adaptive').checked,
+            };
+            try { await api('/api/groups/' + encodeURIComponent(group.id) + '/participation', { method: 'POST', body: JSON.stringify(value) }); message('Group participation policy saved.'); refresh(); } catch (error) { message(error.message, 'error'); }
+          };
+          card.append(details);
+        });
+      };
+
+      const originalRender = render;
+      render = (data) => { originalRender(data); renderParticipation(data); };
+      applySidebar();
     })();
   </script>
 </body>

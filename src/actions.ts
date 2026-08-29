@@ -5,6 +5,7 @@ import type { Store } from "./store.js";
 import { isDirectMessageAllowed, isQuietHours } from "./policy.js";
 import { isSafeHttpsUrl } from "./network.js";
 import { KeyedJobQueue, type QueueStats } from "./queue.js";
+import { groupActivityState, groupParticipation, type ActionPriority } from "./participation.js";
 
 export interface OutboundTransport {
   readonly connected: boolean;
@@ -28,6 +29,9 @@ const planSchema = z.object({
   delayMs: z.number().int().min(0).max(60_000),
   needsWeb: z.boolean(),
   needsMedia: z.boolean(),
+  priority: z.enum(["LOW", "NORMAL", "HIGH", "CRITICAL"]).optional(),
+  bypassCooldown: z.boolean().optional(),
+  mentionAll: z.boolean().optional(),
   responseStyle: z.enum(["short_casual", "helpful", "playful", "uncertain"]),
 });
 
@@ -81,6 +85,8 @@ export function validateActionPlan(
 
 export class ActionService {
   private readonly queue = new KeyedJobQueue(2);
+  // Admission is serialized per conversation before a cooldown check and insert.
+  private readonly admissionQueue = new KeyedJobQueue(1);
   private readonly retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private started = false;
   private readonly generatedAudio = new Map<string, { data: Buffer; mimeType: string }>();
@@ -115,9 +121,24 @@ export class ActionService {
   }
 
   async execute(plan: DecisionPlan, sourceMessage: CanonicalMessage, group: GroupRecord | undefined, generatedAudio?: { data: Buffer; mimeType: string }): Promise<ActionValidation> {
-    const validation = validateActionPlan(plan, sourceMessage, group, this.store, this.config.outboundPaused, this.config.groupOnlyMode, this.config.directMessageAllowlist, this.config.quietHoursStart, this.config.quietHoursEnd, Boolean(generatedAudio));
+    const conversationId = sourceMessage.groupId ?? sourceMessage.chatId;
+    let admission: { validation: ActionValidation; actionId?: string } | undefined;
+    await this.admissionQueue.enqueueAndWait(conversationId, async () => {
+      admission = await this.admit(plan, sourceMessage, group, conversationId, Boolean(generatedAudio));
+    });
+    if (!admission) throw new Error("Action admission did not complete");
+    if (!admission.validation.valid || plan.decision === "IGNORE") return admission.validation;
+    await this.queue.enqueueAndWait(conversationId, () => this.runPendingAction(admission?.actionId as string));
+    const completed = this.store.action(admission.actionId as string);
+    if (completed?.status === "SENT") return { valid: true, reason: "sent", plan };
+    if (completed?.status === "SKIPPED") return { valid: true, reason: completed.error ?? "skipped", plan };
+    return { valid: false, reason: completed?.error ?? "transport_failure", plan };
+  }
+
+  private async admit(plan: DecisionPlan, sourceMessage: CanonicalMessage, group: GroupRecord | undefined, conversationId: string, hasGeneratedAudio: boolean): Promise<{ validation: ActionValidation; actionId?: string }> {
+    const validation = validateActionPlan(plan, sourceMessage, group, this.store, this.config.outboundPaused, this.config.groupOnlyMode, this.config.directMessageAllowlist, this.config.quietHoursStart, this.config.quietHoursEnd, hasGeneratedAudio);
     if (!validation.valid || plan.decision === "IGNORE") {
-      await this.store.incrementMetric(validation.valid ? "actionsSkipped" : "actionsSkipped");
+      await this.store.incrementMetric("actionsSkipped");
       await this.store.addLog({
         id: randomUUID(),
         event: validation.valid ? "action.ignored" : "action.rejected",
@@ -133,33 +154,46 @@ export class ActionService {
         },
         createdAt: Date.now(),
       });
-      return validation;
+      return { validation };
     }
 
-    const conversationId = sourceMessage.groupId ?? sourceMessage.chatId;
     const idempotencyKey = `${conversationId}:${sourceMessage.id}:${plan.decision}`;
     const now = Date.now();
     const recentActions = this.store.actions(1000).filter((action) => action.groupId === conversationId);
     const dayStart = new Date(now);
     dayStart.setHours(0, 0, 0, 0);
     if (recentActions.filter((action) => action.scheduledFor >= dayStart.getTime() && action.status === "SENT").length >= this.config.dailyActionLimit) {
-      return this.rejectRuntime(sourceMessage, plan, "daily_action_limit");
+      return { validation: await this.rejectRuntime(sourceMessage, plan, "daily_action_limit") };
     }
     if (recentActions.filter((action) => action.scheduledFor >= now - 60_000 && action.status === "SENT").length >= this.config.actionsPerMinute) {
-      return this.rejectRuntime(sourceMessage, plan, "minute_action_limit");
+      return { validation: await this.rejectRuntime(sourceMessage, plan, "minute_action_limit") };
     }
     if (recentActions.filter((action) => action.scheduledFor >= now - 3_600_000 && action.status === "SENT").length >= this.config.actionsPerHour) {
-      return this.rejectRuntime(sourceMessage, plan, "hour_action_limit");
+      return { validation: await this.rejectRuntime(sourceMessage, plan, "hour_action_limit") };
     }
-    if (recentActions.some((action) => action.status === "SENT" && now - (action.executedAt ?? action.scheduledFor) < this.config.groupCooldownMs)) {
-      return this.rejectRuntime(sourceMessage, plan, "group_cooldown");
+
+    if (sourceMessage.isGroup && group) {
+      const participation = groupParticipation(group, this.config.participation);
+      const activity = groupActivityState(this.store, conversationId, participation, now);
+      const priority = plan.priority ?? "NORMAL";
+      const bypass = plan.bypassCooldown === true || priority === "HIGH" || priority === "CRITICAL";
+      if (plan.mentionAll === true && activity.lastMentionAllAt !== undefined && now - activity.lastMentionAllAt < participation.groupMentionAllCooldownMs && priority !== "CRITICAL") {
+        return { validation: await this.rejectRuntime(sourceMessage, plan, "mention_all_cooldown") };
+      }
+      if (!bypass && activity.cooldownUntil !== undefined && activity.cooldownUntil > now) {
+        return { validation: await this.rejectRuntime(sourceMessage, plan, "group_cooldown") };
+      }
+      if (participation.adaptiveActivity && !bypass) {
+        if (activity.activityLevel === "EXTREME") return { validation: await this.rejectRuntime(sourceMessage, plan, "extreme_activity") };
+        if (activity.activityLevel === "HIGH" && priority === "LOW") return { validation: await this.rejectRuntime(sourceMessage, plan, "high_activity") };
+      }
     }
     if (recentActions.some((action) => action.idempotencyKey === idempotencyKey)) {
-      return this.rejectRuntime(sourceMessage, plan, "duplicate_action");
+      return { validation: await this.rejectRuntime(sourceMessage, plan, "duplicate_action") };
     }
     const normalizedText = plan.text?.trim().toLowerCase();
     if (normalizedText && recentActions.some((action) => action.status === "SENT" && action.actionType === plan.decision && now - (action.executedAt ?? action.scheduledFor) < 10 * 60_000 && typeof action.payload.text === "string" && action.payload.text.trim().toLowerCase() === normalizedText)) {
-      return this.rejectRuntime(sourceMessage, plan, "repetitive_response");
+      return { validation: await this.rejectRuntime(sourceMessage, plan, "repetitive_response") };
     }
 
     const action = {
@@ -169,20 +203,14 @@ export class ActionService {
       sourceMessageId: sourceMessage.id,
       actionType: plan.decision,
       ...(plan.targetMessageId ? { targetMessageId: plan.targetMessageId } : {}),
-      payload: { text: plan.text ?? "", reaction: plan.reaction ?? "", mediaUrl: plan.mediaUrl ?? "", mediaMimeType: plan.mediaMimeType ?? "" },
+      payload: { text: plan.text ?? "", reaction: plan.reaction ?? "", mediaUrl: plan.mediaUrl ?? "", mediaMimeType: plan.mediaMimeType ?? "", priority: plan.priority ?? "NORMAL", mentionAll: plan.mentionAll === true },
       scheduledFor: now + plan.delayMs,
       status: "PENDING" as const,
       attempts: 0,
     };
-    if (generatedAudio && !this.transport.sendAudioBuffer) return this.rejectRuntime(sourceMessage, plan, "audio_transport_unsupported");
-    if (!(await this.store.createAction(action))) return this.rejectRuntime(sourceMessage, plan, "duplicate_action");
-    if (generatedAudio) this.generatedAudio.set(action.id, generatedAudio);
-
-    await this.queue.enqueueAndWait(conversationId, () => this.runPendingAction(action.id));
-    const completed = this.store.action(action.id);
-    if (completed?.status === "SENT") return { valid: true, reason: "sent", plan };
-    if (completed?.status === "SKIPPED") return { valid: true, reason: completed.error ?? "skipped", plan };
-    return { valid: false, reason: completed?.error ?? "transport_failure", plan };
+    if (hasGeneratedAudio && !this.transport.sendAudioBuffer) return { validation: await this.rejectRuntime(sourceMessage, plan, "audio_transport_unsupported") };
+    if (!(await this.store.createAction(action))) return { validation: await this.rejectRuntime(sourceMessage, plan, "duplicate_action") };
+    return { validation: { valid: true, reason: "admitted", plan }, actionId: action.id };
   }
 
   private async runPendingAction(id: string): Promise<void> {
@@ -314,6 +342,9 @@ function planFromAction(action: import("./types.js").ActionRecord): DecisionPlan
     ...(reaction ? { reaction } : {}),
     ...(mediaUrl ? { mediaUrl } : {}),
     ...(mediaMimeType ? { mediaMimeType } : {}),
+    ...(typeof payload.priority === "string" ? { priority: payload.priority as ActionPriority } : {}),
+    ...(payload.mentionAll === true ? { mentionAll: true } : {}),
+    ...(typeof payload.priority === "string" && ["HIGH", "CRITICAL"].includes(payload.priority) ? { bypassCooldown: true } : {}),
     delayMs: Math.max(0, action.scheduledFor - Date.now()),
     needsWeb: false,
     needsMedia: Boolean(mediaUrl),
@@ -322,5 +353,5 @@ function planFromAction(action: import("./types.js").ActionRecord): DecisionPlan
 }
 
 function auditLevelForSkip(reason: string): "info" | "warn" {
-  return ["dry_run", "outbound_paused", "quiet_hours", "group_cooldown", "duplicate_action", "repetitive_response"].includes(reason) ? "info" : "warn";
+  return ["dry_run", "outbound_paused", "quiet_hours", "group_cooldown", "mention_all_cooldown", "high_activity", "extreme_activity", "duplicate_action", "repetitive_response"].includes(reason) ? "info" : "warn";
 }

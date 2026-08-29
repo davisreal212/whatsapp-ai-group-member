@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { AppConfig, CanonicalMessage, DecisionPlan, GroupRecord } from "./types.js";
 import type { ContextSnapshot } from "./memory.js";
 import type { ProviderRouter, ProviderInput } from "./providers.js";
-import { sameWhatsAppIdentity } from "./identity.js";
+import { DEFAULT_PARTICIPATION, naturalDelay, participationSignals, shouldBypassCooldown, type ActionPriority } from "./participation.js";
 
 const decisionSchema = z.object({
   decision: z.enum(["IGNORE", "REACT", "REPLY", "REPLY_QUOTED", "MENTION_REPLY", "SEND_IMAGE", "SEND_AUDIO"]),
@@ -16,6 +16,9 @@ const decisionSchema = z.object({
   delayMs: z.coerce.number().int().min(0).max(60_000).default(0),
   needsWeb: z.boolean().default(false),
   needsMedia: z.boolean().default(false),
+  priority: z.enum(["LOW", "NORMAL", "HIGH", "CRITICAL"]).optional(),
+  bypassCooldown: z.boolean().optional(),
+  mentionAll: z.boolean().optional(),
   responseStyle: z.preprocess((value) => normalizeResponseStyle(value), z.enum(["short_casual", "helpful", "playful", "uncertain"]).default("short_casual")),
 });
 
@@ -38,6 +41,9 @@ export function parseDecisionPlan(input: string | unknown): DecisionPlan {
     delayMs: parsed.delayMs,
     needsWeb: parsed.needsWeb,
     needsMedia: parsed.needsMedia,
+    ...(parsed.priority ? { priority: parsed.priority } : {}),
+    ...(parsed.bypassCooldown !== undefined ? { bypassCooldown: parsed.bypassCooldown } : {}),
+    ...(parsed.mentionAll !== undefined ? { mentionAll: parsed.mentionAll } : {}),
     responseStyle: parsed.responseStyle,
   };
 }
@@ -46,35 +52,31 @@ export interface LocalRelevance {
   relevant: boolean;
   reason: string;
   directed: boolean;
+  directReply?: boolean;
+  directMention?: boolean;
+  mentionAll?: boolean;
+  priority?: ActionPriority;
 }
 
 export function localRelevance(message: CanonicalMessage, botName: string, botJid?: string, talkativeness = 0.35, botJids: string[] = [], alwaysReplyToAllowedDm = false): LocalRelevance {
   const text = message.text ?? "";
   if (!message.isGroup && alwaysReplyToAllowedDm) return { relevant: true, reason: "allowlisted_dm", directed: true };
-  const named = botName.trim().length > 0 && new RegExp(`(?:^|[^\\p{L}\\p{N}_])@?${escapeRegExp(botName.trim())}(?=$|[^\\p{L}\\p{N}_])`, "iu").test(text);
-  const identities = [botJid, ...botJids].filter((value): value is string => Boolean(value));
-  const mentionedBot = message.mentionedIds.some((mentionedId) => identities.some((identity) => sameJid(mentionedId, identity)));
-  const quotedBot = Boolean(message.quotedSenderId && identities.some((identity) => sameJid(message.quotedSenderId as string, identity)));
-  const directed = Boolean(
-    quotedBot
-      || mentionedBot
-      || named,
-  );
-  if (directed) return { relevant: true, reason: "directed_to_bot", directed: true };
-  if (message.quotedMessageId) return { relevant: true, reason: "reply_or_quote", directed: false };
+  const signals = participationSignals(message, botName, botJid, botJids);
+  if (signals.directed) return { relevant: true, reason: "directed_to_bot", ...signals };
+  if (message.quotedMessageId) return { relevant: true, reason: "reply_or_quote", ...signals };
   if (/[?؟]\s*$/.test(text) || /\b(can|could|should|would|what|when|where|why|how|is|are|do|does)\b/i.test(text)) {
-    return { relevant: true, reason: "explicit_question", directed: false };
+    return { relevant: true, reason: "explicit_question", ...signals };
   }
   if (/\b(is this true|latest|breaking|current price|today)\b/i.test(text)) {
-    return { relevant: true, reason: "current_information", directed: false };
+    return { relevant: true, reason: "current_information", ...signals };
   }
-  if (message.type === "audio") return { relevant: true, reason: "audio_message", directed: false };
-  if (message.type === "image") return { relevant: true, reason: "image_message", directed: false };
+  if (message.type === "audio") return { relevant: true, reason: "audio_message", ...signals };
+  if (message.type === "image") return { relevant: true, reason: "image_message", ...signals };
   if (message.isGroup && /\b(?:good\s+(?:morning|afternoon|evening|night)|morning\s+(?:all|everyone|y['’]?all)|hello|hi)\b/i.test(text)) {
-    return { relevant: true, reason: "group_greeting", directed: false };
+    return { relevant: true, reason: "group_greeting", ...signals };
   }
   if (message.isGroup && talkativeness >= 0.35 && text.trim().length >= 10) {
-    return { relevant: true, reason: "group_conversation", directed: false };
+    return { relevant: true, reason: "group_conversation", ...signals };
   }
   return { relevant: false, reason: "no_local_relevance_signal", directed: false };
 }
@@ -86,7 +88,7 @@ export class DecisionEngine {
     message: CanonicalMessage,
     group: GroupRecord,
     context: ContextSnapshot,
-    config: Pick<AppConfig, "botName" | "botJid"> & Partial<Pick<AppConfig, "botJids">> & { alwaysReplyToAllowedDm?: boolean },
+    config: Pick<AppConfig, "botName" | "botJid"> & Partial<Pick<AppConfig, "botJids" | "participation">> & { alwaysReplyToAllowedDm?: boolean },
   ): Promise<{ plan: DecisionPlan; local: LocalRelevance; usedAi: boolean }> {
     const local = localRelevance(message, config.botName, config.botJid, context.personality.talkativeness, config.botJids ?? [], config.alwaysReplyToAllowedDm ?? false);
     if (!local.relevant) {
@@ -125,7 +127,27 @@ export class DecisionEngine {
     const responsePlan = safePlan && local.directed && safePlan.decision === "IGNORE"
       ? { ...safePlan, decision: "REPLY" as const, reason: "Directly addressed; generate a safe response." }
       : safePlan;
-    return { plan: responsePlan ?? ignorePlan("No healthy AI provider is configured; choosing silence."), local, usedAi: Boolean(safePlan) };
+    if (!responsePlan) return { plan: ignorePlan("No healthy AI provider is configured; choosing silence."), local, usedAi: false };
+    const participation = config.participation ?? { ...DEFAULT_PARTICIPATION };
+    const directReply = local.directReply === true;
+    const directMention = local.directMention === true;
+    const bypassCooldown = shouldBypassCooldown({ directReply, directMention }, participation);
+    const delayMs = directReply
+      ? Math.max(responsePlan.delayMs, naturalDelay(participation.directReplyDelayMinMs, participation.directReplyDelayMaxMs))
+      : directMention
+        ? Math.max(responsePlan.delayMs, naturalDelay(participation.directMentionDelayMinMs, participation.directMentionDelayMaxMs))
+        : responsePlan.delayMs;
+    return {
+      plan: {
+        ...responsePlan,
+        delayMs,
+        priority: responsePlan.priority ?? local.priority ?? (local.directed ? "HIGH" : "NORMAL"),
+        bypassCooldown: responsePlan.bypassCooldown ?? bypassCooldown,
+        mentionAll: responsePlan.mentionAll ?? local.mentionAll ?? false,
+      },
+      local,
+      usedAi: true,
+    };
   }
 }
 
@@ -139,14 +161,6 @@ export function ignorePlan(reason: string): DecisionPlan {
     needsMedia: false,
     responseStyle: "short_casual",
   };
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function sameJid(left: string, right: string): boolean {
-  return sameWhatsAppIdentity(left, right);
 }
 
 function normalizeResponseStyle(value: unknown): unknown {

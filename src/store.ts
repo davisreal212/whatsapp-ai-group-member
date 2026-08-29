@@ -150,7 +150,12 @@ export class FileStore implements Store {
   }
 
   async updateSettings(update: NonNullable<PersistedState["settings"]>): Promise<void> {
-    this.state.settings = { ...this.state.settings, ...update, ...(update.personality ? { personality: { ...this.state.settings?.personality, ...update.personality } } : {}) };
+    this.state.settings = {
+      ...this.state.settings,
+      ...update,
+      ...(update.personality ? { personality: { ...this.state.settings?.personality, ...update.personality } } : {}),
+      ...(update.participation ? { participation: { ...this.state.settings?.participation, ...update.participation } } : {}),
+    };
     await this.persist();
   }
 

@@ -37,7 +37,7 @@ export class PostgresStore implements Store {
     await this.createSchema();
     this.state = emptyState();
     const [groups, members, messages, memories, actions, tasks, inboundJobs, logs, usage, runtime, settings, users, sessions] = await Promise.all([
-      this.sql`SELECT id, whatsapp_group_id, subject, participant_count, is_admin, enabled, ai_paused, personality_override_json, last_seen_at FROM groups`,
+       this.sql`SELECT id, whatsapp_group_id, subject, participant_count, is_admin, enabled, ai_paused, personality_override_json, participation_override_json, last_seen_at FROM groups`,
       this.sql`SELECT id, group_id, whatsapp_member_id, display_name, behavior_profile_json, confidence_json, first_seen_at, last_seen_at FROM members`,
       this.sql`SELECT id, chat_id, group_id, sender_id, sender_name, timestamp_ms, message_type, text_or_transcript, transcript_confidence, transcript_language, quoted_message_id, quoted_sender_id, mentioned_member_ids_json, media_metadata_json, is_group, is_status, is_from_bot, stored_at FROM messages`,
       this.sql`SELECT id, scope_type, scope_id, memory_type, value_json, confidence, evidence_count, created_at, last_confirmed_at, expires_at FROM memories`,
@@ -47,7 +47,7 @@ export class PostgresStore implements Store {
       this.sql`SELECT id, event, level, message_id, group_id, details_json, created_at FROM audit_logs ORDER BY created_at DESC LIMIT 500`,
       this.sql`SELECT provider, operation, group_id, units, success, latency_ms, created_at FROM provider_usage ORDER BY created_at DESC LIMIT 1000`,
       this.sql`SELECT connection_status, pairing_code, last_connected_at, metrics_json FROM runtime_state WHERE id = 1`,
-       this.sql`SELECT outbound_paused, ai_processing_paused, direct_message_allowlist_json, personality_json FROM app_settings WHERE id = 1`,
+        this.sql`SELECT outbound_paused, ai_processing_paused, direct_message_allowlist_json, personality_json, participation_json FROM app_settings WHERE id = 1`,
       this.sql`SELECT id, email, password_hash, role, created_at FROM users`,
       this.sql`SELECT token_hash, user_id, created_at, expires_at FROM sessions WHERE expires_at > ${Date.now()}`,
     ]);
@@ -76,6 +76,7 @@ export class PostgresStore implements Store {
         aiProcessingPaused: Boolean(settingsRow.ai_processing_paused),
         directMessageAllowlist: jsonArray(settingsRow.direct_message_allowlist_json),
         personality: jsonObject(settingsRow.personality_json, {}),
+        participation: jsonObject(settingsRow.participation_json, {}),
       };
     }
     for (const row of users as Row[]) this.state.users[String(row.id)] = userFromRow(row);
@@ -104,10 +105,11 @@ export class PostgresStore implements Store {
       ...this.state.settings,
       ...update,
       ...(update.personality ? { personality: { ...this.state.settings?.personality, ...update.personality } } : {}),
+      ...(update.participation ? { participation: { ...this.state.settings?.participation, ...update.participation } } : {}),
     };
-    await this.sql`INSERT INTO app_settings (id, outbound_paused, ai_processing_paused, direct_message_allowlist_json, personality_json)
-      VALUES (1, ${this.state.settings.outboundPaused ?? false}, ${this.state.settings.aiProcessingPaused ?? false}, ${JSON.stringify(this.state.settings.directMessageAllowlist ?? [])}::jsonb, ${JSON.stringify(this.state.settings.personality ?? {})}::jsonb)
-      ON CONFLICT (id) DO UPDATE SET outbound_paused = EXCLUDED.outbound_paused, ai_processing_paused = EXCLUDED.ai_processing_paused, direct_message_allowlist_json = EXCLUDED.direct_message_allowlist_json, personality_json = EXCLUDED.personality_json`;
+    await this.sql`INSERT INTO app_settings (id, outbound_paused, ai_processing_paused, direct_message_allowlist_json, personality_json, participation_json)
+      VALUES (1, ${this.state.settings.outboundPaused ?? false}, ${this.state.settings.aiProcessingPaused ?? false}, ${JSON.stringify(this.state.settings.directMessageAllowlist ?? [])}::jsonb, ${JSON.stringify(this.state.settings.personality ?? {})}::jsonb, ${JSON.stringify(this.state.settings.participation ?? {})}::jsonb)
+      ON CONFLICT (id) DO UPDATE SET outbound_paused = EXCLUDED.outbound_paused, ai_processing_paused = EXCLUDED.ai_processing_paused, direct_message_allowlist_json = EXCLUDED.direct_message_allowlist_json, personality_json = EXCLUDED.personality_json, participation_json = EXCLUDED.participation_json`;
   }
 
   async updateMetrics(update: Partial<AppMetrics>): Promise<void> {
@@ -121,9 +123,9 @@ export class PostgresStore implements Store {
   }
 
   async upsertGroup(group: GroupRecord): Promise<void> {
-    await this.sql`INSERT INTO groups (id, whatsapp_group_id, subject, participant_count, is_admin, enabled, ai_paused, personality_override_json, last_seen_at)
-      VALUES (${group.id}, ${group.whatsappGroupId}, ${group.subject}, ${group.participantCount}, ${group.isAdmin}, ${group.enabled}, ${group.aiPaused}, ${group.personalityOverride ? JSON.stringify(group.personalityOverride) : null}::jsonb, ${group.lastSeenAt})
-      ON CONFLICT (id) DO UPDATE SET whatsapp_group_id = EXCLUDED.whatsapp_group_id, subject = EXCLUDED.subject, participant_count = EXCLUDED.participant_count, is_admin = EXCLUDED.is_admin, enabled = EXCLUDED.enabled, ai_paused = EXCLUDED.ai_paused, personality_override_json = EXCLUDED.personality_override_json, last_seen_at = EXCLUDED.last_seen_at`;
+    await this.sql`INSERT INTO groups (id, whatsapp_group_id, subject, participant_count, is_admin, enabled, ai_paused, personality_override_json, participation_override_json, last_seen_at)
+      VALUES (${group.id}, ${group.whatsappGroupId}, ${group.subject}, ${group.participantCount}, ${group.isAdmin}, ${group.enabled}, ${group.aiPaused}, ${group.personalityOverride ? JSON.stringify(group.personalityOverride) : null}::jsonb, ${group.participationOverride ? JSON.stringify(group.participationOverride) : null}::jsonb, ${group.lastSeenAt})
+      ON CONFLICT (id) DO UPDATE SET whatsapp_group_id = EXCLUDED.whatsapp_group_id, subject = EXCLUDED.subject, participant_count = EXCLUDED.participant_count, is_admin = EXCLUDED.is_admin, enabled = EXCLUDED.enabled, ai_paused = EXCLUDED.ai_paused, personality_override_json = EXCLUDED.personality_override_json, participation_override_json = EXCLUDED.participation_override_json, last_seen_at = EXCLUDED.last_seen_at`;
     this.state.groups[group.id] = group;
   }
 
@@ -327,7 +329,8 @@ export class PostgresStore implements Store {
 
   private async createSchema(): Promise<void> {
     await this.sql`CREATE TABLE IF NOT EXISTS schema_migrations (version integer PRIMARY KEY, applied_at bigint NOT NULL)`;
-    await this.sql`CREATE TABLE IF NOT EXISTS groups (id text PRIMARY KEY, whatsapp_group_id text UNIQUE NOT NULL, subject text NOT NULL, participant_count integer NOT NULL, is_admin boolean NOT NULL DEFAULT false, enabled boolean NOT NULL DEFAULT false, ai_paused boolean NOT NULL DEFAULT false, personality_override_json jsonb, last_seen_at bigint NOT NULL)`;
+     await this.sql`CREATE TABLE IF NOT EXISTS groups (id text PRIMARY KEY, whatsapp_group_id text UNIQUE NOT NULL, subject text NOT NULL, participant_count integer NOT NULL, is_admin boolean NOT NULL DEFAULT false, enabled boolean NOT NULL DEFAULT false, ai_paused boolean NOT NULL DEFAULT false, personality_override_json jsonb, participation_override_json jsonb, last_seen_at bigint NOT NULL)`;
+     await this.sql`ALTER TABLE groups ADD COLUMN IF NOT EXISTS participation_override_json jsonb`;
     await this.sql`CREATE TABLE IF NOT EXISTS members (id text PRIMARY KEY, group_id text NOT NULL, whatsapp_member_id text NOT NULL, display_name text, behavior_profile_json jsonb NOT NULL, confidence_json jsonb NOT NULL, first_seen_at bigint NOT NULL, last_seen_at bigint NOT NULL)`;
     await this.sql`CREATE TABLE IF NOT EXISTS messages (id text PRIMARY KEY, chat_id text NOT NULL, group_id text, sender_id text NOT NULL, sender_name text, timestamp_ms bigint NOT NULL, message_type text NOT NULL, text_or_transcript text, transcript_confidence real, transcript_language text, quoted_message_id text, quoted_sender_id text, mentioned_member_ids_json jsonb NOT NULL DEFAULT '[]'::jsonb, media_metadata_json jsonb, is_group boolean NOT NULL, is_status boolean NOT NULL, is_from_bot boolean NOT NULL, stored_at bigint NOT NULL)`;
     await this.sql`ALTER TABLE messages ADD COLUMN IF NOT EXISTS transcript_confidence real`;
@@ -349,8 +352,9 @@ export class PostgresStore implements Store {
     await this.sql`CREATE TABLE IF NOT EXISTS users (id text PRIMARY KEY, email text UNIQUE NOT NULL, password_hash text NOT NULL, role text NOT NULL, created_at bigint NOT NULL)`;
     await this.sql`CREATE TABLE IF NOT EXISTS sessions (token_hash text PRIMARY KEY, user_id text NOT NULL, created_at bigint NOT NULL, expires_at bigint NOT NULL)`;
     await this.sql`CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions (expires_at)`;
-     await this.sql`CREATE TABLE IF NOT EXISTS app_settings (id integer PRIMARY KEY CHECK (id = 1), outbound_paused boolean NOT NULL DEFAULT false, ai_processing_paused boolean NOT NULL DEFAULT false, direct_message_allowlist_json jsonb NOT NULL DEFAULT '[]'::jsonb, personality_json jsonb NOT NULL DEFAULT '{}'::jsonb)`;
-     await this.sql`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS direct_message_allowlist_json jsonb NOT NULL DEFAULT '[]'::jsonb`;
+      await this.sql`CREATE TABLE IF NOT EXISTS app_settings (id integer PRIMARY KEY CHECK (id = 1), outbound_paused boolean NOT NULL DEFAULT false, ai_processing_paused boolean NOT NULL DEFAULT false, direct_message_allowlist_json jsonb NOT NULL DEFAULT '[]'::jsonb, personality_json jsonb NOT NULL DEFAULT '{}'::jsonb, participation_json jsonb NOT NULL DEFAULT '{}'::jsonb)`;
+      await this.sql`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS direct_message_allowlist_json jsonb NOT NULL DEFAULT '[]'::jsonb`;
+      await this.sql`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS participation_json jsonb NOT NULL DEFAULT '{}'::jsonb`;
     await this.sql`CREATE TABLE IF NOT EXISTS runtime_state (id integer PRIMARY KEY CHECK (id = 1), connection_status text NOT NULL, pairing_code text, last_connected_at bigint, metrics_json jsonb NOT NULL)`;
     await this.sql`INSERT INTO schema_migrations (version, applied_at) VALUES (1, ${Date.now()}) ON CONFLICT (version) DO NOTHING`;
   }
@@ -372,9 +376,11 @@ function jsonObject(value: unknown, fallback: Record<string, unknown>): Record<s
 
 function groupFromRow(row: Row): GroupRecord {
   const personality = jsonObject(row.personality_override_json, {});
+  const participation = jsonObject(row.participation_override_json, {});
   return {
     id: String(row.id), whatsappGroupId: String(row.whatsapp_group_id), subject: String(row.subject), participantCount: Number(row.participant_count), isAdmin: Boolean(row.is_admin), enabled: Boolean(row.enabled), aiPaused: Boolean(row.ai_paused),
-    ...(Object.keys(personality).length ? { personalityOverride: personality } : {}), lastSeenAt: Number(row.last_seen_at),
+    ...(Object.keys(personality).length ? { personalityOverride: personality } : {}),
+    ...(Object.keys(participation).length ? { participationOverride: participation } : {}), lastSeenAt: Number(row.last_seen_at),
   };
 }
 

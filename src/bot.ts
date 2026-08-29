@@ -15,6 +15,8 @@ import { ElevenLabsSpeechToTextProvider, ElevenLabsTextToSpeechProvider, Fallbac
 import { BackupService } from "./backup.js";
 import { KeyedJobQueue } from "./queue.js";
 import { formatNigeriaDateTime, NIGERIA_TIME_ZONE } from "./time.js";
+import { groupActivityState, groupParticipation } from "./participation.js";
+import type { ParticipationSettings } from "./types.js";
 
 export class BotRuntime {
   readonly memory: MemoryService;
@@ -52,8 +54,10 @@ export class BotRuntime {
     if (settings?.outboundPaused !== undefined) this.config.outboundPaused = settings.outboundPaused;
     if (settings?.aiProcessingPaused !== undefined) this.config.aiProcessingPaused = settings.aiProcessingPaused;
     if (settings?.directMessageAllowlist !== undefined) this.config.directMessageAllowlist = [...settings.directMessageAllowlist];
+    if (settings?.participation) this.config.participation = { ...this.config.participation, ...settings.participation };
+    this.config.groupCooldownMs = this.config.participation.groupCooldownMs;
     if (!settings) {
-      await this.store.updateSettings({ outboundPaused: this.config.outboundPaused, aiProcessingPaused: this.config.aiProcessingPaused, directMessageAllowlist: this.config.directMessageAllowlist, personality: this.config.personality });
+      await this.store.updateSettings({ outboundPaused: this.config.outboundPaused, aiProcessingPaused: this.config.aiProcessingPaused, directMessageAllowlist: this.config.directMessageAllowlist, personality: this.config.personality, participation: this.config.participation });
     }
     this.actions.start();
     this.backups.start();
@@ -307,6 +311,7 @@ export class BotRuntime {
         enabled: current?.enabled ?? false,
         aiPaused: current?.aiPaused ?? false,
         ...(current?.personalityOverride ? { personalityOverride: current.personalityOverride } : {}),
+        ...(current?.participationOverride ? { participationOverride: current.participationOverride } : {}),
         lastSeenAt: Date.now(),
       };
       await this.store.upsertGroup(group);
@@ -339,6 +344,20 @@ export class BotRuntime {
     const group = await this.store.updateGroup(id, { personalityOverride: personality });
     if (group) await this.log("group.personality_changed", "info", { fields: Object.keys(personality) }, undefined, id);
     return group;
+  }
+
+  async setGroupParticipation(id: string, participation: Partial<ParticipationSettings>): Promise<GroupRecord | undefined> {
+    const group = await this.store.updateGroup(id, { participationOverride: participation });
+    if (group) await this.log("group.participation_changed", "info", { fields: Object.keys(participation) }, undefined, id);
+    return group;
+  }
+
+  async setParticipation(participation: ParticipationSettings): Promise<ParticipationSettings> {
+    this.config.participation = { ...this.config.participation, ...participation };
+    this.config.groupCooldownMs = this.config.participation.groupCooldownMs;
+    await this.store.updateSettings({ participation: this.config.participation });
+    await this.log("participation.changed", "info", { fields: Object.keys(participation) });
+    return this.config.participation;
   }
 
   async setPersonality(personality: Partial<AppConfig["personality"]>): Promise<void> {
@@ -390,10 +409,12 @@ export class BotRuntime {
         audioReplyMode: this.config.audioReplyMode,
         maxMediaBytes: this.config.maxMediaBytes,
         maxVideoDurationSeconds: this.config.maxVideoDurationSeconds,
-      mediaDownloadsPerHour: this.config.mediaDownloadsPerHour,
+        mediaDownloadsPerHour: this.config.mediaDownloadsPerHour,
       },
+      participation: this.config.participation,
       diagnostics: this.lastDecisionDiagnostics,
       groups: this.store.groups(),
+      groupActivity: Object.fromEntries(this.store.groups().map((group) => [group.id, groupActivityState(this.store, group.id, groupParticipation(group, this.config.participation))])),
       metrics: snapshot.runtime.metrics,
       providers: this.providers.statuses(),
       media: this.media.health(),
@@ -436,7 +457,7 @@ export class BotRuntime {
 
   private async executeTaskResult(result: { reply?: string }, message: CanonicalMessage, group?: GroupRecord): Promise<void> {
     if (!result.reply) return;
-    await this.actions.execute({ decision: "REPLY_QUOTED", confidence: 1, reason: "task_command", targetMessageId: message.id, text: result.reply, delayMs: 0, needsWeb: false, needsMedia: false, responseStyle: "short_casual" }, message, group);
+    await this.actions.execute({ decision: "REPLY_QUOTED", confidence: 1, reason: "task_command", targetMessageId: message.id, text: result.reply, delayMs: 0, needsWeb: false, needsMedia: false, priority: "CRITICAL", bypassCooldown: true, responseStyle: "short_casual" }, message, group);
   }
 
   private async log(
