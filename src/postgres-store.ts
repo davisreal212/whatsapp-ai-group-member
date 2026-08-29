@@ -13,6 +13,8 @@ import type {
   ProviderUsageRecord,
   SessionRecord,
   StoredMessage,
+  TaskRecord,
+  TaskStatus,
   UserRecord,
 } from "./types.js";
 
@@ -32,12 +34,13 @@ export class PostgresStore implements Store {
     if (this.initialized) return;
     await this.createSchema();
     this.state = emptyState();
-    const [groups, members, messages, memories, actions, logs, usage, runtime, settings, users, sessions] = await Promise.all([
+    const [groups, members, messages, memories, actions, tasks, logs, usage, runtime, settings, users, sessions] = await Promise.all([
       this.sql`SELECT id, whatsapp_group_id, subject, participant_count, is_admin, enabled, ai_paused, personality_override_json, last_seen_at FROM groups`,
       this.sql`SELECT id, group_id, whatsapp_member_id, display_name, behavior_profile_json, confidence_json, first_seen_at, last_seen_at FROM members`,
       this.sql`SELECT id, chat_id, group_id, sender_id, sender_name, timestamp_ms, message_type, text_or_transcript, quoted_message_id, quoted_sender_id, mentioned_member_ids_json, media_metadata_json, is_group, is_status, is_from_bot, stored_at FROM messages`,
       this.sql`SELECT id, scope_type, scope_id, memory_type, value_json, confidence, evidence_count, created_at, last_confirmed_at, expires_at FROM memories`,
       this.sql`SELECT id, idempotency_key, group_id, source_message_id, action_type, target_message_id, payload_json, scheduled_for, status, executed_at, error FROM ai_actions`,
+      this.sql`SELECT id, group_id, creator_id, creator_chat_id, type, condition_json, message, status, trigger_at, recurrence, notification_target, notification_chat_id, created_at, last_checked_at, last_successful_check, last_error, retry_count FROM tasks`,
       this.sql`SELECT id, event, level, message_id, group_id, details_json, created_at FROM audit_logs ORDER BY created_at DESC LIMIT 500`,
       this.sql`SELECT provider, operation, group_id, units, success, latency_ms, created_at FROM provider_usage ORDER BY created_at DESC LIMIT 1000`,
       this.sql`SELECT connection_status, pairing_code, last_connected_at, metrics_json FROM runtime_state WHERE id = 1`,
@@ -50,6 +53,7 @@ export class PostgresStore implements Store {
     for (const row of messages as Row[]) this.state.messages[String(row.id)] = messageFromRow(row);
     for (const row of memories as Row[]) this.state.memories[String(row.id)] = memoryFromRow(row);
     for (const row of actions as Row[]) this.state.actions[String(row.id)] = actionFromRow(row);
+    for (const row of tasks as Row[]) this.state.tasks[String(row.id)] = taskFromRow(row);
     this.state.logs = (logs as Row[]).reverse().map(logFromRow);
     this.state.providerUsage = (usage as Row[]).reverse().map(usageFromRow);
     const runtimeRow = (runtime as Row[])[0];
@@ -184,6 +188,24 @@ export class PostgresStore implements Store {
     return action;
   }
 
+  async createTask(task: TaskRecord): Promise<boolean> {
+    const rows = await this.sql`INSERT INTO tasks (id, group_id, creator_id, creator_chat_id, type, condition_json, message, status, trigger_at, recurrence, notification_target, notification_chat_id, created_at, last_checked_at, last_successful_check, last_error, retry_count)
+      VALUES (${task.id}, ${task.groupId}, ${task.creatorId}, ${task.creatorChatId}, ${task.type}, ${task.condition ? JSON.stringify(task.condition) : null}::jsonb, ${task.message}, ${task.status}, ${task.triggerAt ?? null}, ${task.recurrence}, ${task.notificationTarget}, ${task.notificationChatId}, ${task.createdAt}, ${task.lastCheckedAt ?? null}, ${task.lastSuccessfulCheck ?? null}, ${task.lastError ?? null}, ${task.retryCount})
+      ON CONFLICT (id) DO NOTHING RETURNING id`;
+    if (!(rows as Row[]).length) return false;
+    this.state.tasks[task.id] = task;
+    return true;
+  }
+
+  async updateTask(id: string, update: Partial<TaskRecord>): Promise<TaskRecord | undefined> {
+    const current = this.state.tasks[id];
+    if (!current) return undefined;
+    const task = { ...current, ...update };
+    await this.sql`UPDATE tasks SET status = ${task.status}, condition_json = ${task.condition ? JSON.stringify(task.condition) : null}::jsonb, message = ${task.message}, trigger_at = ${task.triggerAt ?? null}, recurrence = ${task.recurrence}, notification_target = ${task.notificationTarget}, notification_chat_id = ${task.notificationChatId}, last_checked_at = ${task.lastCheckedAt ?? null}, last_successful_check = ${task.lastSuccessfulCheck ?? null}, last_error = ${task.lastError ?? null}, retry_count = ${task.retryCount} WHERE id = ${id}`;
+    this.state.tasks[id] = task;
+    return task;
+  }
+
   async addLog(log: AuditLog): Promise<void> {
     await this.sql`INSERT INTO audit_logs (id, event, level, message_id, group_id, details_json, created_at)
       VALUES (${log.id}, ${log.event}, ${log.level}, ${log.messageId ?? null}, ${log.groupId ?? null}, ${JSON.stringify(log.details)}::jsonb, ${log.createdAt})
@@ -240,6 +262,8 @@ export class PostgresStore implements Store {
   memories(scopeId?: string): MemoryRecord[] { return Object.values(this.state.memories).filter((memory) => !scopeId || memory.scopeId === scopeId); }
   logs(limit = 100): AuditLog[] { return this.state.logs.slice(-limit).reverse(); }
   actions(limit = 100): ActionRecord[] { return Object.values(this.state.actions).sort((a, b) => b.scheduledFor - a.scheduledFor).slice(0, limit); }
+  task(id: string): TaskRecord | undefined { return this.state.tasks[id]; }
+  tasks(status?: TaskStatus): TaskRecord[] { return Object.values(this.state.tasks).filter((task) => !status || task.status === status).sort((a, b) => b.createdAt - a.createdAt); }
 
   async pruneExpired(retentionDays: number, now = Date.now()): Promise<PruneResult> {
     const cutoff = now - Math.max(1, retentionDays) * 24 * 60 * 60 * 1000;
@@ -278,6 +302,8 @@ export class PostgresStore implements Store {
     await this.sql`CREATE INDEX IF NOT EXISTS memories_scope_idx ON memories (scope_id)`;
     await this.sql`CREATE TABLE IF NOT EXISTS ai_actions (id text PRIMARY KEY, idempotency_key text UNIQUE NOT NULL, group_id text NOT NULL, source_message_id text NOT NULL, action_type text NOT NULL, target_message_id text, payload_json jsonb NOT NULL, scheduled_for bigint NOT NULL, status text NOT NULL, executed_at bigint, error text)`;
     await this.sql`CREATE INDEX IF NOT EXISTS actions_group_time_idx ON ai_actions (group_id, scheduled_for DESC)`;
+    await this.sql`CREATE TABLE IF NOT EXISTS tasks (id text PRIMARY KEY, group_id text NOT NULL, creator_id text NOT NULL, creator_chat_id text NOT NULL, type text NOT NULL, condition_json jsonb, message text NOT NULL, status text NOT NULL, trigger_at bigint, recurrence text NOT NULL, notification_target text NOT NULL, notification_chat_id text NOT NULL, created_at bigint NOT NULL, last_checked_at bigint, last_successful_check bigint, last_error text, retry_count integer NOT NULL DEFAULT 0)`;
+    await this.sql`CREATE INDEX IF NOT EXISTS tasks_status_trigger_idx ON tasks (status, trigger_at)`;
     await this.sql`CREATE TABLE IF NOT EXISTS audit_logs (id text PRIMARY KEY, event text NOT NULL, level text NOT NULL, message_id text, group_id text, details_json jsonb NOT NULL, created_at bigint NOT NULL)`;
     await this.sql`CREATE INDEX IF NOT EXISTS audit_logs_time_idx ON audit_logs (created_at DESC)`;
     await this.sql`CREATE TABLE IF NOT EXISTS provider_usage (id bigserial PRIMARY KEY, provider text NOT NULL, operation text NOT NULL, group_id text, units integer NOT NULL, success boolean NOT NULL, latency_ms integer NOT NULL, created_at bigint NOT NULL)`;
@@ -328,6 +354,29 @@ function memoryFromRow(row: Row): MemoryRecord {
 
 function actionFromRow(row: Row): ActionRecord {
   return { id: String(row.id), idempotencyKey: String(row.idempotency_key), groupId: String(row.group_id), sourceMessageId: String(row.source_message_id), actionType: String(row.action_type) as ActionRecord["actionType"], ...(row.target_message_id ? { targetMessageId: String(row.target_message_id) } : {}), payload: jsonObject(row.payload_json, {}), scheduledFor: Number(row.scheduled_for), status: String(row.status) as ActionRecord["status"], ...(row.executed_at ? { executedAt: Number(row.executed_at) } : {}), ...(row.error ? { error: String(row.error) } : {}) };
+}
+
+function taskFromRow(row: Row): TaskRecord {
+  const condition = jsonObject(row.condition_json, {});
+  return {
+    id: String(row.id),
+    groupId: String(row.group_id),
+    creatorId: String(row.creator_id),
+    creatorChatId: String(row.creator_chat_id),
+    type: String(row.type) as TaskRecord["type"],
+    ...(Object.keys(condition).length ? { condition: condition as TaskRecord["condition"] } : {}),
+    message: String(row.message),
+    status: String(row.status) as TaskRecord["status"],
+    ...(row.trigger_at ? { triggerAt: Number(row.trigger_at) } : {}),
+    recurrence: String(row.recurrence) as TaskRecord["recurrence"],
+    notificationTarget: String(row.notification_target) as TaskRecord["notificationTarget"],
+    notificationChatId: String(row.notification_chat_id),
+    createdAt: Number(row.created_at),
+    ...(row.last_checked_at ? { lastCheckedAt: Number(row.last_checked_at) } : {}),
+    ...(row.last_successful_check ? { lastSuccessfulCheck: Number(row.last_successful_check) } : {}),
+    ...(row.last_error ? { lastError: String(row.last_error) } : {}),
+    retryCount: Number(row.retry_count),
+  };
 }
 
 function logFromRow(row: Row): AuditLog {

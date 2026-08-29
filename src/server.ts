@@ -114,6 +114,43 @@ export function createApp(runtime: BotRuntime, config: AppConfig) {
     response.json(runtime.store.logs(parsed.success ? parsed.data : 100));
   });
   app.get("/api/actions", (_request, response) => response.json(runtime.store.actions(200)));
+  app.get("/api/tasks", (request, response) => {
+    const status = typeof request.query.status === "string" ? request.query.status : undefined;
+    response.json(runtime.store.tasks(status === "ACTIVE" || status === "TRIGGERED" || status === "PAUSED" || status === "CANCELLED" ? status : undefined));
+  });
+  app.post("/api/tasks/:id/cancel", async (request, response, next) => {
+    try {
+      const task = await runtime.cancelTask(request.params.id);
+      if (!task) return response.status(404).json({ error: "Task not found" });
+      response.json(task);
+    } catch (error) {
+      next(error);
+    }
+  });
+  app.delete("/api/tasks/:id", async (request, response, next) => {
+    try {
+      const task = await runtime.cancelTask(request.params.id);
+      if (!task) return response.status(404).json({ error: "Task not found" });
+      response.json(task);
+    } catch (error) {
+      next(error);
+    }
+  });
+  app.patch("/api/tasks/:id", async (request, response, next) => {
+    try {
+      const body = z.object({
+        message: z.string().trim().min(1).max(2000).optional(),
+        triggerAt: z.number().int().positive().optional(),
+        recurrence: z.enum(["ONCE", "DAILY", "WEEKLY"]).optional(),
+        status: z.enum(["ACTIVE", "PAUSED"]).optional(),
+      }).refine((value) => Object.keys(value).length > 0).parse(request.body);
+      const task = await runtime.updateTask(request.params.id, body);
+      if (!task) return response.status(404).json({ error: "Task not found" });
+      response.json(task);
+    } catch (error) {
+      next(error);
+    }
+  });
   app.post("/api/controls", async (request, response, next) => {
     try {
       const body = z.object({ outboundPaused: z.boolean().optional(), aiProcessingPaused: z.boolean().optional() }).refine((value) => Object.keys(value).length > 0).parse(request.body);

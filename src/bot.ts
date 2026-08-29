@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { WAMessage } from "@whiskeysockets/baileys";
 import { ActionService, type OutboundTransport } from "./actions.js";
 import { DecisionEngine } from "./decision.js";
-import type { AppConfig, CanonicalMessage, GroupRecord } from "./types.js";
+import type { AppConfig, CanonicalMessage, GroupRecord, TaskRecord } from "./types.js";
 import { MemoryService } from "./memory.js";
 import { isCurrentInformationQuestion, evaluateInboundPolicy } from "./policy.js";
 import { ProviderRouter, type ProviderInput } from "./providers.js";
@@ -10,6 +10,7 @@ import { ResearchService, TavilyProvider } from "./research.js";
 import type { Store } from "./store.js";
 import { normalizeMessage } from "./normalize.js";
 import type { DiscoveredDirectMessage, DiscoveredGroup } from "./whatsapp.js";
+import { TaskService } from "./tasks.js";
 
 export class BotRuntime {
   readonly memory: MemoryService;
@@ -17,6 +18,7 @@ export class BotRuntime {
   readonly research: ResearchService;
   readonly decisions: DecisionEngine;
   readonly actions: ActionService;
+  readonly tasks: TaskService;
 
   constructor(
     readonly store: Store,
@@ -28,6 +30,7 @@ export class BotRuntime {
     this.research = new ResearchService(store, new TavilyProvider(config.tavilyApiKey));
     this.decisions = new DecisionEngine(this.providers);
     this.actions = new ActionService(store, config, transport);
+    this.tasks = new TaskService(store, config, transport);
   }
 
   async init(): Promise<void> {
@@ -52,6 +55,24 @@ export class BotRuntime {
   async disconnect(): Promise<void> {
     if (!("disconnect" in this.transport)) throw new Error("WhatsApp connection is not configured");
     await (this.transport as unknown as { disconnect(): Promise<void> }).disconnect();
+  }
+
+  startBackgroundWorkers(): void {
+    this.tasks.start();
+  }
+
+  stopBackgroundWorkers(): void {
+    this.tasks.stop();
+  }
+
+  async cancelTask(id: string): Promise<TaskRecord | undefined> {
+    return this.tasks.cancelTask(id);
+  }
+
+  async updateTask(id: string, update: Partial<Pick<TaskRecord, "message" | "triggerAt" | "recurrence" | "status">>): Promise<TaskRecord | undefined> {
+    const task = await this.store.updateTask(id, update);
+    if (task) await this.log("task.updated", "info", { taskId: id, fields: Object.keys(update) });
+    return task;
   }
 
   setBotIdentities(identities: string[]): void {
@@ -100,6 +121,13 @@ export class BotRuntime {
     await this.memory.observe(message);
     const contextGroup = group ?? directMessageContext(message.chatId);
     const context = this.memory.context(contextGroup, message.senderId, this.personality(contextGroup));
+    if (!message.isGroup) {
+      const task = await this.tasks.handleMessage(message);
+      if (task.handled) {
+        await this.executeTaskResult(task, message, group);
+        return;
+      }
+    }
     const result = await this.decisions.decide(message, contextGroup, context, this.config);
     if (!result.local.relevant) {
       await this.store.incrementMetric("ignoredLocally");
@@ -112,6 +140,13 @@ export class BotRuntime {
     }
 
     let plan = result.plan;
+    if (result.local.directed) {
+      const task = await this.tasks.handleMessage(message);
+      if (task.handled) {
+        await this.executeTaskResult(task, message, group);
+        return;
+      }
+    }
     const currentQuestion = isCurrentInformationQuestion(message.text ?? "");
     const evidence = plan.decision !== "IGNORE" && (plan.needsWeb || currentQuestion)
       ? await this.research.research(message.text ?? "", this.config.tavilyMaxResults)
@@ -226,11 +261,17 @@ export class BotRuntime {
       queue: this.transport.queueStats?.() ?? { pending: 0, processing: 0, failed: 0 },
       recentLogs: this.store.logs(30),
       recentActions: this.store.actions(30),
+      recentTasks: this.store.tasks().slice(0, 30),
     };
   }
 
   private personality(group: GroupRecord) {
     return { ...this.config.personality, ...(group.personalityOverride ?? {}) };
+  }
+
+  private async executeTaskResult(result: { reply?: string }, message: CanonicalMessage, group?: GroupRecord): Promise<void> {
+    if (!result.reply) return;
+    await this.actions.execute({ decision: "REPLY_QUOTED", confidence: 1, reason: "task_command", targetMessageId: message.id, text: result.reply, delayMs: 0, needsWeb: false, needsMedia: false, responseStyle: "short_casual" }, message, group);
   }
 
   private async log(

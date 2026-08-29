@@ -170,6 +170,37 @@ export interface ActionRecord {
   error?: string;
 }
 
+export type TaskType = "PRICE_ALERT" | "REMINDER" | "SCHEDULED_MESSAGE" | "MONITOR" | "CUSTOM";
+export type TaskStatus = "ACTIVE" | "TRIGGERED" | "PAUSED" | "CANCELLED";
+export type TaskRecurrence = "ONCE" | "DAILY" | "WEEKLY";
+
+export interface TaskCondition {
+  asset?: string;
+  operator?: "gte" | "lte";
+  threshold?: number;
+  currency?: string;
+}
+
+export interface TaskRecord {
+  id: string;
+  groupId: string;
+  creatorId: string;
+  creatorChatId: string;
+  type: TaskType;
+  condition?: TaskCondition;
+  message: string;
+  status: TaskStatus;
+  triggerAt?: number;
+  recurrence: TaskRecurrence;
+  notificationTarget: "GROUP" | "USER";
+  notificationChatId: string;
+  createdAt: number;
+  lastCheckedAt?: number;
+  lastSuccessfulCheck?: number;
+  lastError?: string;
+  retryCount: number;
+}
+
 export interface AuditLog {
   id: string;
   event: string;
@@ -242,6 +273,7 @@ export interface PersistedState {
   messages: Record<string, StoredMessage>;
   memories: Record<string, MemoryRecord>;
   actions: Record<string, ActionRecord>;
+  tasks: Record<string, TaskRecord>;
   logs: AuditLog[];
   providerUsage: ProviderUsageRecord[];
   users: Record<string, UserRecord>;

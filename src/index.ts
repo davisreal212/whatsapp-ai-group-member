@@ -17,6 +17,7 @@ async function main(): Promise<void> {
   });
   runtime = new BotRuntime(store, config, whatsapp);
   await runtime.init();
+  runtime.startBackgroundWorkers();
 
   const server = createServer(createApp(runtime, config));
   server.listen(config.port, () => {
@@ -35,6 +36,7 @@ async function main(): Promise<void> {
   });
 
   const shutdown = async () => {
+    runtime.stopBackgroundWorkers();
     await whatsapp.stop();
     server.close();
   };

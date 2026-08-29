@@ -12,6 +12,8 @@ import type {
   ProviderUsageRecord,
   StoredMessage,
   SessionRecord,
+  TaskRecord,
+  TaskStatus,
   UserRecord,
 } from "./types.js";
 
@@ -49,6 +51,10 @@ export interface Store {
   memories(scopeId?: string): MemoryRecord[];
   logs(limit?: number): AuditLog[];
   actions(limit?: number): ActionRecord[];
+  createTask(task: TaskRecord): Promise<boolean>;
+  updateTask(id: string, update: Partial<TaskRecord>): Promise<TaskRecord | undefined>;
+  task(id: string): TaskRecord | undefined;
+  tasks(status?: TaskStatus): TaskRecord[];
   pruneExpired(retentionDays: number, now?: number): Promise<PruneResult>;
 }
 
@@ -78,6 +84,7 @@ export const emptyState = (): PersistedState => ({
   messages: {},
   memories: {},
   actions: {},
+  tasks: {},
   logs: [],
   providerUsage: [],
   users: {},
@@ -210,6 +217,21 @@ export class FileStore implements Store {
     return this.state.actions[id];
   }
 
+  async createTask(task: TaskRecord): Promise<boolean> {
+    if (this.state.tasks[task.id]) return false;
+    this.state.tasks[task.id] = task;
+    await this.persist();
+    return true;
+  }
+
+  async updateTask(id: string, update: Partial<TaskRecord>): Promise<TaskRecord | undefined> {
+    const task = this.state.tasks[id];
+    if (!task) return undefined;
+    this.state.tasks[id] = { ...task, ...update };
+    await this.persist();
+    return this.state.tasks[id];
+  }
+
   async addLog(log: AuditLog): Promise<void> {
     this.state.logs.push(log);
     this.state.logs = this.state.logs.slice(-500);
@@ -291,6 +313,16 @@ export class FileStore implements Store {
     return Object.values(this.state.actions)
       .sort((a, b) => b.scheduledFor - a.scheduledFor)
       .slice(0, limit);
+  }
+
+  task(id: string): TaskRecord | undefined {
+    return this.state.tasks[id];
+  }
+
+  tasks(status?: TaskStatus): TaskRecord[] {
+    return Object.values(this.state.tasks)
+      .filter((task) => !status || task.status === status)
+      .sort((a, b) => b.createdAt - a.createdAt);
   }
 
   async pruneExpired(retentionDays: number, now = Date.now()): Promise<PruneResult> {
