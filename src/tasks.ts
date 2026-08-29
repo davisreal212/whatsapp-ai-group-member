@@ -31,13 +31,19 @@ export class TaskService {
 
   start(): void {
     if (this.timer) return;
-    void this.runDueTasks();
-    this.timer = setInterval(() => void this.runDueTasks(), CHECK_INTERVAL_MS);
+    this.runSafely();
+    this.timer = setInterval(() => this.runSafely(), CHECK_INTERVAL_MS);
   }
 
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
+  }
+
+  private runSafely(): void {
+    void this.runDueTasks().catch(async (error) => {
+      await this.log("task.worker_failed", { error: error instanceof Error ? error.message : "unknown" });
+    });
   }
 
   async handleMessage(message: CanonicalMessage): Promise<TaskCommandResult> {
