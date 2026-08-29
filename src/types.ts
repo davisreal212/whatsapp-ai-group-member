@@ -47,6 +47,7 @@ export interface AppConfig {
   adminToken?: string;
   botName: string;
   botJid?: string;
+  botJids: string[];
   groupOnlyMode: boolean;
   directMessageAllowlist: string[];
   dryRun: boolean;

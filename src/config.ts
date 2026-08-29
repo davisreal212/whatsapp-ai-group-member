@@ -78,6 +78,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     adminToken: values.ADMIN_TOKEN,
     botName: values.BOT_NAME,
     botJid: values.BOT_JID,
+    botJids: values.BOT_JID ? [values.BOT_JID] : [],
     groupOnlyMode: values.GROUP_ONLY_MODE,
     directMessageAllowlist: values.DIRECT_MESSAGE_ALLOWLIST.split(",").map((value) => value.trim()).filter(Boolean),
     dryRun: values.DRY_RUN,

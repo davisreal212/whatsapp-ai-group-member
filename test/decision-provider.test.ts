@@ -61,6 +61,25 @@ describe("decision safety helpers", () => {
     expect(isCurrentInformationQuestion(message.text)).toBe(true);
   });
 
+  it("recognizes plain-name and LID-based direct addressing", () => {
+    const message = { id: "2", chatId: "g@g.us", groupId: "g@g.us", senderId: "u", timestamp: Date.now(), type: "text" as const, text: "Kola, what do you think?", mentionedIds: ["bot-lid@lid"], isGroup: true, isStatus: false, isFromBot: false };
+    expect(localRelevance(message, "Kola", "bot@s.whatsapp.net", 0.35, ["bot-lid@lid"]).directed).toBe(true);
+  });
+
+  it("lets substantive group conversation reach the classifier", () => {
+    const message = { id: "3", chatId: "g@g.us", groupId: "g@g.us", senderId: "u", timestamp: Date.now(), type: "text" as const, text: "The meeting starts at eight tonight", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+    expect(localRelevance(message, "Kola", undefined, 0.35).reason).toBe("group_conversation");
+  });
+
+  it("turns a provider ignore into a response plan for a direct address", async () => {
+    const message = { id: "direct-message", chatId: "g@g.us", groupId: "g@g.us", senderId: "member", timestamp: Date.now(), type: "text" as const, text: "Kola, help me", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+    const group: GroupRecord = { id: "g@g.us", whatsappGroupId: "g@g.us", subject: "Test", participantCount: 1, isAdmin: true, enabled: true, aiPaused: false, lastSeenAt: Date.now() };
+    const context: ContextSnapshot = { group, recentMessages: [], memories: [], personality: loadConfig({ NODE_ENV: "test" }).personality };
+    const router = { classify: async () => ({ decision: "IGNORE", confidence: 1, reason: "quiet", delayMs: 0, needsWeb: false, needsMedia: false, responseStyle: "short_casual" as const }) } as unknown as ProviderRouter;
+    const result = await new DecisionEngine(router).decide(message, group, context, { botName: "Kola", botJids: [] });
+    expect(result.plan.decision).toBe("REPLY");
+  });
+
   it("formats pairing numbers as the Baileys API requires", () => {
     expect(normalizePairingPhoneNumber("+234 (801) 555-0100")).toBe("2348015550100");
   });

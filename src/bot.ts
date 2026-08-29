@@ -54,6 +54,11 @@ export class BotRuntime {
     await (this.transport as unknown as { disconnect(): Promise<void> }).disconnect();
   }
 
+  setBotIdentities(identities: string[]): void {
+    this.config.botJids = [...new Set([...(this.config.botJids ?? []), ...identities])];
+    if (!this.config.botJid && identities[0]) this.config.botJid = identities[0];
+  }
+
   async listGroups(): Promise<DiscoveredGroup[]> {
     if (!("listGroups" in this.transport)) return [];
     return (this.transport as unknown as { listGroups(): Promise<DiscoveredGroup[]> }).listGroups();
@@ -115,6 +120,7 @@ export class BotRuntime {
         messageText: message.text ?? message.media?.caption ?? "",
         messageType: message.type,
         ...(message.senderName ? { senderName: message.senderName } : {}),
+        directed: result.local.directed,
         context,
         ...(evidence ? { evidence } : {}),
       };

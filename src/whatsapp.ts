@@ -29,6 +29,7 @@ export interface DiscoveredDirectMessage {
 export interface WhatsAppEvents {
   onRawMessage(raw: WAMessage): Promise<void>;
   onGroups(groups: DiscoveredGroup[]): Promise<void>;
+  onIdentity?(identities: string[]): Promise<void>;
 }
 
 export class BaileysWhatsAppAdapter implements OutboundTransport {
@@ -241,6 +242,8 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
       this.authRegistered = true;
       this.reconnectAttempts = 0;
       await this.store.setConnection("CONNECTED");
+      const identities = [socket.user?.id, socket.user?.jid, socket.user?.lid].filter((value): value is string => Boolean(value));
+      if (identities.length) await this.events.onIdentity?.([...new Set(identities)]);
       await this.events.onGroups(await this.listGroups());
       return;
     }

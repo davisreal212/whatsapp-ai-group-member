@@ -47,12 +47,15 @@ export interface LocalRelevance {
   directed: boolean;
 }
 
-export function localRelevance(message: CanonicalMessage, botName: string, botJid?: string, talkativeness = 0.35): LocalRelevance {
+export function localRelevance(message: CanonicalMessage, botName: string, botJid?: string, talkativeness = 0.35, botJids: string[] = []): LocalRelevance {
   const text = message.text ?? "";
-  const named = new RegExp(`(?:^|\\s)@${escapeRegExp(botName)}(?:\\b|$)`, "i").test(text);
+  const named = botName.trim().length > 0 && new RegExp(`(?:^|[^\\p{L}\\p{N}_])@?${escapeRegExp(botName.trim())}(?=$|[^\\p{L}\\p{N}_])`, "iu").test(text);
+  const identities = [botJid, ...botJids].filter((value): value is string => Boolean(value));
+  const mentionedBot = message.mentionedIds.some((mentionedId) => identities.some((identity) => sameJid(mentionedId, identity)));
+  const quotedBot = Boolean(message.quotedSenderId && identities.some((identity) => sameJid(message.quotedSenderId as string, identity)));
   const directed = Boolean(
-    message.quotedSenderId === botJid
-      || (botJid && message.mentionedIds.includes(botJid))
+    quotedBot
+      || mentionedBot
       || named,
   );
   if (directed) return { relevant: true, reason: "directed_to_bot", directed: true };
@@ -63,8 +66,8 @@ export function localRelevance(message: CanonicalMessage, botName: string, botJi
   if (/\b(is this true|latest|breaking|current price|today)\b/i.test(text)) {
     return { relevant: true, reason: "current_information", directed: false };
   }
-  if (talkativeness >= 0.85 && text.trim().length >= 10) {
-    return { relevant: true, reason: "high_talkativeness", directed: false };
+  if (message.isGroup && talkativeness >= 0.35 && text.trim().length >= 10) {
+    return { relevant: true, reason: "group_conversation", directed: false };
   }
   return { relevant: false, reason: "no_local_relevance_signal", directed: false };
 }
@@ -76,9 +79,9 @@ export class DecisionEngine {
     message: CanonicalMessage,
     group: GroupRecord,
     context: ContextSnapshot,
-    config: Pick<AppConfig, "botName" | "botJid">,
+    config: Pick<AppConfig, "botName" | "botJid"> & Partial<Pick<AppConfig, "botJids">>,
   ): Promise<{ plan: DecisionPlan; local: LocalRelevance; usedAi: boolean }> {
-    const local = localRelevance(message, config.botName, config.botJid, context.personality.talkativeness);
+    const local = localRelevance(message, config.botName, config.botJid, context.personality.talkativeness, config.botJids ?? []);
     if (!local.relevant) {
       return { plan: ignorePlan("Local relevance gate chose silence."), local, usedAi: false };
     }
@@ -86,6 +89,7 @@ export class DecisionEngine {
     const input: ProviderInput = {
       messageText: message.text ?? message.media?.caption ?? "",
       messageType: message.type,
+      directed: local.directed,
       ...(message.senderName ? { senderName: message.senderName } : {}),
       context,
     };
@@ -93,7 +97,10 @@ export class DecisionEngine {
     const safePlan = plan && plan.targetMessageId && plan.targetMessageId !== message.id
       ? { ...plan, targetMessageId: message.id }
       : plan;
-    return { plan: safePlan ?? ignorePlan("No healthy AI provider is configured; choosing silence."), local, usedAi: Boolean(safePlan) };
+    const responsePlan = safePlan && local.directed && safePlan.decision === "IGNORE"
+      ? { ...safePlan, decision: "REPLY" as const, reason: "Directly addressed; generate a safe response." }
+      : safePlan;
+    return { plan: responsePlan ?? ignorePlan("No healthy AI provider is configured; choosing silence."), local, usedAi: Boolean(safePlan) };
   }
 }
 
@@ -111,6 +118,14 @@ export function ignorePlan(reason: string): DecisionPlan {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function sameJid(left: string, right: string): boolean {
+  const normalize = (value: string) => {
+    const [local, server] = value.trim().toLowerCase().split("@");
+    return server ? `${local?.split(":")[0]}@${server}` : value.trim().toLowerCase();
+  };
+  return normalize(left) === normalize(right);
 }
 
 function normalizeResponseStyle(value: unknown): unknown {

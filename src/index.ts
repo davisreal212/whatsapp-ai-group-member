@@ -13,6 +13,7 @@ async function main(): Promise<void> {
   const whatsapp = new BaileysWhatsAppAdapter(config.whatsappAuthDir, store, {
     onRawMessage: async (message) => runtime.handleRawMessage(message),
     onGroups: async (groups) => runtime.syncGroups(groups),
+    onIdentity: async (identities) => runtime.setBotIdentities(identities),
   });
   runtime = new BotRuntime(store, config, whatsapp);
   await runtime.init();
