@@ -37,7 +37,7 @@ DATABASE_URL=<Neon pooled connection string with sslmode=require>
 ADMIN_TOKEN=<random secret with at least 24 characters>
 BOT_NAME=Kola
 BOT_JID=
-GROUP_ONLY_MODE=true
+GROUP_ONLY_MODE=false
 DIRECT_MESSAGE_ALLOWLIST=<comma-separated WhatsApp numbers or JIDs; leave empty to deny all DMs>
 DRY_RUN=true
 OUTBOUND_PAUSED=true

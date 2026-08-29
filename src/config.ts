@@ -26,7 +26,7 @@ const envSchema = z.object({
   ADMIN_TOKEN: optionalString,
   BOT_NAME: z.string().min(1).max(40).default("Kola"),
   BOT_JID: optionalString,
-  GROUP_ONLY_MODE: booleanString.default(true),
+  GROUP_ONLY_MODE: booleanString.default(false),
   DIRECT_MESSAGE_ALLOWLIST: z.string().default(""),
   DRY_RUN: booleanString.default(true),
   OUTBOUND_PAUSED: booleanString.default(false),

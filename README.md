@@ -6,7 +6,7 @@ A safety-first WhatsApp group agent based on the supplied implementation manual.
 
 - Baileys 6.7.24 linked-device adapter with persistent multi-file auth, pairing-code support, and reconnect backoff.
 - Group discovery with explicit allowlisting. Newly discovered groups are disabled.
-- Hard group-only policy by default: DMs, status events, unknown groups, disabled groups, bot messages, duplicates, and unsupported events are rejected before AI calls. If group-only mode is disabled, only `DIRECT_MESSAGE_ALLOWLIST` contacts can use DMs.
+- Selective group policy with allowlisted DM support by default: unlisted DMs, status events, unknown groups, disabled groups, bot messages, duplicates, and unsupported events are rejected before AI calls. `DIRECT_MESSAGE_ALLOWLIST` contacts are always sent through the reply path; set `GROUP_ONLY_MODE=true` to disable all DMs.
 - Canonical message normalization with quote, mention, media, and sender metadata.
 - Voice-note transcription through a cached, fallback-ready speech provider, optional Gemini image description/OCR, and optional TTS audio replies with OpenAI/ElevenLabs fallback and text fallback.
 - Local relevance gates so casual chatter can be ignored without consuming AI quota.

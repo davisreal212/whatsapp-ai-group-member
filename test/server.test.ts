@@ -34,7 +34,7 @@ describe("admin HTTP surface", () => {
     expect(protectedResponse.status).toBe(401);
     const status = await fetch(`${base}/api/status`, { headers: { authorization: "Bearer test-token-that-is-long-enough" } });
     expect(status.status).toBe(200);
-    expect((await status.json()).safety.groupOnlyMode).toBe(true);
+    expect((await status.json()).safety.groupOnlyMode).toBe(false);
 
     const allowlist = await fetch(`${base}/api/dm-allowlist`, {
       method: "POST",
