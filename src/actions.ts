@@ -9,6 +9,7 @@ import { KeyedJobQueue, type QueueStats } from "./queue.js";
 export interface OutboundTransport {
   readonly connected: boolean;
   queueStats?(): QueueStats;
+  sendTyping?(chatId: string, typing: boolean): Promise<void>;
   sendText(groupId: string, text: string, quotedMessageId?: string, mentionedIds?: string[]): Promise<void>;
   sendReaction(groupId: string, messageId: string, reaction: string): Promise<void>;
   sendMedia(groupId: string, mediaUrl: string, mimeType: string, caption?: string, quotedMessageId?: string): Promise<void>;

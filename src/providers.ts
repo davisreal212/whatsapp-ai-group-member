@@ -80,6 +80,8 @@ abstract class BaseProvider implements AIProvider {
     return [
       "Write one natural, concise WhatsApp group reply to the incoming message.",
       "Sound like a real person in this chat, not a support bot or an assistant. Never say 'as an AI', 'I understand', or add a canned preamble.",
+      "Reply in the same language as the incoming message or transcript. Preserve Nigerian English, Pidgin, Yoruba, Igbo, Hausa, and code-switching when the sender uses them; do not translate unless asked.",
+      "For an audio message, treat the transcript as the sender's actual words. If a reply is needed, keep it natural and easy to speak aloud.",
       "Respond to the actual message DATA, not to the group in general. For a greeting, mirror its meaning and time of day; do not turn good morning into good night or invent an unrelated announcement.",
       "Keep the reply addressed to the sender's message. Do not use generic broadcast lines such as 'good night everyone' unless the message explicitly calls for that.",
       `Current local time: ${formatNigeriaDateTime()} (${NIGERIA_TIME_ZONE}). Use Nigeria time for dates and times, and include the exact local date/time when it helps answer the question.`,
@@ -185,6 +187,37 @@ export class OpenAICompatibleProvider extends BaseProvider {
   }
 }
 
+export class PhoenixProvider extends BaseProvider {
+  readonly available: boolean;
+
+  constructor(
+    readonly name: "phoenix-deepseek" | "phoenix-glm",
+    baseUrl: string,
+    model: string,
+    apiKey?: string,
+  ) {
+    super(model, apiKey);
+    this.baseUrl = baseUrl.replace(/\/$/, "");
+    this.available = Boolean(apiKey);
+  }
+
+  private readonly baseUrl: string;
+
+  protected async complete(prompt: string, _json: boolean): Promise<string> {
+    if (!this.apiKey) throw new Error("Phoenix API key is not configured");
+    const response = await fetch(`${this.baseUrl}/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-API-Key": this.apiKey },
+      body: JSON.stringify({ model: this.model, message: prompt }),
+      signal: AbortSignal.timeout(45_000),
+    });
+    if (!response.ok) throw new Error(`Phoenix ${this.model} returned HTTP ${response.status}`);
+    const body = await response.json() as { response?: unknown };
+    if (typeof body.response !== "string" || !body.response.trim()) throw new Error(`Phoenix ${this.model} returned no text`);
+    return body.response;
+  }
+}
+
 export class ProviderRouter {
   private readonly providers: AIProvider[];
   private readonly health = new Map<string, ProviderHealth>();
@@ -193,6 +226,8 @@ export class ProviderRouter {
     this.failureThreshold = config.providerFailureThreshold;
     this.cooldownMs = config.providerCooldownMs;
     this.providers = providers ?? [
+      new PhoenixProvider("phoenix-deepseek", config.phoenixApiBaseUrl, config.phoenixPrimaryModel, config.phoenixApiKey),
+      new PhoenixProvider("phoenix-glm", config.phoenixApiBaseUrl, config.phoenixSecondaryModel, config.phoenixApiKey),
       new OpenAICompatibleProvider("groq", "https://api.groq.com/openai/v1", config.groqModel, config.groqApiKey),
       new GeminiProvider(config.geminiModel, config.geminiApiKey),
       new OpenAICompatibleProvider("openrouter", "https://openrouter.ai/api/v1", config.openRouterModel, config.openRouterApiKey, "z-ai/glm-5.2:free"),
@@ -203,11 +238,11 @@ export class ProviderRouter {
   private readonly cooldownMs: number;
 
   async classify(input: ProviderInput, groupId?: string): Promise<DecisionPlan | undefined> {
-    return this.tryProviders("classify", input, groupId, this.providers.filter((provider) => provider.name === "groq" || provider.name === "gemini" || provider.name === "openrouter"));
+    return this.tryProviders("classify", input, groupId, this.providers);
   }
 
   async generateResponse(input: ProviderInput, groupId?: string): Promise<string | undefined> {
-    return this.tryProviders("generateResponse", input, groupId, this.providers.filter((provider) => provider.name === "gemini" || provider.name === "openrouter" || provider.name === "groq"));
+    return this.tryProviders("generateResponse", input, groupId, this.providers);
   }
 
   statuses(): Array<{ name: string; model: string; fallbackModel?: string; available: boolean; healthy: boolean; consecutiveFailures: number; lastError?: string; lastFailureAt?: number; lastSuccessAt?: number; circuitOpenUntil?: number }> {

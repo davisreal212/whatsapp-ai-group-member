@@ -69,6 +69,10 @@ GROQ_API_KEY=<optional>
 GROQ_MODEL=openai/gpt-oss-20b
 OPENROUTER_API_KEY=<optional>
 OPENROUTER_MODEL=z-ai/glm-5.2:free
+PHOENIX_API_KEY=<FastAPI router key>
+PHOENIX_API_BASE_URL=https://fastapi-ai-koyeb-app-production.up.railway.app
+PHOENIX_PRIMARY_MODEL=deepseek-v4-flash
+PHOENIX_SECONDARY_MODEL=glm-5.3
 TAVILY_API_KEY=<Tavily key>
 TAVILY_MAX_RESULTS=5
 PROVIDER_FAILURE_THRESHOLD=3
@@ -109,6 +113,8 @@ The pinned dependency is `@whiskeysockets/baileys@6.7.24`. That version exports 
 - **Sync DMs** lists recent direct-message contacts seen by the current WhatsApp session; it does not import message content or automatically authorize anyone.
 - The service writes protected application-state snapshots under `DATA_DIR/backups` on startup and on the configured interval. Back up the persistent volume separately; it contains the WhatsApp auth state and local application state.
 - Set `AUDIO_REPLY_MODE=adaptive` with `TTS_API_KEY` or `ELEVENLABS_API_KEY` to reply to voice notes with audio when the provider and adapter support it. ElevenLabs also provides speech-to-text fallback for incoming voice notes. Synthesis failures fall back to text.
+- Set `PHOENIX_API_KEY`, `PHOENIX_API_BASE_URL`, `PHOENIX_PRIMARY_MODEL=deepseek-v4-flash`, and `PHOENIX_SECONDARY_MODEL=glm-5.3` to put the Phoenix FastAPI router ahead of the other AI providers. The two Phoenix models share the same circuit-aware fallback path.
+- AI prompts and reminder scheduling use `Africa/Lagos` and display WAT; the dashboard sidebar shows the same local time.
 - Monitor container logs, disk usage, connection status, provider failures, action skips, and daily action counts.
 - Keep the reverse proxy on HTTPS and restrict dashboard access by network or identity provider where possible.
 

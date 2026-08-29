@@ -82,6 +82,10 @@ export interface AppConfig {
   groqModel: string;
   openRouterApiKey?: string;
   openRouterModel: string;
+  phoenixApiKey?: string;
+  phoenixApiBaseUrl: string;
+  phoenixPrimaryModel: string;
+  phoenixSecondaryModel: string;
   providerFailureThreshold: number;
   providerCooldownMs: number;
   personality: Personality;

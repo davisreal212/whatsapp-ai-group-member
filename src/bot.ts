@@ -133,12 +133,13 @@ export class BotRuntime {
     if ((job.nextAttemptAt ?? 0) > Date.now()) await waitFor(Math.min(job.nextAttemptAt as number - Date.now(), 5_000));
     await this.store.updateInboundJob(job.id, { status: "PROCESSING", attempts: job.attempts + 1, nextAttemptAt: undefined, lastError: undefined });
     let failed = false;
+    let typing = false;
     let message = initialMessage;
     try {
     await this.store.incrementMetric("observed");
     const group = message.groupId ? this.store.group(message.groupId) : undefined;
     const policy = evaluateInboundPolicy(message, group, this.config);
-    if (!policy.allowed) {
+      if (!policy.allowed) {
       await this.log("message.filtered", "info", {
         reason: policy.reason,
         ...(message.isGroup
@@ -149,8 +150,13 @@ export class BotRuntime {
               ...(message.senderPhone ? { senderPhone: message.senderPhone } : {}),
             }),
       }, message);
-      return;
-    }
+        return;
+      }
+
+      if (this.transport.sendTyping) {
+        await this.transport.sendTyping(message.chatId, true).catch(() => undefined);
+        typing = true;
+      }
 
     if (message.type === "audio" && message.media?.hasDownloadableContent && loadMedia) {
       try {
@@ -280,6 +286,7 @@ export class BotRuntime {
       await this.log("message.processing_failed", "error", { error: message, attempts }, initialMessage);
       throw error;
     } finally {
+      if (typing && this.transport.sendTyping) await this.transport.sendTyping(initialMessage.chatId, false).catch(() => undefined);
       if (!failed) await this.store.updateInboundJob(job.id, { status: "COMPLETED", nextAttemptAt: undefined, lastError: undefined });
     }
   }

@@ -54,7 +54,6 @@ export class GroqSpeechToTextProvider implements SpeechToTextProvider {
     const bytes = media.data.buffer.slice(media.data.byteOffset, media.data.byteOffset + media.data.byteLength) as ArrayBuffer;
     form.append("file", new Blob([bytes], { type: media.mimeType }), "voice-note");
     form.append("model", this.model);
-    form.append("language", "en");
     form.append("response_format", "json");
     const response = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", {
       method: "POST",

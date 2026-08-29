@@ -227,6 +227,11 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     return this.messageQueue.stats();
   }
 
+  async sendTyping(chatId: string, typing: boolean): Promise<void> {
+    if (!this.socket) return;
+    await this.socket.sendPresenceUpdate(typing ? "composing" : "paused", chatId);
+  }
+
   async sendText(groupId: string, text: string, quotedMessageId?: string, mentionedIds?: string[]): Promise<void> {
     if (!this.socket) throw new Error("WhatsApp is not connected");
     const quoted = quotedMessageId ? this.rawMessages.get(quotedMessageId) : undefined;
