@@ -1,4 +1,5 @@
 import express, { type NextFunction, type Request, type Response } from "express";
+import { timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
 import { z } from "zod";
 import { AuthService, sessionCookieName } from "./auth.js";
@@ -10,6 +11,7 @@ export function createApp(runtime: BotRuntime, config: AppConfig) {
   app.disable("x-powered-by");
   app.use(express.json({ limit: "100kb" }));
   app.use(express.static(join(process.cwd(), "public")));
+  const authRateLimit = rateLimit(60_000, 10);
 
   app.get("/api/health", (_request, response) => {
     response.json({ status: "ok", service: "whatsapp-ai-group-member" });
@@ -17,7 +19,7 @@ export function createApp(runtime: BotRuntime, config: AppConfig) {
 
   app.use("/api", rateLimit());
   const auth = new AuthService(runtime.store);
-  app.post("/api/auth/signup", async (request, response) => {
+  app.post("/api/auth/signup", authRateLimit, async (request, response) => {
     try {
       const body = authCredentialsSchema.parse(request.body);
       const result = await auth.signUp(body.email, body.password);
@@ -27,7 +29,7 @@ export function createApp(runtime: BotRuntime, config: AppConfig) {
       response.status(error instanceof z.ZodError ? 400 : 409).json({ error: error instanceof Error ? error.message : "Unable to create account" });
     }
   });
-  app.post("/api/auth/signin", async (request, response) => {
+  app.post("/api/auth/signin", authRateLimit, async (request, response) => {
     try {
       const body = authCredentialsSchema.parse(request.body);
       const result = await auth.signIn(body.email, body.password);
@@ -173,11 +175,17 @@ function requireAdmin(config: AppConfig, auth: AuthService) {
     if (!config.adminToken && config.nodeEnv !== "production") return next();
     const header = request.header("authorization");
     const token = header?.startsWith("Bearer ") ? header.slice(7) : request.header("x-admin-token");
-    if (token && token === config.adminToken) return next();
+    if (token && config.adminToken && secretsEqual(token, config.adminToken)) return next();
     const user = auth.authenticate(readSessionCookie(request));
     if (!user || user.role !== "admin") return response.status(401).json({ error: "Authentication required" });
     next();
   };
+}
+
+function secretsEqual(left: string, right: string): boolean {
+  const leftBytes = Buffer.from(left);
+  const rightBytes = Buffer.from(right);
+  return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes);
 }
 
 const authCredentialsSchema = z.object({

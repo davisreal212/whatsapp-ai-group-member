@@ -82,4 +82,24 @@ describe("validated outbound actions", () => {
     expect((await service.execute(plan, dm, undefined)).reason).toBe("sent");
     expect(sent).toEqual(["234@s.whatsapp.net:Yes."]);
   });
+
+  it("re-checks the outbound pause after a delayed action waits", async () => {
+    const { store, config } = await setup();
+    const sent: string[] = [];
+    const transport = { connected: true, sendText: async (_chatId: string, text: string) => { sent.push(text); }, sendReaction: async () => {}, sendMedia: async () => {} };
+    const service = new ActionService(store, config, transport);
+    const plan = { decision: "REPLY" as const, confidence: 1, reason: "test", text: "Should not send", delayMs: 10, needsWeb: false, needsMedia: false, responseStyle: "short_casual" as const };
+    setTimeout(() => { config.outboundPaused = true; }, 1);
+    expect((await service.execute(plan, source, group)).reason).toBe("outbound_paused");
+    expect(sent).toEqual([]);
+  });
+
+  it("rejects private and credential-bearing media URLs", async () => {
+    const { store, config } = await setup();
+    const transport = { connected: true, sendText: async () => {}, sendReaction: async () => {}, sendMedia: async () => {} };
+    const service = new ActionService(store, config, transport);
+    const base = { decision: "SEND_IMAGE" as const, confidence: 1, reason: "test", text: "", delayMs: 0, needsWeb: false, needsMedia: true, responseStyle: "short_casual" as const, mediaMimeType: "image/png" };
+    expect((await service.execute({ ...base, mediaUrl: "https://127.0.0.1/image.png" }, source, group)).reason).toBe("safe_media_url_required");
+    expect((await service.execute({ ...base, mediaUrl: "https://user:pass@example.com/image.png" }, source, group)).reason).toBe("safe_media_url_required");
+  });
 });

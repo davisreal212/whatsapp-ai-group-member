@@ -1,6 +1,6 @@
 import { neon } from "@neondatabase/serverless";
 import { randomUUID } from "node:crypto";
-import { emptyMetrics, emptyState, type Store } from "./store.js";
+import { emptyMetrics, emptyState, type PruneResult, type Store } from "./store.js";
 import type {
   ActionRecord,
   AppMetrics,
@@ -240,6 +240,33 @@ export class PostgresStore implements Store {
   memories(scopeId?: string): MemoryRecord[] { return Object.values(this.state.memories).filter((memory) => !scopeId || memory.scopeId === scopeId); }
   logs(limit = 100): AuditLog[] { return this.state.logs.slice(-limit).reverse(); }
   actions(limit = 100): ActionRecord[] { return Object.values(this.state.actions).sort((a, b) => b.scheduledFor - a.scheduledFor).slice(0, limit); }
+
+  async pruneExpired(retentionDays: number, now = Date.now()): Promise<PruneResult> {
+    const cutoff = now - Math.max(1, retentionDays) * 24 * 60 * 60 * 1000;
+    const [messages, memories, actions, logs, providerUsage, sessions] = await Promise.all([
+      this.sql`DELETE FROM messages WHERE stored_at < ${cutoff} RETURNING id`,
+      this.sql`DELETE FROM memories WHERE (expires_at IS NOT NULL AND expires_at <= ${now}) OR last_confirmed_at < ${cutoff} RETURNING id`,
+      this.sql`DELETE FROM ai_actions WHERE status <> 'PENDING' AND COALESCE(executed_at, scheduled_for) < ${cutoff} RETURNING id`,
+      this.sql`DELETE FROM audit_logs WHERE created_at < ${cutoff} RETURNING id`,
+      this.sql`DELETE FROM provider_usage WHERE created_at < ${cutoff} RETURNING id`,
+      this.sql`DELETE FROM sessions WHERE expires_at <= ${now} RETURNING token_hash`,
+    ]);
+    const result: PruneResult = {
+      messages: (messages as Row[]).length,
+      memories: (memories as Row[]).length,
+      actions: (actions as Row[]).length,
+      logs: (logs as Row[]).length,
+      providerUsage: (providerUsage as Row[]).length,
+      sessions: (sessions as Row[]).length,
+    };
+    for (const row of messages as Row[]) delete this.state.messages[String(row.id)];
+    for (const row of memories as Row[]) delete this.state.memories[String(row.id)];
+    for (const row of actions as Row[]) delete this.state.actions[String(row.id)];
+    for (const row of sessions as Row[]) delete this.state.sessions[String(row.token_hash)];
+    this.state.logs = this.state.logs.filter((log) => log.createdAt >= cutoff);
+    this.state.providerUsage = this.state.providerUsage.filter((usage) => usage.createdAt >= cutoff);
+    return result;
+  }
 
   private async createSchema(): Promise<void> {
     await this.sql`CREATE TABLE IF NOT EXISTS schema_migrations (version integer PRIMARY KEY, applied_at bigint NOT NULL)`;

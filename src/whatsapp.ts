@@ -12,6 +12,7 @@ import pino from "pino";
 import type { Store } from "./store.js";
 import type { OutboundTransport } from "./actions.js";
 import type { ConnectionStatus } from "./types.js";
+import { fetchSafeMedia } from "./network.js";
 
 export interface DiscoveredGroup {
   id: string;
@@ -211,12 +212,14 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
 
   async sendMedia(groupId: string, mediaUrl: string, mimeType: string, caption?: string): Promise<void> {
     if (!this.socket) throw new Error("WhatsApp is not connected");
-    const response = await fetch(mediaUrl, { signal: AbortSignal.timeout(30_000) });
+    const response = await fetchSafeMedia(mediaUrl, { signal: AbortSignal.timeout(30_000) });
     if (!response.ok) throw new Error(`Media source returned HTTP ${response.status}`);
+    const responseMimeType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+    const expectedKind = mimeType.split("/", 1)[0]?.toLowerCase();
+    if (responseMimeType && expectedKind && !responseMimeType.startsWith(`${expectedKind}/`)) throw new Error("Media content type does not match the requested action");
     const length = Number(response.headers.get("content-length") ?? 0);
-    if (length > 10 * 1024 * 1024) throw new Error("Media exceeds the 10 MB limit");
-    const body = Buffer.from(await response.arrayBuffer());
-    if (body.byteLength > 10 * 1024 * 1024) throw new Error("Media exceeds the 10 MB limit");
+    if (!Number.isFinite(length) || length < 0 || length > 10 * 1024 * 1024) throw new Error("Media exceeds the 10 MB limit");
+    const body = await readResponseBody(response, 10 * 1024 * 1024);
     if (mimeType.startsWith("image/")) {
       await this.socket.sendMessage(groupId, { image: body, mimetype: mimeType, ...(caption ? { caption } : {}) });
     } else if (mimeType.startsWith("audio/")) {
@@ -341,6 +344,33 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
 function getDisconnectStatusCode(error: unknown): number | undefined {
   if (!error || typeof error !== "object" || !("output" in error)) return undefined;
   return (error as { output?: { statusCode?: number } }).output?.statusCode;
+}
+
+async function readResponseBody(response: Response, maxBytes: number): Promise<Buffer> {
+  if (!response.body) {
+    const body = Buffer.from(await response.arrayBuffer());
+    if (body.byteLength > maxBytes) throw new Error("Media exceeds the 10 MB limit");
+    return body;
+  }
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = Buffer.from(value);
+      size += chunk.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error("Media exceeds the 10 MB limit");
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, size);
 }
 
 export function normalizePairingPhoneNumber(phoneNumber: string): string {

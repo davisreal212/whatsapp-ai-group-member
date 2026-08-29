@@ -49,6 +49,16 @@ export interface Store {
   memories(scopeId?: string): MemoryRecord[];
   logs(limit?: number): AuditLog[];
   actions(limit?: number): ActionRecord[];
+  pruneExpired(retentionDays: number, now?: number): Promise<PruneResult>;
+}
+
+export interface PruneResult {
+  messages: number;
+  memories: number;
+  actions: number;
+  logs: number;
+  providerUsage: number;
+  sessions: number;
 }
 
 export const emptyMetrics = (): AppMetrics => ({
@@ -281,6 +291,43 @@ export class FileStore implements Store {
     return Object.values(this.state.actions)
       .sort((a, b) => b.scheduledFor - a.scheduledFor)
       .slice(0, limit);
+  }
+
+  async pruneExpired(retentionDays: number, now = Date.now()): Promise<PruneResult> {
+    const cutoff = now - Math.max(1, retentionDays) * 24 * 60 * 60 * 1000;
+    const result: PruneResult = { messages: 0, memories: 0, actions: 0, logs: 0, providerUsage: 0, sessions: 0 };
+    for (const [id, message] of Object.entries(this.state.messages)) {
+      if (message.storedAt < cutoff) {
+        delete this.state.messages[id];
+        result.messages += 1;
+      }
+    }
+    for (const [id, memory] of Object.entries(this.state.memories)) {
+      if ((memory.expiresAt !== undefined && memory.expiresAt <= now) || memory.lastConfirmedAt < cutoff) {
+        delete this.state.memories[id];
+        result.memories += 1;
+      }
+    }
+    for (const [id, action] of Object.entries(this.state.actions)) {
+      if (action.status !== "PENDING" && (action.executedAt ?? action.scheduledFor) < cutoff) {
+        delete this.state.actions[id];
+        result.actions += 1;
+      }
+    }
+    const originalLogs = this.state.logs.length;
+    this.state.logs = this.state.logs.filter((log) => log.createdAt >= cutoff);
+    result.logs = originalLogs - this.state.logs.length;
+    const originalUsage = this.state.providerUsage.length;
+    this.state.providerUsage = this.state.providerUsage.filter((usage) => usage.createdAt >= cutoff);
+    result.providerUsage = originalUsage - this.state.providerUsage.length;
+    for (const [tokenHash, session] of Object.entries(this.state.sessions)) {
+      if (session.expiresAt <= now) {
+        delete this.state.sessions[tokenHash];
+        result.sessions += 1;
+      }
+    }
+    if (Object.values(result).some((count) => count > 0)) await this.persist();
+    return result;
   }
 
   private async persist(): Promise<void> {

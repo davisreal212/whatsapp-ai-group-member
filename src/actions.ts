@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { AppConfig, CanonicalMessage, DecisionPlan, GroupRecord } from "./types.js";
 import type { Store } from "./store.js";
 import { isDirectMessageAllowed } from "./policy.js";
+import { isSafeHttpsUrl } from "./network.js";
 
 export interface OutboundTransport {
   readonly connected: boolean;
@@ -62,7 +63,7 @@ export function validateActionPlan(
   }
   if (plan.decision === "REACT" && !plan.reaction) return { valid: false, reason: "reaction_required" };
   if (["SEND_IMAGE", "SEND_AUDIO"].includes(plan.decision)) {
-    if (!plan.mediaUrl || !plan.mediaUrl.startsWith("https://")) return { valid: false, reason: "safe_media_url_required" };
+    if (!plan.mediaUrl || !isSafeHttpsUrl(plan.mediaUrl)) return { valid: false, reason: "safe_media_url_required" };
     if (plan.decision === "SEND_IMAGE" && plan.mediaMimeType && !plan.mediaMimeType.startsWith("image/")) return { valid: false, reason: "image_mime_required" };
     if (plan.decision === "SEND_AUDIO" && plan.mediaMimeType && !plan.mediaMimeType.startsWith("audio/")) return { valid: false, reason: "audio_mime_required" };
   }
@@ -124,13 +125,12 @@ export class ActionService {
     };
     if (!(await this.store.createAction(action))) return this.rejectRuntime(sourceMessage, plan, "duplicate_action");
 
-    if (this.config.dryRun || !this.transport.connected) {
-      await this.store.updateAction(action.id, { status: "SKIPPED", error: this.config.dryRun ? "dry_run" : "transport_disconnected" });
-      await this.store.incrementMetric("actionsSkipped");
-      return { valid: true, reason: this.config.dryRun ? "dry_run" : "transport_disconnected", plan };
-    }
+    const unavailable = this.outboundSkipReason();
+    if (unavailable) return this.skipAction(action.id, sourceMessage, plan, unavailable);
 
     if (plan.delayMs > 0) await wait(plan.delayMs);
+    const delayedUnavailable = this.outboundSkipReason();
+    if (delayedUnavailable) return this.skipAction(action.id, sourceMessage, plan, delayedUnavailable);
     try {
       if (plan.decision === "REACT") {
         await this.transport.sendReaction(conversationId, plan.targetMessageId ?? sourceMessage.id, plan.reaction as string);
@@ -161,6 +161,28 @@ export class ActionService {
       createdAt: Date.now(),
     });
     return { valid: false, reason };
+  }
+
+  private outboundSkipReason(): "dry_run" | "outbound_paused" | "transport_disconnected" | undefined {
+    if (this.config.dryRun) return "dry_run";
+    if (this.config.outboundPaused) return "outbound_paused";
+    if (!this.transport.connected) return "transport_disconnected";
+    return undefined;
+  }
+
+  private async skipAction(actionId: string, message: CanonicalMessage, plan: DecisionPlan, reason: string): Promise<ActionValidation> {
+    await this.store.updateAction(actionId, { status: "SKIPPED", error: reason });
+    await this.store.incrementMetric("actionsSkipped");
+    await this.store.addLog({
+      id: randomUUID(),
+      event: "action.skipped",
+      level: "warn",
+      messageId: message.id,
+      ...(message.groupId ? { groupId: message.groupId } : {}),
+      details: { decision: plan.decision, reason },
+      createdAt: Date.now(),
+    });
+    return { valid: true, reason, plan };
   }
 }
 
