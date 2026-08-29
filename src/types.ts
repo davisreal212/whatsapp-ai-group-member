@@ -205,6 +205,7 @@ export interface DecisionPlan {
   targetMessageId?: string;
   reaction?: string;
   text?: string;
+  mediaQuery?: string;
   mediaUrl?: string;
   mediaMimeType?: string;
   delayMs: number;

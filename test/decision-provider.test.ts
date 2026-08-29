@@ -62,6 +62,30 @@ describe("decision safety helpers", () => {
     expect(isCurrentInformationQuestion(message.text)).toBe(true);
   });
 
+  it("keeps explicit image requests relevant and high priority", () => {
+    const message = { id: "image-request", chatId: "g@g.us", groupId: "g@g.us", senderId: "u", timestamp: Date.now(), type: "text" as const, text: "Send me us president picture", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+    expect(localRelevance(message, "Kola")).toMatchObject({ relevant: true, reason: "media_request", directed: true, priority: "HIGH" });
+  });
+
+  it("falls back to an image action when AI classification is unavailable", async () => {
+    const message = { id: "image-request-fallback", chatId: "g@g.us", groupId: "g@g.us", senderId: "u", timestamp: Date.now(), type: "text" as const, text: "Send me us president picture", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+    const group: GroupRecord = { id: "g@g.us", whatsappGroupId: "g@g.us", subject: "Test", participantCount: 1, isAdmin: true, enabled: true, aiPaused: false, lastSeenAt: Date.now() };
+    const result = await new DecisionEngine({ classify: async () => undefined } as unknown as ProviderRouter).decide(message, group, { group, recentMessages: [], memories: [], personality: loadConfig({ NODE_ENV: "test" }).personality }, { botName: "Kola" });
+    expect(result.plan).toMatchObject({ decision: "SEND_IMAGE", needsMedia: true, reason: "local_media_request" });
+  });
+
+  it("does not let an AI ignore explicit image requests", async () => {
+    const message = { id: "image-request-ignore", chatId: "g@g.us", groupId: "g@g.us", senderId: "u", timestamp: Date.now(), type: "text" as const, text: "Show me a photo of the president", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+    const group: GroupRecord = { id: "g@g.us", whatsappGroupId: "g@g.us", subject: "Test", participantCount: 1, isAdmin: true, enabled: true, aiPaused: false, lastSeenAt: Date.now() };
+    const result = await new DecisionEngine({ classify: async () => ({ decision: "IGNORE", confidence: 1, reason: "quiet", delayMs: 0, needsWeb: false, needsMedia: false, responseStyle: "short_casual" as const }) } as unknown as ProviderRouter).decide(message, group, { group, recentMessages: [], memories: [], personality: loadConfig({ NODE_ENV: "test" }).personality }, { botName: "Kola" });
+    expect(result.plan).toMatchObject({ decision: "SEND_IMAGE", needsMedia: true, reason: "local_media_request" });
+  });
+
+  it("treats inbound stickers as relevant media", () => {
+    const message = { id: "sticker-1", chatId: "g@g.us", groupId: "g@g.us", senderId: "u", timestamp: Date.now(), type: "sticker" as const, mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+    expect(localRelevance(message, "Kola")).toMatchObject({ relevant: true, reason: "sticker_message" });
+  });
+
   it("recognizes plain-name and LID-based direct addressing", () => {
     const message = { id: "2", chatId: "g@g.us", groupId: "g@g.us", senderId: "u", timestamp: Date.now(), type: "text" as const, text: "Kola, what do you think?", mentionedIds: ["bot-lid@lid"], isGroup: true, isStatus: false, isFromBot: false };
     expect(localRelevance(message, "Kola", "bot@s.whatsapp.net", 0.35, ["bot-lid@lid"]).directed).toBe(true);

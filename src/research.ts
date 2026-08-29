@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { AppConfig, EvidenceBundle, EvidenceSource } from "./types.js";
 import type { Store } from "./store.js";
+import { isSafeHttpsUrl } from "./network.js";
 
 export interface SearchResult {
   url?: string;
@@ -13,6 +14,18 @@ export interface WebResearchProvider {
   readonly name: string;
   readonly available: boolean;
   search(query: string, maxResults: number): Promise<SearchResult[]>;
+}
+
+export interface MediaSearchResult {
+  url: string;
+  title?: string;
+  mimeType?: string;
+}
+
+export interface MediaSearchProvider {
+  readonly name: string;
+  readonly available: boolean;
+  search(query: string, maxResults: number): Promise<MediaSearchResult[]>;
 }
 
 export class TavilyProvider implements WebResearchProvider {
@@ -54,12 +67,112 @@ export class DuckDuckGoProvider implements WebResearchProvider {
   }
 }
 
+export class DuckDuckGoImageProvider implements MediaSearchProvider {
+  readonly name = "duckduckgo-images";
+  readonly available = true;
+
+  async search(query: string, maxResults: number): Promise<MediaSearchResult[]> {
+    const searchUrl = `https://duckduckgo.com/?q=${encodeURIComponent(query)}&iax=images&ia=images`;
+    const page = await fetch(searchUrl, {
+      signal: AbortSignal.timeout(30_000),
+      headers: { accept: "text/html", "user-agent": "Mozilla/5.0" },
+    });
+    if (!page.ok) throw new Error(`DuckDuckGo image page returned HTTP ${page.status}`);
+    const html = await page.text();
+    const vqd = html.match(/vqd=['"]?([\d-]+)/i)?.[1] ?? html.match(/"vqd"\s*:\s*"([\d-]+)"/i)?.[1];
+    if (!vqd) throw new Error("DuckDuckGo image token was not found");
+
+    const response = await fetch(`https://duckduckgo.com/i.js?l=us-en&o=json&q=${encodeURIComponent(query)}&vqd=${encodeURIComponent(vqd)}&f=,,,,,&p=1`, {
+      signal: AbortSignal.timeout(30_000),
+      headers: {
+        accept: "application/json",
+        referer: searchUrl,
+        "user-agent": "Mozilla/5.0",
+      },
+    });
+    if (!response.ok) throw new Error(`DuckDuckGo image search returned HTTP ${response.status}`);
+    const body = await response.json() as { results?: Array<{ image?: unknown; title?: unknown; thumbnail?: unknown }> };
+    return (body.results ?? [])
+      .map((result) => ({
+        url: typeof result.image === "string" ? result.image : "",
+        ...(typeof result.title === "string" ? { title: stripHtml(result.title) } : {}),
+      }))
+      .filter((result): result is MediaSearchResult => isSafeHttpsUrl(result.url))
+      .slice(0, maxResults);
+  }
+}
+
+export class WikimediaImageProvider implements MediaSearchProvider {
+  readonly name = "wikimedia-images";
+  readonly available = true;
+
+  async search(query: string, maxResults: number): Promise<MediaSearchResult[]> {
+    const params = new URLSearchParams({
+      action: "query",
+      generator: "search",
+      gsrsearch: query,
+      gsrnamespace: "6",
+      gsrlimit: String(Math.min(10, Math.max(1, maxResults))),
+      prop: "imageinfo",
+      iiprop: "url|mime",
+      iiurlwidth: "1600",
+      format: "json",
+      origin: "*",
+    });
+    const response = await fetch(`https://commons.wikimedia.org/w/api.php?${params}`, { signal: AbortSignal.timeout(30_000), headers: { accept: "application/json" } });
+    if (!response.ok) throw new Error(`Wikimedia image search returned HTTP ${response.status}`);
+    const body = await response.json() as { query?: { pages?: Record<string, { title?: unknown; imageinfo?: Array<{ thumburl?: unknown; url?: unknown; mime?: unknown }> }> } };
+    return Object.values(body.query?.pages ?? [])
+      .map((page) => {
+        const info = page.imageinfo?.[0];
+        const url = typeof info?.thumburl === "string" ? info.thumburl : typeof info?.url === "string" ? info.url : "";
+        return {
+          url,
+          ...(typeof page.title === "string" ? { title: page.title.replace(/^File:/i, "") } : {}),
+          ...(typeof info?.mime === "string" ? { mimeType: info.mime.toLowerCase() } : {}),
+        };
+      })
+      .filter((result): result is MediaSearchResult => isSafeHttpsUrl(result.url) && Boolean(result.mimeType?.startsWith("image/") ?? true))
+      .slice(0, maxResults);
+  }
+}
+
 export class ResearchService {
   private readonly cache = new Map<string, { bundle: EvidenceBundle; expiresAt: number }>();
+  private readonly mediaCache = new Map<string, { results: MediaSearchResult[]; expiresAt: number }>();
   private readonly providers: WebResearchProvider[];
+  private readonly mediaProviders: MediaSearchProvider[];
 
-  constructor(private readonly store: Store, provider: WebResearchProvider | WebResearchProvider[]) {
+  constructor(private readonly store: Store, provider: WebResearchProvider | WebResearchProvider[], mediaProviders: MediaSearchProvider[] = [new DuckDuckGoImageProvider(), new WikimediaImageProvider()]) {
     this.providers = Array.isArray(provider) ? provider : [provider];
+    this.mediaProviders = mediaProviders;
+  }
+
+  async searchMedia(query: string, maxResults: number): Promise<MediaSearchResult[]> {
+    const normalizedQuery = query.trim().replace(/\s+/g, " ").slice(0, 300);
+    if (!normalizedQuery) return [];
+    const cacheKey = createHash("sha256").update(normalizedQuery.toLowerCase()).digest("hex");
+    const cached = this.mediaCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.results;
+
+    const failures: string[] = [];
+    for (const provider of this.mediaProviders.filter((item) => item.available)) {
+      try {
+        const results = (await provider.search(normalizedQuery, maxResults))
+          .filter((result) => isSafeHttpsUrl(result.url))
+          .slice(0, maxResults);
+        await this.store.incrementMetric("webSearches");
+        if (!results.length) continue;
+        this.mediaCache.set(cacheKey, { results, expiresAt: Date.now() + 10 * 60_000 });
+        return results;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "unknown error";
+        failures.push(`${provider.name}: ${message}`);
+        await this.store.addLog({ id: crypto.randomUUID(), event: "media_search.failure", level: "warn", details: { provider: provider.name, error: message }, createdAt: Date.now() });
+      }
+    }
+    if (failures.length) await this.store.addLog({ id: crypto.randomUUID(), event: "media_search.unavailable", level: "warn", details: { providers: failures.map((failure) => failure.split(":", 1)[0]) }, createdAt: Date.now() });
+    return [];
   }
 
   async research(question: string, maxResults: number): Promise<EvidenceBundle> {

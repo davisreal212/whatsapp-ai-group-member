@@ -6,7 +6,7 @@ import type { AppConfig, CanonicalMessage, GroupRecord, InboundJobRecord, TaskRe
 import { MemoryService } from "./memory.js";
 import { isCurrentInformationQuestion, evaluateInboundPolicy } from "./policy.js";
 import { ProviderRouter, type ProviderInput } from "./providers.js";
-import { DuckDuckGoProvider, ResearchService, TavilyProvider } from "./research.js";
+import { DuckDuckGoImageProvider, DuckDuckGoProvider, ResearchService, TavilyProvider, WikimediaImageProvider } from "./research.js";
 import type { Store } from "./store.js";
 import { normalizeMessage } from "./normalize.js";
 import type { DiscoveredDirectMessage, DiscoveredGroup } from "./whatsapp.js";
@@ -17,6 +17,7 @@ import { KeyedJobQueue } from "./queue.js";
 import { formatNigeriaDateTime, NIGERIA_TIME_ZONE } from "./time.js";
 import { groupActivityState, groupParticipation } from "./participation.js";
 import type { ParticipationSettings } from "./types.js";
+import { isSafeHttpsUrl } from "./network.js";
 
 export class BotRuntime {
   readonly memory: MemoryService;
@@ -37,7 +38,7 @@ export class BotRuntime {
   ) {
     this.memory = new MemoryService(store);
     this.providers = new ProviderRouter(store, config);
-    this.research = new ResearchService(store, [new TavilyProvider(config.tavilyApiKey), new DuckDuckGoProvider()]);
+    this.research = new ResearchService(store, [new TavilyProvider(config.tavilyApiKey), new DuckDuckGoProvider()], [new DuckDuckGoImageProvider(), new WikimediaImageProvider()]);
     this.decisions = new DecisionEngine(this.providers);
     this.actions = new ActionService(store, config, transport);
     this.tasks = new TaskService(store, config, transport);
@@ -174,11 +175,11 @@ export class BotRuntime {
     } else if (message.type === "audio") {
       message = { ...message, transcriptConfidence: 0 };
     }
-    if (message.type === "image" && message.media?.hasDownloadableContent && loadMedia) {
+    if (["image", "sticker"].includes(message.type) && message.media?.hasDownloadableContent && loadMedia) {
       try {
         const vision = await this.media.analyzeImage(loadMedia, message.chatId);
         message = { ...message, text: [message.text, vision.description, vision.ocrText].filter(Boolean).join("\n"), media: { ...message.media, description: vision.description, ...(vision.ocrText ? { ocrText: vision.ocrText } : {}) } };
-        await this.log("media.image_analyzed", "info", { type: "image", confidence: vision.confidence, ocr: Boolean(vision.ocrText) }, message);
+        await this.log("media.image_analyzed", "info", { type: message.type, confidence: vision.confidence, ocr: Boolean(vision.ocrText) }, message);
       } catch (error) {
         await this.log("media.image_analysis_failed", "warn", { type: "image", error: error instanceof Error ? error.message : "unknown" }, message);
       }
@@ -228,6 +229,7 @@ export class BotRuntime {
       decision: result.plan.decision,
       decisionReason: result.plan.reason,
       searchRequired: false,
+      mediaSearchRequired: false,
       context: { recentMessages: context.recentMessages.length, memories: context.memories.length, recentActions: context.recentActions?.length ?? 0, memberProfile: Boolean(context.member) },
       recordedAt: Date.now(),
     };
@@ -250,12 +252,31 @@ export class BotRuntime {
       }
     }
     const currentQuestion = isCurrentInformationQuestion(message.text ?? "");
-    this.lastDecisionDiagnostics = { ...this.lastDecisionDiagnostics, searchRequired: Boolean(plan.needsWeb || currentQuestion) };
+    this.lastDecisionDiagnostics = { ...this.lastDecisionDiagnostics, searchRequired: Boolean(plan.needsWeb || currentQuestion), mediaSearchRequired: plan.decision === "SEND_IMAGE" };
     const evidence = plan.decision !== "IGNORE" && (plan.needsWeb || currentQuestion)
       ? await this.research.research(message.text ?? "", this.config.tavilyMaxResults)
       : undefined;
     if (plan.needsWeb || currentQuestion) {
       plan = { ...plan, needsWeb: true };
+    }
+    if (plan.decision === "SEND_IMAGE" && (!plan.mediaUrl || !isSafeHttpsUrl(plan.mediaUrl) || !messageContainsUrl(message.text, plan.mediaUrl))) {
+      const mediaQuery = plan.mediaQuery ?? mediaSearchQuery(message.text ?? message.media?.caption ?? "");
+      const media = await this.research.searchMedia(mediaQuery, this.config.tavilyMaxResults);
+      const candidate = media[0];
+      if (candidate) {
+        plan = { ...plan, mediaUrl: candidate.url, mediaMimeType: candidate.mimeType ?? "image/jpeg", needsMedia: true };
+        await this.log("media.search_succeeded", "info", { query: mediaQuery, providerUrl: candidate.url }, message);
+      } else {
+        plan = {
+          ...plan,
+          decision: "REPLY",
+          text: "I couldn't find a safe image for that request.",
+          mediaUrl: undefined,
+          mediaMimeType: undefined,
+          needsMedia: false,
+        };
+        await this.log("media.search_failed", "warn", { query: mediaQuery }, message);
+      }
     }
     if (plan.decision !== "IGNORE" && !plan.text && !["REACT", "SEND_IMAGE", "SEND_AUDIO"].includes(plan.decision)) {
       const input: ProviderInput = {
@@ -499,4 +520,18 @@ function isTextDocument(mimeType?: string): boolean {
 
 function waitFor(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function mediaSearchQuery(value: string): string {
+  return value
+    .replace(/\b(?:please\s+)?(?:send|show|find|get|search|look\s+up)\s+(?:me\s+)?/gi, "")
+    .replace(/\b(?:a|an|the)\s+(?:picture|image|photo|meme|gif)\s+(?:of|about)\s+/gi, "")
+    .replace(/\b(?:picture|image|photo|meme|gif)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 300) || value.trim().slice(0, 300);
+}
+
+function messageContainsUrl(text: string | undefined, candidate: string): boolean {
+  return Boolean(text && [...text.matchAll(/https:\/\/[^\s<>]+/gi)].some((match) => match[0] === candidate));
 }

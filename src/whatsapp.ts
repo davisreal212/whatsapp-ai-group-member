@@ -257,11 +257,13 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     const responseMimeType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
     const expectedKind = mimeType.split("/", 1)[0]?.toLowerCase();
     if (responseMimeType && expectedKind && !responseMimeType.startsWith(`${expectedKind}/`)) throw new Error("Media content type does not match the requested action");
+    const resolvedMimeType = responseMimeType ?? mimeType;
+    if (resolvedMimeType.startsWith("image/") && !["image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif"].includes(resolvedMimeType)) throw new Error("Unsupported image format");
     const length = Number(response.headers.get("content-length") ?? 0);
     if (!Number.isFinite(length) || length < 0 || length > this.maxMediaBytes) throw new Error("Media exceeds the configured size limit");
     const body = await readResponseBody(response, this.maxMediaBytes);
     if (mimeType.startsWith("image/")) {
-      await this.socket.sendMessage(groupId, { image: body, mimetype: mimeType, ...(caption ? { caption } : {}) }, sendOptions);
+      await this.socket.sendMessage(groupId, { image: body, mimetype: resolvedMimeType, ...(caption ? { caption } : {}) }, sendOptions);
     } else if (mimeType.startsWith("audio/")) {
       await this.socket.sendMessage(groupId, { audio: body, mimetype: mimeType, ptt: true, ...(caption ? { caption } : {}) }, sendOptions);
     } else {
@@ -372,7 +374,7 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
       if (size > this.maxMediaBytes) throw new Error("Media exceeds the configured size limit");
       chunks.push(value);
     }
-    return { data: Buffer.concat(chunks, size), mimeType: typeof found.payload.mimetype === "string" ? found.payload.mimetype : `${found.type}/ogg` };
+    return { data: Buffer.concat(chunks, size), mimeType: typeof found.payload.mimetype === "string" ? found.payload.mimetype : found.type === "sticker" ? "image/webp" : `${found.type}/ogg` };
   }
 
   private async requestPairingCode(socket: WASocket, phoneNumber: string): Promise<void> {

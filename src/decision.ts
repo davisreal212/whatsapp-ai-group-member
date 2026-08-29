@@ -11,6 +11,7 @@ const decisionSchema = z.object({
   targetMessageId: z.string().min(1).max(200).optional(),
   reaction: z.string().min(1).max(8).optional(),
   text: z.string().max(2000).optional(),
+  mediaQuery: z.string().trim().min(1).max(300).optional(),
   mediaUrl: z.string().url().optional(),
   mediaMimeType: z.string().max(100).optional(),
   delayMs: z.coerce.number().int().min(0).max(60_000).default(0),
@@ -36,6 +37,7 @@ export function parseDecisionPlan(input: string | unknown): DecisionPlan {
     ...(parsed.targetMessageId ? { targetMessageId: parsed.targetMessageId } : {}),
     ...(parsed.reaction ? { reaction: parsed.reaction } : {}),
     ...(parsed.text ? { text: parsed.text } : {}),
+    ...(parsed.mediaQuery ? { mediaQuery: parsed.mediaQuery } : {}),
     ...(parsed.mediaUrl ? { mediaUrl: parsed.mediaUrl } : {}),
     ...(parsed.mediaMimeType ? { mediaMimeType: parsed.mediaMimeType } : {}),
     delayMs: parsed.delayMs,
@@ -62,6 +64,7 @@ export function localRelevance(message: CanonicalMessage, botName: string, botJi
   const text = message.text ?? "";
   if (!message.isGroup && alwaysReplyToAllowedDm) return { relevant: true, reason: "allowlisted_dm", directed: true };
   const signals = participationSignals(message, botName, botJid, botJids);
+  if (isMediaRequestText(text)) return { relevant: true, reason: "media_request", ...signals, directed: true, priority: "HIGH" };
   if (signals.directed) return { relevant: true, reason: "directed_to_bot", ...signals };
   if (message.quotedMessageId) return { relevant: true, reason: "reply_or_quote", ...signals };
   if (/[?؟]\s*$/.test(text) || /\b(can|could|should|would|what|when|where|why|how|is|are|do|does)\b/i.test(text)) {
@@ -72,6 +75,7 @@ export function localRelevance(message: CanonicalMessage, botName: string, botJi
   }
   if (message.type === "audio") return { relevant: true, reason: "audio_message", ...signals };
   if (message.type === "image") return { relevant: true, reason: "image_message", ...signals };
+  if (message.type === "sticker") return { relevant: true, reason: "sticker_message", ...signals };
   if (message.isGroup && /\b(?:good\s+(?:morning|afternoon|evening|night)|morning\s+(?:all|everyone|y['’]?all)|hello|hi)\b/i.test(text)) {
     return { relevant: true, reason: "group_greeting", ...signals };
   }
@@ -124,31 +128,57 @@ export class DecisionEngine {
     const safePlan = plan && plan.targetMessageId && plan.targetMessageId !== message.id
       ? { ...plan, targetMessageId: message.id }
       : plan;
-    const responsePlan = safePlan && local.directed && safePlan.decision === "IGNORE"
+    const mediaRequest = isMediaRequestText(message.text ?? "");
+    const responsePlan = safePlan && local.directed && safePlan.decision === "IGNORE" && !mediaRequest
       ? { ...safePlan, decision: "REPLY" as const, reason: "Directly addressed; generate a safe response." }
       : safePlan;
-    if (!responsePlan) return { plan: ignorePlan("No healthy AI provider is configured; choosing silence."), local, usedAi: false };
+    if (!responsePlan) {
+      return {
+        plan: isMediaRequestText(message.text ?? "") ? mediaRequestPlan() : ignorePlan("No healthy AI provider is configured; choosing silence."),
+        local,
+        usedAi: false,
+      };
+    }
+    const safeResponsePlan = mediaRequest && responsePlan.decision === "IGNORE" ? mediaRequestPlan() : responsePlan;
     const participation = config.participation ?? { ...DEFAULT_PARTICIPATION };
     const directReply = local.directReply === true;
     const directMention = local.directMention === true;
     const bypassCooldown = shouldBypassCooldown({ directReply, directMention }, participation);
     const delayMs = directReply
-      ? Math.max(responsePlan.delayMs, naturalDelay(participation.directReplyDelayMinMs, participation.directReplyDelayMaxMs))
+      ? Math.max(safeResponsePlan.delayMs, naturalDelay(participation.directReplyDelayMinMs, participation.directReplyDelayMaxMs))
       : directMention
-        ? Math.max(responsePlan.delayMs, naturalDelay(participation.directMentionDelayMinMs, participation.directMentionDelayMaxMs))
-        : responsePlan.delayMs;
+        ? Math.max(safeResponsePlan.delayMs, naturalDelay(participation.directMentionDelayMinMs, participation.directMentionDelayMaxMs))
+        : safeResponsePlan.delayMs;
     return {
       plan: {
-        ...responsePlan,
+        ...safeResponsePlan,
         delayMs,
-        priority: responsePlan.priority ?? local.priority ?? (local.directed ? "HIGH" : "NORMAL"),
-        bypassCooldown: responsePlan.bypassCooldown ?? bypassCooldown,
-        mentionAll: responsePlan.mentionAll ?? local.mentionAll ?? false,
+        needsMedia: safeResponsePlan.needsMedia || safeResponsePlan.decision === "SEND_IMAGE",
+        priority: safeResponsePlan.priority ?? local.priority ?? (local.directed ? "HIGH" : "NORMAL"),
+        bypassCooldown: safeResponsePlan.bypassCooldown ?? bypassCooldown,
+        mentionAll: safeResponsePlan.mentionAll ?? local.mentionAll ?? false,
       },
       local,
       usedAi: true,
     };
   }
+}
+
+export function isMediaRequestText(text: string): boolean {
+  return /\b(?:send|show|find|get|search|look\s+up)\b[\s\S]{0,100}\b(?:picture|image|photo|meme|gif)\b/i.test(text)
+    || /\b(?:picture|image|photo|meme|gif)\s+(?:of|about)\b/i.test(text);
+}
+
+function mediaRequestPlan(): DecisionPlan {
+  return {
+    decision: "SEND_IMAGE",
+    confidence: 1,
+    reason: "local_media_request",
+    delayMs: 0,
+    needsWeb: false,
+    needsMedia: true,
+    responseStyle: "short_casual",
+  };
 }
 
 export function ignorePlan(reason: string): DecisionPlan {

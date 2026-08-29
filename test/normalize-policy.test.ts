@@ -64,6 +64,17 @@ describe("message normalization and inbound policy", () => {
     });
   });
 
+  it("preserves downloadable sticker metadata", () => {
+    const message = normalizeMessage({
+      key: { remoteJid: "123@g.us", id: "sticker-1", participant: "234@s.whatsapp.net" },
+      message: { stickerMessage: { mimetype: "image/webp", fileLength: 1234, mediaKey: "key", directPath: "/media" } },
+    });
+    expect(message).toMatchObject({
+      type: "sticker",
+      media: { mimeType: "image/webp", fileLength: 1234, hasDownloadableContent: true },
+    });
+  });
+
   it("rejects DMs before any group or AI processing", () => {
     const message = {
       id: "dm-1", chatId: "234@s.whatsapp.net", senderId: "234@s.whatsapp.net", timestamp: Date.now(), type: "text" as const,

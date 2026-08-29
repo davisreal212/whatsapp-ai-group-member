@@ -11,7 +11,7 @@ A safety-first WhatsApp group agent based on the supplied implementation manual.
 - Voice-note transcription through a cached, fallback-ready speech provider, optional Gemini image description/OCR, and optional TTS audio replies with OpenAI/ElevenLabs fallback and text fallback.
 - Local relevance gates so casual chatter can be ignored without consuming AI quota.
 - Phoenix FastAPI (`deepseek-v4-flash` and `glm-5.3`), Gemini, Groq, and OpenRouter adapters behind one provider router with circuit health and cooldowns.
-- Tavily plus no-key DuckDuckGo research providers with evidence bundles and an unverified fallback.
+- Tavily plus no-key DuckDuckGo research providers with evidence bundles and an unverified fallback, plus DuckDuckGo/Wikimedia image search for requested pictures and memes.
 - CoinGecko, optional CoinMarketCap, and Coinbase price-provider fallback for alerts.
 - Lightweight member communication observations with confidence and forgetting-ready timestamps.
 - Structured action plans, same-group target validation, per-minute/hour/day limits, quiet hours, cooldowns, dry-run mode, idempotency, retry, and pending-action recovery.
