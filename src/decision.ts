@@ -70,6 +70,9 @@ export function localRelevance(message: CanonicalMessage, botName: string, botJi
   }
   if (message.type === "audio") return { relevant: true, reason: "audio_message", directed: false };
   if (message.type === "image") return { relevant: true, reason: "image_message", directed: false };
+  if (message.isGroup && /\b(?:good\s+(?:morning|afternoon|evening|night)|morning\s+(?:all|everyone|y['’]?all)|hello|hi)\b/i.test(text)) {
+    return { relevant: true, reason: "group_greeting", directed: false };
+  }
   if (message.isGroup && talkativeness >= 0.35 && text.trim().length >= 10) {
     return { relevant: true, reason: "group_conversation", directed: false };
   }

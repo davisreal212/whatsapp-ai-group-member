@@ -34,17 +34,17 @@ async function setup() {
 describe("validated outbound actions", () => {
   it("sends only a validated reply and suppresses an idempotent duplicate", async () => {
     const { store, config } = await setup();
-    const sent: string[] = [];
+    const sent: Array<{ text: string; quoted?: string }> = [];
     const transport = {
       connected: true,
-      sendText: async (_groupId: string, text: string) => { sent.push(text); },
+      sendText: async (_groupId: string, text: string, quoted?: string) => { sent.push({ text, ...(quoted ? { quoted } : {}) }); },
       sendReaction: async () => {},
       sendMedia: async () => {},
     };
     const service = new ActionService(store, config, transport);
-    const plan = { decision: "REPLY_QUOTED" as const, confidence: 0.9, reason: "direct reply", targetMessageId: source.id, text: "I checked.", delayMs: 0, needsWeb: false, needsMedia: false, responseStyle: "short_casual" as const };
+    const plan = { decision: "REPLY" as const, confidence: 0.9, reason: "direct reply", text: "I checked.", delayMs: 0, needsWeb: false, needsMedia: false, responseStyle: "short_casual" as const };
     expect((await service.execute(plan, source, group)).reason).toBe("sent");
-    expect(sent).toEqual(["I checked."]);
+    expect(sent).toEqual([{ text: "I checked.", quoted: source.id }]);
     expect((await service.execute(plan, source, group)).reason).toBe("duplicate_action");
   });
 
@@ -152,6 +152,21 @@ describe("validated outbound actions", () => {
     const plan = { decision: "SEND_AUDIO" as const, confidence: 1, reason: "voice reply", targetMessageId: source.id, delayMs: 0, needsWeb: false, needsMedia: true, responseStyle: "short_casual" as const };
     expect((await service.execute(plan, source, group, { data: Buffer.from("audio"), mimeType: "audio/ogg" })).reason).toBe("sent");
     expect(sent).toEqual([{ chatId: group.id, bytes: 5, quoted: source.id }]);
+  });
+
+  it("quotes URL media replies", async () => {
+    const { store, config } = await setup();
+    let quoted: string | undefined;
+    const transport = {
+      connected: true,
+      sendText: async () => {},
+      sendReaction: async () => {},
+      sendMedia: async (_chatId: string, _url: string, _mimeType: string, _caption?: string, quotedMessageId?: string) => { quoted = quotedMessageId; },
+    };
+    const service = new ActionService(store, config, transport);
+    const plan = { decision: "SEND_IMAGE" as const, confidence: 1, reason: "image reply", mediaUrl: "https://example.com/image.png", mediaMimeType: "image/png", text: "Here it is.", delayMs: 0, needsWeb: false, needsMedia: true, responseStyle: "short_casual" as const };
+    expect((await service.execute(plan, source, group)).reason).toBe("sent");
+    expect(quoted).toBe(source.id);
   });
 
   it("rejects private and credential-bearing media URLs", async () => {

@@ -243,8 +243,10 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     await this.socket.sendMessage(groupId, { react: { text: reaction, key: raw.key } });
   }
 
-  async sendMedia(groupId: string, mediaUrl: string, mimeType: string, caption?: string): Promise<void> {
+  async sendMedia(groupId: string, mediaUrl: string, mimeType: string, caption?: string, quotedMessageId?: string): Promise<void> {
     if (!this.socket) throw new Error("WhatsApp is not connected");
+    const quoted = quotedMessageId ? this.rawMessages.get(quotedMessageId) : undefined;
+    const sendOptions = quoted ? { quoted } : undefined;
     const response = await fetchSafeMedia(mediaUrl, { signal: AbortSignal.timeout(30_000) });
     if (!response.ok) throw new Error(`Media source returned HTTP ${response.status}`);
     const responseMimeType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
@@ -254,9 +256,9 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     if (!Number.isFinite(length) || length < 0 || length > this.maxMediaBytes) throw new Error("Media exceeds the configured size limit");
     const body = await readResponseBody(response, this.maxMediaBytes);
     if (mimeType.startsWith("image/")) {
-      await this.socket.sendMessage(groupId, { image: body, mimetype: mimeType, ...(caption ? { caption } : {}) });
+      await this.socket.sendMessage(groupId, { image: body, mimetype: mimeType, ...(caption ? { caption } : {}) }, sendOptions);
     } else if (mimeType.startsWith("audio/")) {
-      await this.socket.sendMessage(groupId, { audio: body, mimetype: mimeType, ptt: true, ...(caption ? { caption } : {}) });
+      await this.socket.sendMessage(groupId, { audio: body, mimetype: mimeType, ptt: true, ...(caption ? { caption } : {}) }, sendOptions);
     } else {
       throw new Error("Unsupported media type");
     }

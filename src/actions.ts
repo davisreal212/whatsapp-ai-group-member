@@ -11,7 +11,7 @@ export interface OutboundTransport {
   queueStats?(): QueueStats;
   sendText(groupId: string, text: string, quotedMessageId?: string, mentionedIds?: string[]): Promise<void>;
   sendReaction(groupId: string, messageId: string, reaction: string): Promise<void>;
-  sendMedia(groupId: string, mediaUrl: string, mimeType: string, caption?: string): Promise<void>;
+  sendMedia(groupId: string, mediaUrl: string, mimeType: string, caption?: string, quotedMessageId?: string): Promise<void>;
   sendAudioBuffer?(groupId: string, data: Buffer, mimeType: string, caption?: string, quotedMessageId?: string): Promise<void>;
 }
 
@@ -136,6 +136,7 @@ export class ActionService {
     }
 
     const conversationId = sourceMessage.groupId ?? sourceMessage.chatId;
+    const replyTargetMessageId = plan.targetMessageId ?? sourceMessage.id;
     const idempotencyKey = `${conversationId}:${sourceMessage.id}:${plan.decision}`;
     const now = Date.now();
     const recentActions = this.store.actions(1000).filter((action) => action.groupId === conversationId);
@@ -220,12 +221,12 @@ export class ActionService {
         await this.transport.sendReaction(conversationId, plan.targetMessageId ?? sourceMessage.id, plan.reaction as string);
       } else if (plan.decision === "SEND_IMAGE" || plan.decision === "SEND_AUDIO") {
         if (plan.decision === "SEND_AUDIO" && generatedAudio && this.transport.sendAudioBuffer) {
-          await this.transport.sendAudioBuffer(conversationId, generatedAudio.data, generatedAudio.mimeType, undefined, plan.targetMessageId ?? sourceMessage.id);
+          await this.transport.sendAudioBuffer(conversationId, generatedAudio.data, generatedAudio.mimeType, undefined, replyTargetMessageId);
         } else {
-          await this.transport.sendMedia(conversationId, plan.mediaUrl as string, plan.mediaMimeType ?? (plan.decision === "SEND_IMAGE" ? "image/jpeg" : "audio/ogg"), plan.text);
+          await this.transport.sendMedia(conversationId, plan.mediaUrl as string, plan.mediaMimeType ?? (plan.decision === "SEND_IMAGE" ? "image/jpeg" : "audio/ogg"), plan.text, replyTargetMessageId);
         }
       } else {
-        await this.transport.sendText(conversationId, plan.text as string, ["REPLY_QUOTED", "MENTION_REPLY"].includes(plan.decision) ? plan.targetMessageId ?? sourceMessage.id : undefined, plan.decision === "MENTION_REPLY" ? [sourceMessage.senderId] : undefined);
+        await this.transport.sendText(conversationId, plan.text as string, ["REPLY", "REPLY_QUOTED", "MENTION_REPLY"].includes(plan.decision) ? replyTargetMessageId : undefined, plan.decision === "MENTION_REPLY" ? [sourceMessage.senderId] : undefined);
       }
       await this.store.updateAction(id, { status: "SENT", executedAt: Date.now(), error: undefined, nextAttemptAt: undefined });
       await this.store.incrementMetric("actionsSent");

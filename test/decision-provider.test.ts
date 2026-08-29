@@ -77,6 +77,11 @@ describe("decision safety helpers", () => {
     expect(localRelevance(message, "Kola", undefined, 0.35).reason).toBe("group_conversation");
   });
 
+  it("lets group greetings reach the classifier", () => {
+    const message = { id: "greeting", chatId: "g@g.us", groupId: "g@g.us", senderId: "u", timestamp: Date.now(), type: "text" as const, text: "Good morning y'all", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+    expect(localRelevance(message, "Kola", undefined, 0.1).reason).toBe("group_greeting");
+  });
+
   it("turns a provider ignore into a response plan for a direct address", async () => {
     const message = { id: "direct-message", chatId: "g@g.us", groupId: "g@g.us", senderId: "member", timestamp: Date.now(), type: "text" as const, text: "Kola, help me", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
     const group: GroupRecord = { id: "g@g.us", whatsappGroupId: "g@g.us", subject: "Test", participantCount: 1, isAdmin: true, enabled: true, aiPaused: false, lastSeenAt: Date.now() };
