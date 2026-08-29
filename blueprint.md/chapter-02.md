@@ -88,9 +88,9 @@ The frontend communicates with the backend through authenticated API endpoints.
 
 Use:
 
-PostgreSQL
+**Neon (managed PostgreSQL)**
 
-PostgreSQL will contain durable application state.
+Neon provides the managed PostgreSQL database for the application. PostgreSQL will contain durable application state.
 
 It should store:
 
