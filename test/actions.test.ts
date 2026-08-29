@@ -48,6 +48,39 @@ describe("validated outbound actions", () => {
     expect((await service.execute(plan, source, group)).reason).toBe("duplicate_action");
   });
 
+  it("replays a pending action after the runtime starts", async () => {
+    const { store, config } = await setup();
+    const sent: string[] = [];
+    const transport = {
+      connected: true,
+      sendText: async (_groupId: string, text: string) => { sent.push(text); },
+      sendReaction: async () => {},
+      sendMedia: async () => {},
+    };
+    await store.createAction({ id: "pending-1", idempotencyKey: "pending-key", groupId: group.id, sourceMessageId: source.id, actionType: "REPLY_QUOTED", targetMessageId: source.id, payload: { text: "Recovered." }, scheduledFor: Date.now(), status: "PENDING" });
+    const service = new ActionService(store, config, transport);
+    service.start();
+    await service.stop();
+    expect(sent).toEqual(["Recovered."]);
+    expect(store.action("pending-1")?.status).toBe("SENT");
+  });
+
+  it("moves a repeatedly failing action to the dead-letter state", async () => {
+    const { store, config } = await setup();
+    config.actionMaxAttempts = 1;
+    const transport = {
+      connected: true,
+      sendText: async () => { throw new Error("temporary failure"); },
+      sendReaction: async () => {},
+      sendMedia: async () => {},
+    };
+    const service = new ActionService(store, config, transport);
+    const plan = { decision: "REPLY" as const, confidence: 1, reason: "test", text: "Will fail", delayMs: 0, needsWeb: false, needsMedia: false, responseStyle: "short_casual" as const };
+    expect((await service.execute(plan, source, group)).reason).toBe("temporary failure");
+    expect(store.actions()[0]?.status).toBe("FAILED");
+    expect(store.actions()[0]?.attempts).toBe(1);
+  });
+
   it("rejects a target message from a different group", async () => {
     const { store, config } = await setup();
     const transport = { connected: true, sendText: async () => {}, sendReaction: async () => {}, sendMedia: async () => {} };

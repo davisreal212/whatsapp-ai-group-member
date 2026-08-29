@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { AppConfig, CanonicalMessage, DecisionPlan, GroupRecord } from "./types.js";
 import type { ContextSnapshot } from "./memory.js";
 import type { ProviderRouter, ProviderInput } from "./providers.js";
+import { sameWhatsAppIdentity } from "./identity.js";
 
 const decisionSchema = z.object({
   decision: z.enum(["IGNORE", "REACT", "REPLY", "REPLY_QUOTED", "MENTION_REPLY", "SEND_IMAGE", "SEND_AUDIO"]),
@@ -66,6 +67,8 @@ export function localRelevance(message: CanonicalMessage, botName: string, botJi
   if (/\b(is this true|latest|breaking|current price|today)\b/i.test(text)) {
     return { relevant: true, reason: "current_information", directed: false };
   }
+  if (message.type === "audio") return { relevant: true, reason: "audio_message", directed: false };
+  if (message.type === "image") return { relevant: true, reason: "image_message", directed: false };
   if (message.isGroup && talkativeness >= 0.35 && text.trim().length >= 10) {
     return { relevant: true, reason: "group_conversation", directed: false };
   }
@@ -85,11 +88,29 @@ export class DecisionEngine {
     if (!local.relevant) {
       return { plan: ignorePlan("Local relevance gate chose silence."), local, usedAi: false };
     }
+    if (message.transcriptConfidence !== undefined && message.transcriptConfidence < 0.45) {
+      return {
+        plan: {
+          decision: "REPLY",
+          confidence: 1,
+          reason: "low_transcript_confidence",
+          text: "I couldn't hear that clearly. Abeg send the voice note again or type it out.",
+          delayMs: 0,
+          needsWeb: false,
+          needsMedia: false,
+          responseStyle: "short_casual",
+        },
+        local,
+        usedAi: false,
+      };
+    }
 
     const input: ProviderInput = {
       messageText: message.text ?? message.media?.caption ?? "",
       messageType: message.type,
       directed: local.directed,
+      ...(message.transcriptConfidence !== undefined ? { transcriptConfidence: message.transcriptConfidence } : {}),
+      ...(message.transcriptLanguage ? { transcriptLanguage: message.transcriptLanguage } : {}),
       ...(message.senderName ? { senderName: message.senderName } : {}),
       context,
     };
@@ -121,11 +142,7 @@ function escapeRegExp(value: string): string {
 }
 
 function sameJid(left: string, right: string): boolean {
-  const normalize = (value: string) => {
-    const [local, server] = value.trim().toLowerCase().split("@");
-    return server ? `${local?.split(":")[0]}@${server}` : value.trim().toLowerCase();
-  };
-  return normalize(left) === normalize(right);
+  return sameWhatsAppIdentity(left, right);
 }
 
 function normalizeResponseStyle(value: unknown): unknown {

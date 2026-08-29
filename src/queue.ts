@@ -7,6 +7,8 @@ export interface QueueStats {
 interface Job {
   key: string;
   run: () => Promise<void>;
+  resolve: () => void;
+  reject: (error: unknown) => void;
 }
 
 export class KeyedJobQueue {
@@ -15,17 +17,30 @@ export class KeyedJobQueue {
   private processing = 0;
   private pendingCount = 0;
   private failed = 0;
+  private readonly idleWaiters: Array<() => void> = [];
 
   constructor(private readonly concurrency: number) {
     if (!Number.isInteger(concurrency) || concurrency < 1) throw new Error("Queue concurrency must be positive");
   }
 
   enqueue(key: string, run: () => Promise<void>): void {
-    const jobs = this.pending.get(key) ?? [];
-    jobs.push({ key, run });
-    this.pending.set(key, jobs);
-    this.pendingCount += 1;
-    this.pump();
+    void this.enqueueAndWait(key, run).catch(() => undefined);
+  }
+
+  enqueueAndWait(key: string, run: () => Promise<void>): Promise<void> {
+    const completion = new Promise<void>((resolve, reject) => {
+      const jobs = this.pending.get(key) ?? [];
+      jobs.push({ key, run, resolve, reject });
+      this.pending.set(key, jobs);
+      this.pendingCount += 1;
+      this.pump();
+    });
+    return completion;
+  }
+
+  async waitForIdle(): Promise<void> {
+    if (this.pendingCount === 0 && this.processing === 0) return;
+    await new Promise<void>((resolve) => this.idleWaiters.push(resolve));
   }
 
   stats(): QueueStats {
@@ -44,11 +59,18 @@ export class KeyedJobQueue {
       this.running.add(key);
       this.processing += 1;
       void job.run()
-        .catch(() => { this.failed += 1; })
+        .then(() => job.resolve())
+        .catch((error) => {
+          this.failed += 1;
+          job.reject(error);
+        })
         .finally(() => {
           this.running.delete(job.key);
           this.processing -= 1;
           this.pump();
+          if (this.pendingCount === 0 && this.processing === 0) {
+            for (const resolve of this.idleWaiters.splice(0)) resolve();
+          }
         });
     }
   }

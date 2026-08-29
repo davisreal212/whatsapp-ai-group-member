@@ -44,6 +44,7 @@ export interface Store {
   sessionByTokenHash(tokenHash: string): SessionRecord | undefined;
   deleteSession(tokenHash: string): Promise<void>;
   recentMessages(groupId: string, limit: number): StoredMessage[];
+  recentChatMessages(chatId: string, limit: number): StoredMessage[];
   message(id: string): StoredMessage | undefined;
   group(id: string): GroupRecord | undefined;
   groups(): GroupRecord[];
@@ -51,6 +52,7 @@ export interface Store {
   memories(scopeId?: string): MemoryRecord[];
   logs(limit?: number): AuditLog[];
   actions(limit?: number): ActionRecord[];
+  action(id: string): ActionRecord | undefined;
   createTask(task: TaskRecord): Promise<boolean>;
   updateTask(id: string, update: Partial<TaskRecord>): Promise<TaskRecord | undefined>;
   task(id: string): TaskRecord | undefined;
@@ -278,8 +280,16 @@ export class FileStore implements Store {
   }
 
   recentMessages(groupId: string, limit: number): StoredMessage[] {
+    return this.recentMessagesBy((message) => message.groupId === groupId, limit);
+  }
+
+  recentChatMessages(chatId: string, limit: number): StoredMessage[] {
+    return this.recentMessagesBy((message) => message.chatId === chatId, limit);
+  }
+
+  private recentMessagesBy(matches: (message: StoredMessage) => boolean, limit: number): StoredMessage[] {
     return Object.values(this.state.messages)
-      .filter((message) => message.groupId === groupId)
+      .filter(matches)
       .sort((a, b) => b.timestamp - a.timestamp)
       .slice(0, limit)
       .reverse();
@@ -313,6 +323,10 @@ export class FileStore implements Store {
     return Object.values(this.state.actions)
       .sort((a, b) => b.scheduledFor - a.scheduledFor)
       .slice(0, limit);
+  }
+
+  action(id: string): ActionRecord | undefined {
+    return this.state.actions[id];
   }
 
   task(id: string): TaskRecord | undefined {

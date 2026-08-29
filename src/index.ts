@@ -11,7 +11,7 @@ async function main(): Promise<void> {
   const store = config.databaseUrl ? new PostgresStore(config.databaseUrl) : new FileStore(config.dataDir);
   let runtime: BotRuntime;
   const whatsapp = new BaileysWhatsAppAdapter(config.whatsappAuthDir, store, {
-    onRawMessage: async (message) => runtime.handleRawMessage(message),
+    onRawMessage: async (message, loadMedia) => runtime.handleRawMessage(message, loadMedia),
     onGroups: async (groups) => runtime.syncGroups(groups),
     onIdentity: async (identities) => runtime.setBotIdentities(identities),
   });
@@ -36,7 +36,7 @@ async function main(): Promise<void> {
   });
 
   const shutdown = async () => {
-    runtime.stopBackgroundWorkers();
+    await runtime.stopBackgroundWorkers();
     await whatsapp.stop();
     server.close();
   };

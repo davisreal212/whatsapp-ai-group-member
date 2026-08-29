@@ -44,6 +44,9 @@ OUTBOUND_PAUSED=true
 AI_PROCESSING_PAUSED=false
 GROUP_COOLDOWN_MS=30000
 DAILY_ACTION_LIMIT=50
+ACTIONS_PER_MINUTE=10
+ACTIONS_PER_HOUR=50
+ACTION_MAX_ATTEMPTS=3
 MESSAGE_RETENTION_DAYS=30
 GEMINI_API_KEY=<optional>
 GEMINI_MODEL=gemini-3.6-flash
@@ -53,6 +56,8 @@ OPENROUTER_API_KEY=<optional>
 OPENROUTER_MODEL=z-ai/glm-5.2:free
 TAVILY_API_KEY=<Tavily key>
 TAVILY_MAX_RESULTS=5
+PROVIDER_FAILURE_THRESHOLD=3
+PROVIDER_COOLDOWN_MS=60000
 ```
 
 7. Generate a public domain for the service. Railway should expose port `3000`; verify `https://<your-domain>/api/health` returns a healthy response.
@@ -82,7 +87,7 @@ The pinned dependency is `@whiskeysockets/baileys@6.7.24`. That version exports 
 
 ## Operations
 
-- `GET /api/health` is a public liveness check.
+- `GET /api/health` is a public liveness check; `GET /api/ready` is a connection readiness check.
 - All other `/api` routes require `Authorization: Bearer <ADMIN_TOKEN>` or `x-admin-token`.
 - The dashboard has an outbound kill switch and an AI-processing pause switch.
 - The dashboard's DM allowlist is persisted in the application database and can be edited without rebuilding the service.

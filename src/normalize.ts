@@ -1,4 +1,5 @@
 import type { CanonicalMessage, MediaMetadata, MessageType } from "./types.js";
+import { sameWhatsAppIdentity } from "./identity.js";
 
 export interface WhatsAppRawMessage {
   key?: {
@@ -75,7 +76,7 @@ export function normalizeMessage(raw: WhatsAppRawMessage, botJid?: string): Cano
 
   const messageType = toMessageType(kind);
   const media = mediaMetadata(messageType, payload);
-  const isFromBot = raw.key?.fromMe === true || (botJid !== undefined && senderId === botJid);
+  const isFromBot = raw.key?.fromMe === true || (botJid !== undefined && sameWhatsAppIdentity(senderId, botJid));
 
   return {
     id,

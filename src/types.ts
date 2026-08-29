@@ -55,6 +55,9 @@ export interface AppConfig {
   aiProcessingPaused: boolean;
   groupCooldownMs: number;
   dailyActionLimit: number;
+  actionsPerMinute: number;
+  actionsPerHour: number;
+  actionMaxAttempts: number;
   messageRetentionDays: number;
   tavilyApiKey?: string;
   tavilyMaxResults: number;
@@ -64,6 +67,8 @@ export interface AppConfig {
   groqModel: string;
   openRouterApiKey?: string;
   openRouterModel: string;
+  providerFailureThreshold: number;
+  providerCooldownMs: number;
   personality: Personality;
 }
 
@@ -72,6 +77,8 @@ export interface MediaMetadata {
   fileLength?: number;
   durationSeconds?: number;
   caption?: string;
+  description?: string;
+  ocrText?: string;
   hasDownloadableContent: boolean;
 }
 
@@ -85,6 +92,8 @@ export interface CanonicalMessage {
   timestamp: number;
   type: MessageType;
   text?: string;
+  transcriptConfidence?: number;
+  transcriptLanguage?: string;
   quotedMessageId?: string;
   quotedSenderId?: string;
   mentionedIds: string[];
@@ -166,6 +175,8 @@ export interface ActionRecord {
   payload: Record<string, unknown>;
   scheduledFor: number;
   status: "PENDING" | "SENT" | "SKIPPED" | "FAILED";
+  attempts?: number;
+  nextAttemptAt?: number;
   executedAt?: number;
   error?: string;
 }

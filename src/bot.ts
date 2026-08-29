@@ -6,11 +6,12 @@ import type { AppConfig, CanonicalMessage, GroupRecord, TaskRecord } from "./typ
 import { MemoryService } from "./memory.js";
 import { isCurrentInformationQuestion, evaluateInboundPolicy } from "./policy.js";
 import { ProviderRouter, type ProviderInput } from "./providers.js";
-import { ResearchService, TavilyProvider } from "./research.js";
+import { DuckDuckGoProvider, ResearchService, TavilyProvider } from "./research.js";
 import type { Store } from "./store.js";
 import { normalizeMessage } from "./normalize.js";
 import type { DiscoveredDirectMessage, DiscoveredGroup } from "./whatsapp.js";
 import { TaskService } from "./tasks.js";
+import { FallbackSpeechToTextProvider, GeminiVisionProvider, GroqSpeechToTextProvider, MediaProcessor } from "./media.js";
 
 export class BotRuntime {
   readonly memory: MemoryService;
@@ -19,6 +20,7 @@ export class BotRuntime {
   readonly decisions: DecisionEngine;
   readonly actions: ActionService;
   readonly tasks: TaskService;
+  readonly media: MediaProcessor;
 
   constructor(
     readonly store: Store,
@@ -27,10 +29,11 @@ export class BotRuntime {
   ) {
     this.memory = new MemoryService(store);
     this.providers = new ProviderRouter(store, config);
-    this.research = new ResearchService(store, new TavilyProvider(config.tavilyApiKey));
+    this.research = new ResearchService(store, [new TavilyProvider(config.tavilyApiKey), new DuckDuckGoProvider()]);
     this.decisions = new DecisionEngine(this.providers);
     this.actions = new ActionService(store, config, transport);
     this.tasks = new TaskService(store, config, transport);
+    this.media = new MediaProcessor(new FallbackSpeechToTextProvider([new GroqSpeechToTextProvider(config.groqApiKey)]), new GeminiVisionProvider(config.geminiApiKey, config.geminiModel));
   }
 
   async init(): Promise<void> {
@@ -45,6 +48,7 @@ export class BotRuntime {
     if (!settings) {
       await this.store.updateSettings({ outboundPaused: this.config.outboundPaused, aiProcessingPaused: this.config.aiProcessingPaused, directMessageAllowlist: this.config.directMessageAllowlist, personality: this.config.personality });
     }
+    this.actions.start();
   }
 
   async connect(phoneNumber?: string): Promise<void> {
@@ -61,8 +65,9 @@ export class BotRuntime {
     this.tasks.start();
   }
 
-  stopBackgroundWorkers(): void {
+  async stopBackgroundWorkers(): Promise<void> {
     this.tasks.stop();
+    await this.actions.stop();
   }
 
   async cancelTask(id: string): Promise<TaskRecord | undefined> {
@@ -90,8 +95,8 @@ export class BotRuntime {
     return (this.transport as unknown as { listDirectMessages(): DiscoveredDirectMessage[] }).listDirectMessages();
   }
 
-  async handleRawMessage(raw: WAMessage): Promise<void> {
-    const message = normalizeMessage(raw as unknown as Parameters<typeof normalizeMessage>[0], this.config.botJid);
+  async handleRawMessage(raw: WAMessage, loadMedia?: () => Promise<import("./media.js").DownloadedMedia>): Promise<void> {
+    let message = normalizeMessage(raw as unknown as Parameters<typeof normalizeMessage>[0], this.config.botJid);
     if (!message) {
       await this.log("message.invalid", "warn", { reason: "normalization_failed" });
       return;
@@ -111,6 +116,25 @@ export class BotRuntime {
             }),
       }, message);
       return;
+    }
+
+    if (message.type === "audio" && message.media?.hasDownloadableContent && loadMedia) {
+      try {
+        const transcript = await this.media.transcribeAudio(loadMedia);
+        message = { ...message, text: transcript.text, transcriptConfidence: transcript.confidence, ...(transcript.language ? { transcriptLanguage: transcript.language } : {}) };
+        await this.log("media.transcribed", "info", { type: "audio", confidence: transcript.confidence, ...(transcript.language ? { language: transcript.language } : {}) }, message);
+      } catch (error) {
+        await this.log("media.transcription_failed", "warn", { type: "audio", error: error instanceof Error ? error.message : "unknown" }, message);
+      }
+    }
+    if (message.type === "image" && message.media?.hasDownloadableContent && loadMedia) {
+      try {
+        const vision = await this.media.analyzeImage(loadMedia);
+        message = { ...message, text: [message.text, vision.description, vision.ocrText].filter(Boolean).join("\n"), media: { ...message.media, description: vision.description, ...(vision.ocrText ? { ocrText: vision.ocrText } : {}) } };
+        await this.log("media.image_analyzed", "info", { type: "image", confidence: vision.confidence, ocr: Boolean(vision.ocrText) }, message);
+      } catch (error) {
+        await this.log("media.image_analysis_failed", "warn", { type: "image", error: error instanceof Error ? error.message : "unknown" }, message);
+      }
     }
 
     const stored = await this.store.storeMessage({ ...message, storedAt: Date.now() });
@@ -160,6 +184,8 @@ export class BotRuntime {
         messageType: message.type,
         ...(message.senderName ? { senderName: message.senderName } : {}),
         directed: result.local.directed,
+        ...(message.transcriptConfidence !== undefined ? { transcriptConfidence: message.transcriptConfidence } : {}),
+        ...(message.transcriptLanguage ? { transcriptLanguage: message.transcriptLanguage } : {}),
         context,
         ...(evidence ? { evidence } : {}),
       };
@@ -259,10 +285,22 @@ export class BotRuntime {
       providers: this.providers.statuses(),
       research: { tavilyAvailable: Boolean(this.config.tavilyApiKey) },
       queue: this.transport.queueStats?.() ?? { pending: 0, processing: 0, failed: 0 },
+      outboundQueue: this.actions.queueStats(),
+      workers: {
+        whatsapp: { running: Boolean(this.transport.connected), queue: this.transport.queueStats?.() ?? { pending: 0, processing: 0, failed: 0 } },
+        outbound: this.actions.health(),
+        tasks: this.tasks.health(),
+      },
       recentLogs: this.store.logs(30),
       recentActions: this.store.actions(30),
       tasks: this.store.tasks().slice(0, 100),
     };
+  }
+
+  health(): { status: "ok" | "degraded"; connection: string; ready: boolean; workers: Record<string, unknown> } {
+    const dashboard = this.dashboardState();
+    const connection = (dashboard.connection as { connectionStatus?: string }).connectionStatus ?? "DISCONNECTED";
+    return { status: connection === "CONNECTED" ? "ok" : "degraded", connection, ready: connection === "CONNECTED", workers: dashboard.workers as Record<string, unknown> };
   }
 
   private personality(group: GroupRecord) {

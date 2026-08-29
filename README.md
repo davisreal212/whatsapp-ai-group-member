@@ -8,11 +8,13 @@ A safety-first WhatsApp group agent based on the supplied implementation manual.
 - Group discovery with explicit allowlisting. Newly discovered groups are disabled.
 - Hard group-only policy by default: DMs, status events, unknown groups, disabled groups, bot messages, duplicates, and unsupported events are rejected before AI calls. If group-only mode is disabled, only `DIRECT_MESSAGE_ALLOWLIST` contacts can use DMs.
 - Canonical message normalization with quote, mention, media, and sender metadata.
+- Voice-note transcription through a cached, fallback-ready speech provider and optional Gemini image description/OCR.
 - Local relevance gates so casual chatter can be ignored without consuming AI quota.
-- Gemini, Groq, and OpenRouter adapters behind one provider router.
-- Tavily research backup with evidence bundles and an unverified fallback.
+- Gemini, Groq, and OpenRouter adapters behind one provider router with circuit health and cooldowns.
+- Tavily plus DuckDuckGo research providers with evidence bundles and an unverified fallback.
 - Lightweight member communication observations with confidence and forgetting-ready timestamps.
-- Structured action plans, same-group target validation, daily limits, cooldowns, dry-run mode, and idempotency.
+- Structured action plans, same-group target validation, per-minute/hour/day limits, cooldowns, dry-run mode, idempotency, retry, and pending-action recovery.
+- Persistent reminders and BTC/ETH price alerts with a deterministic task worker and dashboard controls.
 - Neon PostgreSQL persistence in production through `DATABASE_URL`, with local durable JSON state only when no database URL is configured.
 - Admin dashboard for connection, group authorization, kill switches, provider status, logs, and memory deletion.
 - Landing page with email/password signup and sign-in. The first account becomes the administrator; public signup closes after that.
@@ -27,7 +29,7 @@ A safety-first WhatsApp group agent based on the supplied implementation manual.
 5. Run `npm install` and then `npm run dev`.
 6. Open `http://localhost:3000`.
 
-In development, the dashboard does not require an admin token and the local JSON store is used if `DATABASE_URL` is blank. In production, set a strong `ADMIN_TOKEN` and Neon `DATABASE_URL`; the server refuses to start without either. The landing page creates an administrator using a hashed password and an HttpOnly session cookie. WhatsApp session credentials stay on the server under `WHATSAPP_AUTH_DIR` and are never sent to browser JavaScript.
+In development, the dashboard does not require an admin token and the local JSON store is used if `DATABASE_URL` is blank. In production, set a strong `ADMIN_TOKEN` and Neon `DATABASE_URL`; the server refuses to start without either. The landing page creates an administrator using a hashed password and an HttpOnly session cookie. WhatsApp session credentials stay on the server under `WHATSAPP_AUTH_DIR` and are never sent to browser JavaScript. `GET /api/health` is liveness; `GET /api/ready` returns readiness only while WhatsApp is connected.
 
 ## Pair a dedicated WhatsApp account
 

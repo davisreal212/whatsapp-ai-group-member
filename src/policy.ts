@@ -1,4 +1,5 @@
 import type { AppConfig, CanonicalMessage, GroupRecord } from "./types.js";
+import { matchesWhatsAppIdentity } from "./identity.js";
 
 export type PolicyReason =
   | "AI_PROCESSING_PAUSED"
@@ -42,19 +43,7 @@ export function evaluateInboundPolicy(
 
 export function isDirectMessageAllowed(message: CanonicalMessage, allowlist: string[]): boolean {
   const candidates = [message.senderId, message.chatId, message.senderPhone].filter((value): value is string => Boolean(value));
-  const exactValues = new Set(allowlist.map((value) => value.trim().toLowerCase()));
-  if (candidates.some((candidate) => exactValues.has(candidate.trim().toLowerCase()))) return true;
-
-  const candidateNumbers = candidates.map(contactNumber).filter((value): value is string => Boolean(value));
-  return allowlist.some((value) => {
-    const number = contactNumber(value);
-    return Boolean(number && candidateNumbers.includes(number));
-  });
-}
-
-function contactNumber(value: string): string | undefined {
-  const number = value.split("@")[0]?.split(":")[0]?.replace(/\D/g, "");
-  return number || undefined;
+  return candidates.some((candidate) => matchesWhatsAppIdentity(candidate, allowlist));
 }
 
 export function isCurrentInformationQuestion(text: string): boolean {

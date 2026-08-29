@@ -14,9 +14,9 @@ export class MemoryService {
   constructor(private readonly store: Store) {}
 
   async observe(message: CanonicalMessage): Promise<void> {
-    if (!message.groupId) return;
-    const memberId = `${message.groupId}:${message.senderId}`;
-    const previous = this.store.members(message.groupId).find((item) => item.id === memberId);
+    const conversationId = message.groupId ?? message.chatId;
+    const memberId = `${conversationId}:${message.senderId}`;
+    const previous = this.store.members(conversationId).find((item) => item.id === memberId);
     const now = Date.now();
     const text = message.text ?? message.media?.caption ?? "";
     const previousCount = previous?.behaviorProfile.messageCount ?? 0;
@@ -39,7 +39,7 @@ export class MemoryService {
     } as MemberRecord["behaviorProfile"];
     const member: MemberRecord = {
       id: memberId,
-      groupId: message.groupId,
+      groupId: conversationId,
       whatsappMemberId: message.senderId,
       ...(message.senderName ? { displayName: message.senderName } : previous?.displayName ? { displayName: previous.displayName } : {}),
       behaviorProfile: profile,
@@ -67,6 +67,26 @@ export class MemoryService {
       lastConfirmedAt: now,
     };
     await this.store.upsertMemory(memory);
+
+    if (message.groupId) {
+      const topic = extractTopic(text);
+      if (topic) {
+        const previousTopic = this.store.memories(message.groupId).find((item) => item.memoryType === "group-topic" && item.value.topic === topic);
+        const topicCount = (previousTopic?.evidenceCount ?? 0) + 1;
+        await this.store.upsertMemory({
+          id: createHash("sha256").update(`${message.groupId}:topic:${topic}`).digest("hex"),
+          scopeType: "group",
+          scopeId: message.groupId,
+          memoryType: "group-topic",
+          value: { topic, source: "observed_messages" },
+          confidence: Math.min(1, 0.25 + topicCount / 20),
+          evidenceCount: topicCount,
+          createdAt: previousTopic?.createdAt ?? now,
+          lastConfirmedAt: now,
+          expiresAt: now + 30 * 24 * 60 * 60 * 1000,
+        });
+      }
+    }
   }
 
   context(group: GroupRecord, senderId: string, personality: Personality): ContextSnapshot {
@@ -75,7 +95,7 @@ export class MemoryService {
     const memories = this.store.memories(group.id).concat(this.store.memories(memberId));
     return {
       group: { id: group.id, subject: group.subject, participantCount: group.participantCount },
-      recentMessages: this.store.recentMessages(group.id, 20).map((message) => ({
+      recentMessages: (group.id.endsWith("@g.us") ? this.store.recentMessages(group.id, 20) : this.store.recentChatMessages(group.id, 20)).map((message) => ({
         sender: message.senderName ?? message.senderId,
         text: (message.text ?? `[${message.type}]`).slice(0, 500),
         type: message.type,
@@ -104,4 +124,9 @@ function languageStyle(text: string): "english" | "pidgin" | "mixed" | "unknown"
   if (pidginWords === 0) return "english";
   if (pidginWords >= Math.max(1, Math.floor(words / 5))) return "pidgin";
   return "mixed";
+}
+
+function extractTopic(text: string): string | undefined {
+  const stopWords = new Set(["about", "after", "again", "because", "before", "being", "could", "from", "have", "just", "make", "that", "their", "there", "these", "they", "this", "what", "when", "where", "which", "with", "would", "your"]);
+  return text.toLowerCase().match(/[a-z][a-z0-9-]{3,}/g)?.find((word) => !stopWords.has(word) && !/^(https?|www|message|please)$/.test(word));
 }

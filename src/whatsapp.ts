@@ -3,6 +3,7 @@ import makeWASocket, {
   Browsers,
   DisconnectReason,
   fetchLatestBaileysVersion,
+  downloadContentFromMessage,
   useMultiFileAuthState,
   type GroupMetadata,
   type WAMessage,
@@ -14,6 +15,8 @@ import type { OutboundTransport } from "./actions.js";
 import type { ConnectionStatus } from "./types.js";
 import { fetchSafeMedia } from "./network.js";
 import { KeyedJobQueue, type QueueStats } from "./queue.js";
+import type { DownloadedMedia } from "./media.js";
+import { normalizePhoneNumber, sameWhatsAppIdentity } from "./identity.js";
 
 export interface DiscoveredGroup {
   id: string;
@@ -28,7 +31,7 @@ export interface DiscoveredDirectMessage {
 }
 
 export interface WhatsAppEvents {
-  onRawMessage(raw: WAMessage): Promise<void>;
+  onRawMessage(raw: WAMessage, loadMedia?: () => Promise<DownloadedMedia>): Promise<void>;
   onGroups(groups: DiscoveredGroup[]): Promise<void>;
   onIdentity?(identities: string[]): Promise<void>;
 }
@@ -104,7 +107,7 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
         if (raw.key.id) this.rawMessages.set(raw.key.id, raw);
         this.messageQueue.enqueue(raw.key.remoteJid ?? "unknown", async () => {
           try {
-            await this.events.onRawMessage(raw);
+            await this.events.onRawMessage(raw, () => this.downloadMedia(raw));
           } catch (error) {
             const message = error instanceof Error ? error.message : "unknown";
             console.error(`[whatsapp] message handler failed id=${raw.key.id ?? "unknown"}: ${message}`);
@@ -317,6 +320,24 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     }
   }
 
+  private async downloadMedia(raw: WAMessage): Promise<DownloadedMedia> {
+    const found = findMediaMessage(raw.message as Record<string, unknown> | null | undefined);
+    if (!found) throw new Error("Downloadable media content was not found");
+    const stream = await downloadContentFromMessage(
+      found.payload as Parameters<typeof downloadContentFromMessage>[0],
+      found.type as Parameters<typeof downloadContentFromMessage>[1],
+    );
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of stream) {
+      const value = Buffer.from(chunk);
+      size += value.byteLength;
+      if (size > 10 * 1024 * 1024) throw new Error("Media exceeds the 10 MB limit");
+      chunks.push(value);
+    }
+    return { data: Buffer.concat(chunks, size), mimeType: typeof found.payload.mimetype === "string" ? found.payload.mimetype : `${found.type}/ogg` };
+  }
+
   private async requestPairingCode(socket: WASocket, phoneNumber: string): Promise<void> {
     const normalized = normalizePairingPhoneNumber(phoneNumber);
     if (!normalized) throw new Error("A valid phone number is required for pairing");
@@ -358,6 +379,22 @@ function getDisconnectStatusCode(error: unknown): number | undefined {
   return (error as { output?: { statusCode?: number } }).output?.statusCode;
 }
 
+function findMediaMessage(message: Record<string, unknown> | null | undefined): { type: "audio" | "image" | "video" | "document" | "sticker"; payload: Record<string, unknown> } | undefined {
+  if (!message) return undefined;
+  for (const [key, type] of [["audioMessage", "audio"], ["imageMessage", "image"], ["videoMessage", "video"], ["documentMessage", "document"], ["stickerMessage", "sticker"]] as const) {
+    const payload = message[key];
+    if (payload && typeof payload === "object") return { type, payload: payload as Record<string, unknown> };
+  }
+  for (const key of ["ephemeralMessage", "viewOnceMessage", "viewOnceMessageV2", "documentWithCaptionMessage"]) {
+    const nested = message[key];
+    if (nested && typeof nested === "object" && "message" in nested) {
+      const found = findMediaMessage((nested as { message?: Record<string, unknown> }).message);
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
 async function readResponseBody(response: Response, maxBytes: number): Promise<Buffer> {
   if (!response.body) {
     const body = Buffer.from(await response.arrayBuffer());
@@ -386,12 +423,11 @@ async function readResponseBody(response: Response, maxBytes: number): Promise<B
 }
 
 export function normalizePairingPhoneNumber(phoneNumber: string): string {
-  return phoneNumber.replace(/\D/g, "");
+  return normalizePhoneNumber(phoneNumber) ?? "";
 }
 
 function toDiscoveredGroup(group: GroupMetadata, ownJid?: string): DiscoveredGroup {
-  const normalizedOwnJid = ownJid?.split(":")[0];
-  const self = group.participants.find((participant) => participant.id.split(":")[0] === normalizedOwnJid);
+  const self = ownJid ? group.participants.find((participant) => sameWhatsAppIdentity(participant.id, ownJid)) : undefined;
   return {
     id: group.id,
     subject: group.subject,

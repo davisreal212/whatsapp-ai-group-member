@@ -21,6 +21,8 @@ export interface TaskCommandResult {
 export class TaskService {
   private timer?: ReturnType<typeof setInterval>;
   private running = false;
+  private lastRunAt?: number;
+  private lastError?: string;
 
   constructor(
     private readonly store: Store,
@@ -40,8 +42,13 @@ export class TaskService {
     this.timer = undefined;
   }
 
+  health(): { running: boolean; lastRunAt?: number; lastError?: string } {
+    return { running: Boolean(this.timer), ...(this.lastRunAt ? { lastRunAt: this.lastRunAt } : {}), ...(this.lastError ? { lastError: this.lastError } : {}) };
+  }
+
   private runSafely(): void {
     void this.runDueTasks().catch(async (error) => {
+      this.lastError = error instanceof Error ? error.message : "unknown";
       await this.log("task.worker_failed", { error: error instanceof Error ? error.message : "unknown" });
     });
   }
@@ -119,6 +126,8 @@ export class TaskService {
   private async runDueTasks(): Promise<void> {
     if (this.running) return;
     this.running = true;
+    this.lastRunAt = Date.now();
+    this.lastError = undefined;
     try {
     const now = Date.now();
     const active = this.store.tasks("ACTIVE");

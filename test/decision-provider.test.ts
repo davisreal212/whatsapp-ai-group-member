@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { DecisionEngine, localRelevance, parseDecisionPlan } from "../src/decision.js";
 import { loadConfig } from "../src/config.js";
 import { isCurrentInformationQuestion } from "../src/policy.js";
-import { OpenAICompatibleProvider, type ProviderRouter } from "../src/providers.js";
+import { OpenAICompatibleProvider, ProviderRouter, type AIProvider } from "../src/providers.js";
+import { FileStore } from "../src/store.js";
 import type { ContextSnapshot } from "../src/memory.js";
 import type { DecisionPlan, GroupRecord } from "../src/types.js";
 import { normalizePairingPhoneNumber } from "../src/whatsapp.js";
@@ -82,5 +83,31 @@ describe("decision safety helpers", () => {
 
   it("formats pairing numbers as the Baileys API requires", () => {
     expect(normalizePairingPhoneNumber("+234 (801) 555-0100")).toBe("2348015550100");
+  });
+
+  it("opens a provider circuit after repeated failures", async () => {
+    let calls = 0;
+    const failing: AIProvider = {
+      name: "groq",
+      model: "test",
+      available: true,
+      classify: async () => { calls += 1; throw new Error("quota exceeded"); },
+      generateResponse: async () => undefined,
+    };
+    const router = new ProviderRouter(new FileStore(`/tmp/provider-circuit-${Date.now()}`), loadConfig({ NODE_ENV: "test", PROVIDER_FAILURE_THRESHOLD: "2", PROVIDER_COOLDOWN_MS: "60000" }), [failing]);
+    const input = { messageText: "hello", messageType: "text", directed: true, context: {} as ContextSnapshot };
+    await router.classify(input);
+    await router.classify(input);
+    await router.classify(input);
+    expect(calls).toBe(2);
+    expect(router.statuses()[0]).toMatchObject({ healthy: false, consecutiveFailures: 2, lastError: "quota exceeded" });
+  });
+
+  it("asks for a resend when a voice transcript is unreliable", async () => {
+    const message = { id: "voice-1", chatId: "g@g.us", groupId: "g@g.us", senderId: "member", timestamp: Date.now(), type: "audio" as const, text: "unclear words", transcriptConfidence: 0.2, mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+    const group: GroupRecord = { id: "g@g.us", whatsappGroupId: "g@g.us", subject: "Test", participantCount: 1, isAdmin: true, enabled: true, aiPaused: false, lastSeenAt: Date.now() };
+    const result = await new DecisionEngine({ classify: async () => { throw new Error("should not call provider"); } } as unknown as ProviderRouter).decide(message, group, { group, recentMessages: [], memories: [], personality: loadConfig({ NODE_ENV: "test" }).personality }, { botName: "Kola" });
+    expect(result.usedAi).toBe(false);
+    expect(result.plan.reason).toBe("low_transcript_confidence");
   });
 });

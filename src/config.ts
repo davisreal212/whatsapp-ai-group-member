@@ -33,6 +33,9 @@ const envSchema = z.object({
   AI_PROCESSING_PAUSED: booleanString.default(false),
   GROUP_COOLDOWN_MS: z.coerce.number().int().min(0).max(86_400_000).default(30_000),
   DAILY_ACTION_LIMIT: z.coerce.number().int().min(0).max(10_000).default(50),
+  ACTIONS_PER_MINUTE: z.coerce.number().int().min(0).max(1_000).default(10),
+  ACTIONS_PER_HOUR: z.coerce.number().int().min(0).max(10_000).default(50),
+  ACTION_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
   MESSAGE_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(30),
   TAVILY_API_KEY: optionalString,
   TAVILY_MAX_RESULTS: z.coerce.number().int().min(1).max(10).default(5),
@@ -42,6 +45,8 @@ const envSchema = z.object({
   GROQ_MODEL: z.string().default("openai/gpt-oss-20b"),
   OPENROUTER_API_KEY: optionalString,
   OPENROUTER_MODEL: z.string().default("z-ai/glm-5.2:free"),
+  PROVIDER_FAILURE_THRESHOLD: z.coerce.number().int().min(1).max(20).default(3),
+  PROVIDER_COOLDOWN_MS: z.coerce.number().int().min(1_000).max(86_400_000).default(60_000),
 });
 
 export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -86,6 +91,9 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     aiProcessingPaused: values.AI_PROCESSING_PAUSED,
     groupCooldownMs: values.GROUP_COOLDOWN_MS,
     dailyActionLimit: values.DAILY_ACTION_LIMIT,
+    actionsPerMinute: values.ACTIONS_PER_MINUTE,
+    actionsPerHour: values.ACTIONS_PER_HOUR,
+    actionMaxAttempts: values.ACTION_MAX_ATTEMPTS,
     messageRetentionDays: values.MESSAGE_RETENTION_DAYS,
     tavilyApiKey: values.TAVILY_API_KEY,
     tavilyMaxResults: values.TAVILY_MAX_RESULTS,
@@ -95,6 +103,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     groqModel: values.GROQ_MODEL,
     openRouterApiKey: values.OPENROUTER_API_KEY,
     openRouterModel: values.OPENROUTER_MODEL,
+    providerFailureThreshold: values.PROVIDER_FAILURE_THRESHOLD,
+    providerCooldownMs: values.PROVIDER_COOLDOWN_MS,
     personality,
   };
 }

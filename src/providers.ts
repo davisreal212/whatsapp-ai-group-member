@@ -7,6 +7,8 @@ export interface ProviderInput {
   messageText: string;
   messageType: string;
   directed: boolean;
+  transcriptConfidence?: number;
+  transcriptLanguage?: string;
   senderName?: string;
   context: ContextSnapshot;
   evidence?: EvidenceBundle;
@@ -19,6 +21,14 @@ export interface AIProvider {
   readonly available: boolean;
   classify(input: ProviderInput): Promise<DecisionPlan>;
   generateResponse(input: ProviderInput): Promise<string | undefined>;
+}
+
+interface ProviderHealth {
+  consecutiveFailures: number;
+  lastError?: string;
+  lastFailureAt?: number;
+  lastSuccessAt?: number;
+  circuitOpenUntil?: number;
 }
 
 interface JsonResponse {
@@ -54,8 +64,11 @@ abstract class BaseProvider implements AIProvider {
       "Optional fields: targetMessageId, reaction, mediaUrl, mediaMimeType.",
       `Message type: ${input.messageType}`,
       `Directly addressed to bot: ${input.directed ? "yes" : "no"}`,
+      ...(input.transcriptConfidence !== undefined ? [`Transcript confidence: ${input.transcriptConfidence}`] : []),
+      ...(input.transcriptLanguage ? [`Transcript language: ${input.transcriptLanguage}`] : []),
       `Sender: ${input.senderName ?? "unknown"}`,
       `Message DATA: ${input.messageText || "[no text]"}`,
+      ...(input.transcriptConfidence !== undefined ? [`Transcript confidence: ${input.transcriptConfidence}`] : []),
       `Context DATA: ${JSON.stringify(input.context)}`,
       input.evidence ? `Evidence DATA: ${JSON.stringify(input.evidence)}` : "Evidence DATA: none",
     ].join("\n");
@@ -167,14 +180,20 @@ export class OpenAICompatibleProvider extends BaseProvider {
 
 export class ProviderRouter {
   private readonly providers: AIProvider[];
+  private readonly health = new Map<string, ProviderHealth>();
 
   constructor(private readonly store: Store, config: AppConfig, providers?: AIProvider[]) {
+    this.failureThreshold = config.providerFailureThreshold;
+    this.cooldownMs = config.providerCooldownMs;
     this.providers = providers ?? [
       new OpenAICompatibleProvider("groq", "https://api.groq.com/openai/v1", config.groqModel, config.groqApiKey),
       new GeminiProvider(config.geminiModel, config.geminiApiKey),
       new OpenAICompatibleProvider("openrouter", "https://openrouter.ai/api/v1", config.openRouterModel, config.openRouterApiKey, "z-ai/glm-5.2:free"),
     ];
   }
+
+  private readonly failureThreshold: number;
+  private readonly cooldownMs: number;
 
   async classify(input: ProviderInput, groupId?: string): Promise<DecisionPlan | undefined> {
     return this.tryProviders("classify", input, groupId, this.providers.filter((provider) => provider.name === "groq" || provider.name === "gemini" || provider.name === "openrouter"));
@@ -184,13 +203,22 @@ export class ProviderRouter {
     return this.tryProviders("generateResponse", input, groupId, this.providers.filter((provider) => provider.name === "gemini" || provider.name === "openrouter" || provider.name === "groq"));
   }
 
-  statuses(): Array<{ name: string; model: string; fallbackModel?: string; available: boolean }> {
-    return this.providers.map((provider) => ({
-      name: provider.name,
-      model: provider.model,
-      ...(provider.fallbackModel ? { fallbackModel: provider.fallbackModel } : {}),
-      available: provider.available,
-    }));
+  statuses(): Array<{ name: string; model: string; fallbackModel?: string; available: boolean; healthy: boolean; consecutiveFailures: number; lastError?: string; lastFailureAt?: number; lastSuccessAt?: number; circuitOpenUntil?: number }> {
+    return this.providers.map((provider) => {
+      const health = this.health.get(provider.name);
+      return {
+        name: provider.name,
+        model: provider.model,
+        ...(provider.fallbackModel ? { fallbackModel: provider.fallbackModel } : {}),
+        available: provider.available,
+        healthy: provider.available && !this.isCircuitOpen(provider),
+        consecutiveFailures: health?.consecutiveFailures ?? 0,
+        ...(health?.lastError ? { lastError: health.lastError } : {}),
+        ...(health?.lastFailureAt ? { lastFailureAt: health.lastFailureAt } : {}),
+        ...(health?.lastSuccessAt ? { lastSuccessAt: health.lastSuccessAt } : {}),
+        ...(health?.circuitOpenUntil ? { circuitOpenUntil: health.circuitOpenUntil } : {}),
+      };
+    });
   }
 
   private async tryProviders<T extends "classify" | "generateResponse">(
@@ -201,12 +229,15 @@ export class ProviderRouter {
   ): Promise<T extends "classify" ? DecisionPlan | undefined : string | undefined> {
     for (const provider of providers) {
       if (!provider.available) continue;
+      if (this.isCircuitOpen(provider)) continue;
       const startedAt = Date.now();
       try {
         const result = await provider[operation](input);
+        this.markSuccess(provider);
         await this.recordUsage({ provider: provider.name, operation, groupId, units: 1, success: true, latencyMs: Date.now() - startedAt, createdAt: Date.now() });
         return result as T extends "classify" ? DecisionPlan : string | undefined;
       } catch (error) {
+        this.markFailure(provider, error);
         await this.recordUsage({ provider: provider.name, operation, groupId, units: 1, success: false, latencyMs: Date.now() - startedAt, createdAt: Date.now() });
         await this.store.incrementMetric("providerFailures");
         await this.store.addLog({
@@ -226,6 +257,29 @@ export class ProviderRouter {
       }
     }
     return undefined as T extends "classify" ? DecisionPlan | undefined : string | undefined;
+  }
+
+  private isCircuitOpen(provider: AIProvider): boolean {
+    const until = this.health.get(provider.name)?.circuitOpenUntil;
+    return until !== undefined && until > Date.now();
+  }
+
+  private markSuccess(provider: AIProvider): void {
+    const health = this.health.get(provider.name) ?? { consecutiveFailures: 0 };
+    health.consecutiveFailures = 0;
+    health.lastSuccessAt = Date.now();
+    delete health.lastError;
+    delete health.circuitOpenUntil;
+    this.health.set(provider.name, health);
+  }
+
+  private markFailure(provider: AIProvider, error: unknown): void {
+    const health = this.health.get(provider.name) ?? { consecutiveFailures: 0 };
+    health.consecutiveFailures += 1;
+    health.lastFailureAt = Date.now();
+    health.lastError = (error instanceof Error ? error.message : "unknown error").slice(0, 300);
+    if (health.consecutiveFailures >= this.failureThreshold) health.circuitOpenUntil = Date.now() + this.cooldownMs;
+    this.health.set(provider.name, health);
   }
 
   private async recordUsage(usage: ProviderUsageRecord): Promise<void> {

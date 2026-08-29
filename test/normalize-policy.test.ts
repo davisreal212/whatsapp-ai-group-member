@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { normalizeMessage } from "../src/normalize.js";
 import { evaluateInboundPolicy } from "../src/policy.js";
+import { normalizeWhatsAppJid, sameWhatsAppIdentity } from "../src/identity.js";
 import type { AppConfig, GroupRecord } from "../src/types.js";
 
 const config = { groupOnlyMode: true, directMessageAllowlist: [], aiProcessingPaused: false } satisfies Pick<AppConfig, "groupOnlyMode" | "directMessageAllowlist" | "aiProcessingPaused">;
@@ -16,6 +17,12 @@ const group: GroupRecord = {
 };
 
 describe("message normalization and inbound policy", () => {
+  it("normalizes device-specific JIDs without conflating LIDs", () => {
+    expect(normalizeWhatsAppJid("234:7@S.WHATSAPP.NET")).toBe("234@s.whatsapp.net");
+    expect(sameWhatsAppIdentity("234:7@s.whatsapp.net", "234@s.whatsapp.net")).toBe(true);
+    expect(sameWhatsAppIdentity("234@lid", "234@s.whatsapp.net")).toBe(false);
+  });
+
   it("normalizes text, mentions, and quote metadata without exposing transport shape", () => {
     const message = normalizeMessage({
       key: { remoteJid: "123@g.us", id: "msg-1", participant: "234@s.whatsapp.net" },

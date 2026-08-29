@@ -14,7 +14,11 @@ export function createApp(runtime: BotRuntime, config: AppConfig) {
   const authRateLimit = rateLimit(60_000, 10);
 
   app.get("/api/health", (_request, response) => {
-    response.json({ status: "ok", service: "whatsapp-ai-group-member" });
+    response.json({ service: "whatsapp-ai-group-member", ...runtime.health() });
+  });
+  app.get("/api/ready", (_request, response) => {
+    const health = runtime.health();
+    response.status(health.ready ? 200 : 503).json(health);
   });
 
   app.use("/api", rateLimit());
@@ -187,9 +191,9 @@ export function createApp(runtime: BotRuntime, config: AppConfig) {
   });
 
   app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
-    const message = error instanceof z.ZodError ? "Invalid request" : error instanceof Error ? error.message : "Unexpected error";
     const status = error instanceof z.ZodError ? 400 : 500;
-    response.status(status).json({ error: message });
+    if (status === 500) console.error(`[http] request failed: ${error instanceof Error ? error.message : "unknown error"}`);
+    response.status(status).json({ error: status === 400 ? "Invalid request" : "Unexpected error" });
   });
   return app;
 }

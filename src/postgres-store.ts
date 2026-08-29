@@ -37,9 +37,9 @@ export class PostgresStore implements Store {
     const [groups, members, messages, memories, actions, tasks, logs, usage, runtime, settings, users, sessions] = await Promise.all([
       this.sql`SELECT id, whatsapp_group_id, subject, participant_count, is_admin, enabled, ai_paused, personality_override_json, last_seen_at FROM groups`,
       this.sql`SELECT id, group_id, whatsapp_member_id, display_name, behavior_profile_json, confidence_json, first_seen_at, last_seen_at FROM members`,
-      this.sql`SELECT id, chat_id, group_id, sender_id, sender_name, timestamp_ms, message_type, text_or_transcript, quoted_message_id, quoted_sender_id, mentioned_member_ids_json, media_metadata_json, is_group, is_status, is_from_bot, stored_at FROM messages`,
+      this.sql`SELECT id, chat_id, group_id, sender_id, sender_name, timestamp_ms, message_type, text_or_transcript, transcript_confidence, transcript_language, quoted_message_id, quoted_sender_id, mentioned_member_ids_json, media_metadata_json, is_group, is_status, is_from_bot, stored_at FROM messages`,
       this.sql`SELECT id, scope_type, scope_id, memory_type, value_json, confidence, evidence_count, created_at, last_confirmed_at, expires_at FROM memories`,
-      this.sql`SELECT id, idempotency_key, group_id, source_message_id, action_type, target_message_id, payload_json, scheduled_for, status, executed_at, error FROM ai_actions`,
+      this.sql`SELECT id, idempotency_key, group_id, source_message_id, action_type, target_message_id, payload_json, scheduled_for, status, attempts, next_attempt_at, executed_at, error FROM ai_actions`,
       this.sql`SELECT id, group_id, creator_id, creator_chat_id, type, condition_json, message, status, trigger_at, recurrence, notification_target, notification_chat_id, created_at, last_checked_at, last_successful_check, last_error, retry_count FROM tasks`,
       this.sql`SELECT id, event, level, message_id, group_id, details_json, created_at FROM audit_logs ORDER BY created_at DESC LIMIT 500`,
       this.sql`SELECT provider, operation, group_id, units, success, latency_ms, created_at FROM provider_usage ORDER BY created_at DESC LIMIT 1000`,
@@ -148,8 +148,8 @@ export class PostgresStore implements Store {
   }
 
   async storeMessage(message: StoredMessage): Promise<boolean> {
-    const rows = await this.sql`INSERT INTO messages (id, chat_id, group_id, sender_id, sender_name, timestamp_ms, message_type, text_or_transcript, quoted_message_id, quoted_sender_id, mentioned_member_ids_json, media_metadata_json, is_group, is_status, is_from_bot, stored_at)
-      VALUES (${message.id}, ${message.chatId}, ${message.groupId ?? null}, ${message.senderId}, ${message.senderName ?? null}, ${message.timestamp}, ${message.type}, ${message.text ?? null}, ${message.quotedMessageId ?? null}, ${message.quotedSenderId ?? null}, ${JSON.stringify(message.mentionedIds)}::jsonb, ${message.media ? JSON.stringify(message.media) : null}::jsonb, ${message.isGroup}, ${message.isStatus}, ${message.isFromBot}, ${message.storedAt})
+    const rows = await this.sql`INSERT INTO messages (id, chat_id, group_id, sender_id, sender_name, timestamp_ms, message_type, text_or_transcript, transcript_confidence, transcript_language, quoted_message_id, quoted_sender_id, mentioned_member_ids_json, media_metadata_json, is_group, is_status, is_from_bot, stored_at)
+      VALUES (${message.id}, ${message.chatId}, ${message.groupId ?? null}, ${message.senderId}, ${message.senderName ?? null}, ${message.timestamp}, ${message.type}, ${message.text ?? null}, ${message.transcriptConfidence ?? null}, ${message.transcriptLanguage ?? null}, ${message.quotedMessageId ?? null}, ${message.quotedSenderId ?? null}, ${JSON.stringify(message.mentionedIds)}::jsonb, ${message.media ? JSON.stringify(message.media) : null}::jsonb, ${message.isGroup}, ${message.isStatus}, ${message.isFromBot}, ${message.storedAt})
       ON CONFLICT (id) DO NOTHING RETURNING id`;
     if (!(rows as Row[]).length) return false;
     this.state.messages[message.id] = message;
@@ -171,8 +171,8 @@ export class PostgresStore implements Store {
   }
 
   async createAction(action: ActionRecord): Promise<boolean> {
-    const rows = await this.sql`INSERT INTO ai_actions (id, idempotency_key, group_id, source_message_id, action_type, target_message_id, payload_json, scheduled_for, status, executed_at, error)
-      VALUES (${action.id}, ${action.idempotencyKey}, ${action.groupId}, ${action.sourceMessageId}, ${action.actionType}, ${action.targetMessageId ?? null}, ${JSON.stringify(action.payload)}::jsonb, ${action.scheduledFor}, ${action.status}, ${action.executedAt ?? null}, ${action.error ?? null})
+    const rows = await this.sql`INSERT INTO ai_actions (id, idempotency_key, group_id, source_message_id, action_type, target_message_id, payload_json, scheduled_for, status, attempts, next_attempt_at, executed_at, error)
+      VALUES (${action.id}, ${action.idempotencyKey}, ${action.groupId}, ${action.sourceMessageId}, ${action.actionType}, ${action.targetMessageId ?? null}, ${JSON.stringify(action.payload)}::jsonb, ${action.scheduledFor}, ${action.status}, ${action.attempts ?? 0}, ${action.nextAttemptAt ?? null}, ${action.executedAt ?? null}, ${action.error ?? null})
       ON CONFLICT (idempotency_key) DO NOTHING RETURNING id`;
     if (!(rows as Row[]).length) return false;
     this.state.actions[action.id] = action;
@@ -183,7 +183,7 @@ export class PostgresStore implements Store {
     const current = this.state.actions[id];
     if (!current) return undefined;
     const action = { ...current, ...update };
-    await this.sql`UPDATE ai_actions SET status = ${action.status}, target_message_id = ${action.targetMessageId ?? null}, payload_json = ${JSON.stringify(action.payload)}::jsonb, scheduled_for = ${action.scheduledFor}, executed_at = ${action.executedAt ?? null}, error = ${action.error ?? null} WHERE id = ${id}`;
+    await this.sql`UPDATE ai_actions SET status = ${action.status}, target_message_id = ${action.targetMessageId ?? null}, payload_json = ${JSON.stringify(action.payload)}::jsonb, scheduled_for = ${action.scheduledFor}, attempts = ${action.attempts ?? 0}, next_attempt_at = ${action.nextAttemptAt ?? null}, executed_at = ${action.executedAt ?? null}, error = ${action.error ?? null} WHERE id = ${id}`;
     this.state.actions[id] = action;
     return action;
   }
@@ -255,6 +255,10 @@ export class PostgresStore implements Store {
     return Object.values(this.state.messages).filter((message) => message.groupId === groupId).sort((a, b) => b.timestamp - a.timestamp).slice(0, limit).reverse();
   }
 
+  recentChatMessages(chatId: string, limit: number): StoredMessage[] {
+    return Object.values(this.state.messages).filter((message) => message.chatId === chatId).sort((a, b) => b.timestamp - a.timestamp).slice(0, limit).reverse();
+  }
+
   message(id: string): StoredMessage | undefined { return this.state.messages[id]; }
   group(id: string): GroupRecord | undefined { return this.state.groups[id]; }
   groups(): GroupRecord[] { return Object.values(this.state.groups).sort((a, b) => a.subject.localeCompare(b.subject)); }
@@ -262,6 +266,7 @@ export class PostgresStore implements Store {
   memories(scopeId?: string): MemoryRecord[] { return Object.values(this.state.memories).filter((memory) => !scopeId || memory.scopeId === scopeId); }
   logs(limit = 100): AuditLog[] { return this.state.logs.slice(-limit).reverse(); }
   actions(limit = 100): ActionRecord[] { return Object.values(this.state.actions).sort((a, b) => b.scheduledFor - a.scheduledFor).slice(0, limit); }
+  action(id: string): ActionRecord | undefined { return this.state.actions[id]; }
   task(id: string): TaskRecord | undefined { return this.state.tasks[id]; }
   tasks(status?: TaskStatus): TaskRecord[] { return Object.values(this.state.tasks).filter((task) => !status || task.status === status).sort((a, b) => b.createdAt - a.createdAt); }
 
@@ -296,11 +301,15 @@ export class PostgresStore implements Store {
     await this.sql`CREATE TABLE IF NOT EXISTS schema_migrations (version integer PRIMARY KEY, applied_at bigint NOT NULL)`;
     await this.sql`CREATE TABLE IF NOT EXISTS groups (id text PRIMARY KEY, whatsapp_group_id text UNIQUE NOT NULL, subject text NOT NULL, participant_count integer NOT NULL, is_admin boolean NOT NULL DEFAULT false, enabled boolean NOT NULL DEFAULT false, ai_paused boolean NOT NULL DEFAULT false, personality_override_json jsonb, last_seen_at bigint NOT NULL)`;
     await this.sql`CREATE TABLE IF NOT EXISTS members (id text PRIMARY KEY, group_id text NOT NULL, whatsapp_member_id text NOT NULL, display_name text, behavior_profile_json jsonb NOT NULL, confidence_json jsonb NOT NULL, first_seen_at bigint NOT NULL, last_seen_at bigint NOT NULL)`;
-    await this.sql`CREATE TABLE IF NOT EXISTS messages (id text PRIMARY KEY, chat_id text NOT NULL, group_id text, sender_id text NOT NULL, sender_name text, timestamp_ms bigint NOT NULL, message_type text NOT NULL, text_or_transcript text, quoted_message_id text, quoted_sender_id text, mentioned_member_ids_json jsonb NOT NULL DEFAULT '[]'::jsonb, media_metadata_json jsonb, is_group boolean NOT NULL, is_status boolean NOT NULL, is_from_bot boolean NOT NULL, stored_at bigint NOT NULL)`;
+    await this.sql`CREATE TABLE IF NOT EXISTS messages (id text PRIMARY KEY, chat_id text NOT NULL, group_id text, sender_id text NOT NULL, sender_name text, timestamp_ms bigint NOT NULL, message_type text NOT NULL, text_or_transcript text, transcript_confidence real, transcript_language text, quoted_message_id text, quoted_sender_id text, mentioned_member_ids_json jsonb NOT NULL DEFAULT '[]'::jsonb, media_metadata_json jsonb, is_group boolean NOT NULL, is_status boolean NOT NULL, is_from_bot boolean NOT NULL, stored_at bigint NOT NULL)`;
+    await this.sql`ALTER TABLE messages ADD COLUMN IF NOT EXISTS transcript_confidence real`;
+    await this.sql`ALTER TABLE messages ADD COLUMN IF NOT EXISTS transcript_language text`;
     await this.sql`CREATE INDEX IF NOT EXISTS messages_group_time_idx ON messages (group_id, timestamp_ms DESC)`;
     await this.sql`CREATE TABLE IF NOT EXISTS memories (id text PRIMARY KEY, scope_type text NOT NULL, scope_id text NOT NULL, memory_type text NOT NULL, value_json jsonb NOT NULL, confidence real NOT NULL, evidence_count integer NOT NULL, created_at bigint NOT NULL, last_confirmed_at bigint NOT NULL, expires_at bigint)`;
     await this.sql`CREATE INDEX IF NOT EXISTS memories_scope_idx ON memories (scope_id)`;
-    await this.sql`CREATE TABLE IF NOT EXISTS ai_actions (id text PRIMARY KEY, idempotency_key text UNIQUE NOT NULL, group_id text NOT NULL, source_message_id text NOT NULL, action_type text NOT NULL, target_message_id text, payload_json jsonb NOT NULL, scheduled_for bigint NOT NULL, status text NOT NULL, executed_at bigint, error text)`;
+    await this.sql`CREATE TABLE IF NOT EXISTS ai_actions (id text PRIMARY KEY, idempotency_key text UNIQUE NOT NULL, group_id text NOT NULL, source_message_id text NOT NULL, action_type text NOT NULL, target_message_id text, payload_json jsonb NOT NULL, scheduled_for bigint NOT NULL, status text NOT NULL, attempts integer NOT NULL DEFAULT 0, next_attempt_at bigint, executed_at bigint, error text)`;
+    await this.sql`ALTER TABLE ai_actions ADD COLUMN IF NOT EXISTS attempts integer NOT NULL DEFAULT 0`;
+    await this.sql`ALTER TABLE ai_actions ADD COLUMN IF NOT EXISTS next_attempt_at bigint`;
     await this.sql`CREATE INDEX IF NOT EXISTS actions_group_time_idx ON ai_actions (group_id, scheduled_for DESC)`;
     await this.sql`CREATE TABLE IF NOT EXISTS tasks (id text PRIMARY KEY, group_id text NOT NULL, creator_id text NOT NULL, creator_chat_id text NOT NULL, type text NOT NULL, condition_json jsonb, message text NOT NULL, status text NOT NULL, trigger_at bigint, recurrence text NOT NULL, notification_target text NOT NULL, notification_chat_id text NOT NULL, created_at bigint NOT NULL, last_checked_at bigint, last_successful_check bigint, last_error text, retry_count integer NOT NULL DEFAULT 0)`;
     await this.sql`CREATE INDEX IF NOT EXISTS tasks_status_trigger_idx ON tasks (status, trigger_at)`;
@@ -345,7 +354,7 @@ function memberFromRow(row: Row): MemberRecord {
 
 function messageFromRow(row: Row): StoredMessage {
   const media = jsonObject(row.media_metadata_json, {});
-  return { id: String(row.id), chatId: String(row.chat_id), ...(row.group_id ? { groupId: String(row.group_id) } : {}), senderId: String(row.sender_id), ...(row.sender_name ? { senderName: String(row.sender_name) } : {}), timestamp: Number(row.timestamp_ms), type: String(row.message_type) as StoredMessage["type"], ...(row.text_or_transcript ? { text: String(row.text_or_transcript) } : {}), ...(row.quoted_message_id ? { quotedMessageId: String(row.quoted_message_id) } : {}), ...(row.quoted_sender_id ? { quotedSenderId: String(row.quoted_sender_id) } : {}), mentionedIds: jsonArray(row.mentioned_member_ids_json), ...(Object.keys(media).length ? { media: media as unknown as StoredMessage["media"] } : {}), isGroup: Boolean(row.is_group), isStatus: Boolean(row.is_status), isFromBot: Boolean(row.is_from_bot), storedAt: Number(row.stored_at) };
+  return { id: String(row.id), chatId: String(row.chat_id), ...(row.group_id ? { groupId: String(row.group_id) } : {}), senderId: String(row.sender_id), ...(row.sender_name ? { senderName: String(row.sender_name) } : {}), timestamp: Number(row.timestamp_ms), type: String(row.message_type) as StoredMessage["type"], ...(row.text_or_transcript ? { text: String(row.text_or_transcript) } : {}), ...(row.transcript_confidence !== null && row.transcript_confidence !== undefined ? { transcriptConfidence: Number(row.transcript_confidence) } : {}), ...(row.transcript_language ? { transcriptLanguage: String(row.transcript_language) } : {}), ...(row.quoted_message_id ? { quotedMessageId: String(row.quoted_message_id) } : {}), ...(row.quoted_sender_id ? { quotedSenderId: String(row.quoted_sender_id) } : {}), mentionedIds: jsonArray(row.mentioned_member_ids_json), ...(Object.keys(media).length ? { media: media as unknown as StoredMessage["media"] } : {}), isGroup: Boolean(row.is_group), isStatus: Boolean(row.is_status), isFromBot: Boolean(row.is_from_bot), storedAt: Number(row.stored_at) };
 }
 
 function memoryFromRow(row: Row): MemoryRecord {
@@ -353,7 +362,7 @@ function memoryFromRow(row: Row): MemoryRecord {
 }
 
 function actionFromRow(row: Row): ActionRecord {
-  return { id: String(row.id), idempotencyKey: String(row.idempotency_key), groupId: String(row.group_id), sourceMessageId: String(row.source_message_id), actionType: String(row.action_type) as ActionRecord["actionType"], ...(row.target_message_id ? { targetMessageId: String(row.target_message_id) } : {}), payload: jsonObject(row.payload_json, {}), scheduledFor: Number(row.scheduled_for), status: String(row.status) as ActionRecord["status"], ...(row.executed_at ? { executedAt: Number(row.executed_at) } : {}), ...(row.error ? { error: String(row.error) } : {}) };
+  return { id: String(row.id), idempotencyKey: String(row.idempotency_key), groupId: String(row.group_id), sourceMessageId: String(row.source_message_id), actionType: String(row.action_type) as ActionRecord["actionType"], ...(row.target_message_id ? { targetMessageId: String(row.target_message_id) } : {}), payload: jsonObject(row.payload_json, {}), scheduledFor: Number(row.scheduled_for), status: String(row.status) as ActionRecord["status"], ...(row.attempts !== null && row.attempts !== undefined ? { attempts: Number(row.attempts) } : {}), ...(row.next_attempt_at ? { nextAttemptAt: Number(row.next_attempt_at) } : {}), ...(row.executed_at ? { executedAt: Number(row.executed_at) } : {}), ...(row.error ? { error: String(row.error) } : {}) };
 }
 
 function taskFromRow(row: Row): TaskRecord {
