@@ -14,6 +14,7 @@ import { TaskService } from "./tasks.js";
 import { ElevenLabsSpeechToTextProvider, ElevenLabsTextToSpeechProvider, FallbackSpeechToTextProvider, FallbackTextToSpeechProvider, GeminiVisionProvider, GroqSpeechToTextProvider, MediaProcessor, OpenAITextToSpeechProvider } from "./media.js";
 import { BackupService } from "./backup.js";
 import { KeyedJobQueue } from "./queue.js";
+import { formatNigeriaDateTime, NIGERIA_TIME_ZONE } from "./time.js";
 
 export class BotRuntime {
   readonly memory: MemoryService;
@@ -197,6 +198,16 @@ export class BotRuntime {
         return;
       }
     }
+    const priceReply = await this.tasks.currentPriceReply(message.text ?? "");
+    if (priceReply) {
+      await this.executeTaskResult({ reply: priceReply }, message, group);
+      return;
+    }
+    const dateTimeReply = this.tasks.currentNigeriaDateTimeReply(message.text ?? "");
+    if (dateTimeReply) {
+      await this.executeTaskResult({ reply: dateTimeReply }, message, group);
+      return;
+    }
     const result = await this.decisions.decide(message, contextGroup, context, { ...this.config, alwaysReplyToAllowedDm: !message.isGroup });
     this.lastDecisionDiagnostics = {
       messageId: message.id,
@@ -360,6 +371,7 @@ export class BotRuntime {
     const snapshot = this.store.snapshot;
     return {
       connection: snapshot.runtime,
+      time: { timeZone: NIGERIA_TIME_ZONE, current: formatNigeriaDateTime() },
       safety: {
         groupOnlyMode: this.config.groupOnlyMode,
         directMessageAllowlist: this.config.directMessageAllowlist,

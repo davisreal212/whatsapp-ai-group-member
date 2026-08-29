@@ -29,6 +29,7 @@
     @media (max-width: 480px) { .status-grid, .metric-grid, .detail-grid { grid-template-columns: 1fr; } .form { align-items: stretch; flex-direction: column; } .top-actions { gap: 5px; } .top-actions button { padding: 8px; } .hero-card { padding: 20px; } }
     .sidebar { position: sticky; top: 0; height: 100vh; align-self: start; } .status-grid, .metric-grid { grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); } .audit-tools { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; } .audit-tools button { padding: 5px 8px; color: var(--muted); font-size: 10px; } .audit-tools button.active { color: var(--lime); border-color: #55764b; background: #24362d; } .audit-level { flex: 0 0 auto; padding: 3px 7px; border-radius: 999px; font-size: 10px; font-weight: 800; text-transform: uppercase; } .audit-level.info { color: var(--blue); background: #1c3037; } .audit-level.warn { color: var(--amber); background: #3a3020; } .audit-level.error { color: var(--red); background: #3a2421; } .audit-row.warn, .audit-row.error { border-left: 3px solid var(--amber); padding-left: 10px; } .audit-row.error { border-left-color: var(--red); } @media (max-width: 760px) { .sidebar { height: auto; } }
   </style>
+  <style>.nav::before { content: 'Workspace'; padding: 2px 11px 7px; color: #53645d; font-size: 10px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }</style>
 </head>
 <body>
   <section id="landing" class="landing"><div class="landing-grid"><div class="landing-copy"><div class="eyebrow">Private group intelligence</div><h1>Let the group set the pace.</h1><p>A calm, safety-first AI member for selected WhatsApp groups. It learns the room, checks current facts, and knows when silence is the better reply.</p><p class="landing-note">The control room keeps authorization, memory, providers, tasks, and outbound safety in one place.</p></div><div class="auth-card"><div class="tabs"><button id="signupTab" class="active">Create account</button><button id="signinTab">Sign in</button></div><form id="authForm" class="stack"><div class="field"><label for="email">ADMIN EMAIL</label><input id="email" type="email" autocomplete="email" required placeholder="you@example.com"></div><div class="field"><label for="password">PASSWORD</label><input id="password" type="password" autocomplete="new-password" minlength="8" required placeholder="At least 8 characters"></div><button id="authSubmit" class="primary" type="submit">Open the control room</button></form><p id="authMessage" class="muted" style="margin-top:15px;font-size:12px">The first account becomes the administrator. Sessions use an HttpOnly cookie.</p></div></div></section>
@@ -70,7 +71,7 @@
     async function togglePause(group) { try { await api('/api/groups/' + encodeURIComponent(group.id) + '/paused', { method: 'POST', body: JSON.stringify({ aiPaused: !group.aiPaused }) }); refresh(); } catch (error) { message(error.message, 'error'); } }
     async function control(name, value) { try { await api('/api/controls', { method: 'POST', body: JSON.stringify({ [name]: value }) }); refresh(); } catch (error) { message(error.message, 'error'); } }
     async function saveAllowlist(values) { try { await api('/api/dm-allowlist', { method: 'POST', body: JSON.stringify({ contacts: values }) }); refresh(); } catch (error) { message(error.message, 'error'); } }
-    function formatDate(value) { return value ? new Date(value).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-'; }
+    function formatDate(value) { return value ? new Intl.DateTimeFormat('en-NG', { timeZone: 'Africa/Lagos', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value)) + ' WAT' : '-'; }
     function escapeHtml(value) { return value.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char])); }
     document.querySelectorAll('[data-page]').forEach((button) => button.onclick = () => showPage(button.dataset.page)); $('refresh').onclick = refresh; $('overviewConnect').onclick = () => showPage('whatsapp'); $('overviewPause').onclick = () => control('outboundPaused', true); $('outbound').onclick = () => control('outboundPaused', !$('outbound').textContent.startsWith('Resume')); $('processing').onclick = () => control('aiProcessingPaused', !$('processing').textContent.startsWith('Resume')); $('memberRefresh').onclick = loadMembers; $('memberGroup').onchange = loadMembers; $('resetMemory').onclick = async () => { const scope = $('memoryScope').value.trim(); if (!scope) return message('Enter a group or chat ID first.', 'error'); try { const result = await api('/api/memory/' + encodeURIComponent(scope), { method: 'DELETE' }); $('memoryMessage').textContent = `Deleted ${result.deleted} memory records.`; } catch (error) { message(error.message, 'error'); } }; $('groupsSync').onclick = $('sync').onclick = async () => { try { await api('/api/groups/sync', { method: 'POST' }); refresh(); } catch (error) { message(error.message, 'error'); } }; $('connect').onclick = async () => { setBusy($('connect'), true, 'Connecting...'); try { await api('/api/whatsapp/connect', { method: 'POST', body: JSON.stringify({ phoneNumber: $('phone').value }) }); refresh(); } catch (error) { message(error.message, 'error'); } finally { setBusy($('connect'), false, 'Connect'); } }; $('disconnect').onclick = async () => { if (!confirm('Disconnect this WhatsApp session?')) return; try { await api('/api/whatsapp/disconnect', { method: 'POST' }); refresh(); } catch (error) { message(error.message, 'error'); } }; $('dmForm').onsubmit = async (event) => { event.preventDefault(); const input = $('dmContact'); const value = input.value.trim(); if (!value) return; await saveAllowlist([...new Set([...dmAllowlist, value])]); input.value = ''; }; $('signupTab').onclick = () => { authMode = 'signup'; $('signupTab').classList.add('active'); $('signinTab').classList.remove('active'); $('authSubmit').textContent = 'Open the control room'; $('password').autocomplete = 'new-password'; }; $('signinTab').onclick = () => { authMode = 'signin'; $('signinTab').classList.add('active'); $('signupTab').classList.remove('active'); $('authSubmit').textContent = 'Sign in'; $('password').autocomplete = 'current-password'; }; $('authForm').onsubmit = async (event) => { event.preventDefault(); setBusy($('authSubmit'), true, 'Working...'); try { const result = await api('/api/auth/' + authMode, { method: 'POST', body: JSON.stringify({ email: $('email').value, password: $('password').value }) }); showDashboard(result.user); } catch (error) { $('authMessage').textContent = error.message; $('authMessage').className = 'error'; } finally { setBusy($('authSubmit'), false, authMode === 'signup' ? 'Open the control room' : 'Sign in'); } }; $('signout').onclick = async () => { await api('/api/auth/signout', { method: 'POST' }).catch(() => {}); showLanding(); }; api('/api/auth/me').then((result) => showDashboard(result.user)).catch(() => showLanding());
   </script>
@@ -93,6 +94,20 @@
         overviewButton.disabled = status === 'CONNECTED';
         overviewButton.textContent = status === 'CONNECTED' ? 'WhatsApp connected' : 'Connect WhatsApp';
         overviewButton.style.opacity = status === 'CONNECTED' ? '.65' : '';
+      }
+
+      function renderSidebarTime(data) {
+        const foot = document.querySelector('.side-foot');
+        if (!foot) return;
+        let clock = $('localClock');
+        if (!clock) {
+          clock = document.createElement('small');
+          clock.id = 'localClock';
+          clock.style.display = 'block';
+          clock.style.marginTop = '9px';
+          foot.append(clock);
+        }
+        clock.textContent = `Nigeria time · ${data.time?.current || new Intl.DateTimeFormat('en-NG', { timeZone: 'Africa/Lagos', dateStyle: 'medium', timeStyle: 'short' }).format(new Date()) + ' WAT'}`;
       }
 
       function ensureAuditControls() {
@@ -140,6 +155,7 @@
       render = (data) => {
         originalRender(data);
         applyConnectionState(data);
+        renderSidebarTime(data);
         ensureAuditControls();
         renderAudit(data.recentLogs || []);
       };

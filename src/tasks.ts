@@ -3,6 +3,7 @@ import type { AppConfig, CanonicalMessage, TaskRecord } from "./types.js";
 import type { Store } from "./store.js";
 import type { OutboundTransport } from "./actions.js";
 import { isQuietHours } from "./policy.js";
+import { addNigeriaDays, formatNigeriaDateTime, nigeriaDateParts, nigeriaLocalTimeToTimestamp } from "./time.js";
 
 const CHECK_INTERVAL_MS = 30_000;
 const PRICE_CHECK_INTERVAL_MS = 60_000;
@@ -92,6 +93,25 @@ export class TaskService {
     }
 
     return { handled: false };
+  }
+
+  async currentPriceReply(text: string): Promise<string | undefined> {
+    const assets = parseCurrentPriceRequest(text);
+    if (!assets.length) return undefined;
+    try {
+      const prices = await this.priceProvider.getPrices(assets);
+      if (assets.some((asset) => prices[asset] === undefined)) throw new Error("price provider returned an incomplete quote");
+      const lines = assets.map((asset) => `${asset === "bitcoin" ? "BTC" : "ETH"}: $${formatNumber(prices[asset] as number)}`);
+      return `${lines.join("\n")}\nUpdated ${formatNigeriaDateTime()}.`;
+    } catch (error) {
+      await this.log("price.request_failed", { assets, provider: this.priceProvider.name, error: error instanceof Error ? error.message : "unknown" });
+      return "I couldn't fetch the live price just now. Try again in a moment.";
+    }
+  }
+
+  currentNigeriaDateTimeReply(text: string): string | undefined {
+    if (!/\b(?:what|current|now|tell me)\b/i.test(text) || !/\b(?:time|date|day)\b/i.test(text)) return undefined;
+    return `Nigeria time: ${formatNigeriaDateTime()}.`;
   }
 
   async cancelTask(id: string): Promise<TaskRecord | undefined> {
@@ -305,6 +325,14 @@ function parsePriceAlert(text: string): TaskDraft | undefined {
   return { type: "PRICE_ALERT", message: `${asset} ${operator} ${threshold}`, condition: { asset, operator, threshold, currency: "USD" }, recurrence: "ONCE" };
 }
 
+export function parseCurrentPriceRequest(text: string): Array<"bitcoin" | "ethereum"> {
+  if (!/\b(?:price|worth|trading|quote|value)\b/i.test(text)) return [];
+  const assets: Array<"bitcoin" | "ethereum"> = [];
+  if (/\b(?:bitcoin|btc)\b/i.test(text)) assets.push("bitcoin");
+  if (/\b(?:ethereum|eth)\b/i.test(text)) assets.push("ethereum");
+  return [...new Set(assets)];
+}
+
 function parseReminder(text: string): { triggerAt?: number; message?: string; recurrence: TaskRecord["recurrence"]; error?: string } {
   let body = text.replace(/^.*?\bremind me\b/i, "").trim();
   const recurring = body.match(/^every\s+(day|daily|week|weekly)\b\s*/i);
@@ -321,11 +349,14 @@ function parseReminder(text: string): { triggerAt?: number; message?: string; re
   let normalizedHour = hour;
   if (meridiem === "pm" && normalizedHour < 12) normalizedHour += 12;
   if (meridiem === "am" && normalizedHour === 12) normalizedHour = 0;
-  const trigger = new Date();
-  if (day === "tomorrow") trigger.setDate(trigger.getDate() + 1);
-  trigger.setHours(normalizedHour, minute, 0, 0);
-  if (!day && trigger.getTime() <= Date.now()) trigger.setDate(trigger.getDate() + 1);
-  return { triggerAt: trigger.getTime(), message, recurrence };
+  let date = nigeriaDateParts();
+  if (day === "tomorrow") date = addNigeriaDays(date, 1);
+  let triggerAt = nigeriaLocalTimeToTimestamp(date.year, date.month, date.day, normalizedHour, minute);
+  if (!day && triggerAt <= Date.now()) {
+    date = addNigeriaDays(date, 1);
+    triggerAt = nigeriaLocalTimeToTimestamp(date.year, date.month, date.day, normalizedHour, minute);
+  }
+  return { triggerAt, message, recurrence };
 }
 
 function formatTaskList(tasks: TaskRecord[]): string {
@@ -334,7 +365,7 @@ function formatTaskList(tasks: TaskRecord[]): string {
 }
 
 function formatReminderTime(timestamp: number): string {
-  return new Date(timestamp).toLocaleString("en-NG", { dateStyle: "medium", timeStyle: "short" });
+  return formatNigeriaDateTime(timestamp);
 }
 
 function formatNumber(value: number): string {

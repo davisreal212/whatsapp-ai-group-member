@@ -95,4 +95,24 @@ describe("task service", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it("answers a direct current-price request with a Nigeria timestamp", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-price-request-"));
+    tempDirs.push(dir);
+    const store = new FileStore(dir);
+    await store.init();
+    const config = loadConfig({ NODE_ENV: "test", DATA_DIR: dir, DRY_RUN: "false" });
+    const service = new TaskService(store, config, { connected: true, sendText: async () => {}, sendReaction: async () => {}, sendMedia: async () => {} }, { name: "test-price", getPrices: async () => ({ bitcoin: 80000 }) });
+    await expect(service.currentPriceReply("BTC price")).resolves.toMatch(/BTC: \$80,000[\s\S]*Updated [\s\S]* WAT\./);
+  });
+
+  it("answers time questions in Nigeria time", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-time-request-"));
+    tempDirs.push(dir);
+    const store = new FileStore(dir);
+    await store.init();
+    const config = loadConfig({ NODE_ENV: "test", DATA_DIR: dir, DRY_RUN: "false" });
+    const service = new TaskService(store, config, { connected: true, sendText: async () => {}, sendReaction: async () => {}, sendMedia: async () => {} });
+    expect(service.currentNigeriaDateTimeReply("what time is it today")).toMatch(/^Nigeria time: .* WAT\.$/);
+  });
 });
