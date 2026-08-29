@@ -13,6 +13,7 @@ import type { Store } from "./store.js";
 import type { OutboundTransport } from "./actions.js";
 import type { ConnectionStatus } from "./types.js";
 import { fetchSafeMedia } from "./network.js";
+import { KeyedJobQueue, type QueueStats } from "./queue.js";
 
 export interface DiscoveredGroup {
   id: string;
@@ -35,6 +36,7 @@ export interface WhatsAppEvents {
 export class BaileysWhatsAppAdapter implements OutboundTransport {
   private socket?: WASocket;
   private readonly rawMessages = new Map<string, WAMessage>();
+  private readonly messageQueue = new KeyedJobQueue(4);
   private reconnectAttempts = 0;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private isOpen = false;
@@ -96,23 +98,26 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     socket.ev.on("creds.update", () => {
       this.credentialsSave = this.credentialsSave.then(() => saveCreds());
     });
-    socket.ev.on("messages.upsert", async ({ messages, type }) => {
+    socket.ev.on("messages.upsert", ({ messages, type }) => {
       console.log(`[whatsapp] messages.upsert type=${type} count=${messages.length}`);
       for (const raw of messages) {
         if (raw.key.id) this.rawMessages.set(raw.key.id, raw);
-        try {
-          await this.events.onRawMessage(raw);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "unknown";
-          console.error(`[whatsapp] message handler failed id=${raw.key.id ?? "unknown"}: ${message}`);
-          await this.store.addLog({
-            id: crypto.randomUUID(),
-            event: "whatsapp.message_handler_failure",
-            level: "error",
-            details: { error: message },
-            createdAt: Date.now(),
-          });
-        }
+        this.messageQueue.enqueue(raw.key.remoteJid ?? "unknown", async () => {
+          try {
+            await this.events.onRawMessage(raw);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "unknown";
+            console.error(`[whatsapp] message handler failed id=${raw.key.id ?? "unknown"}: ${message}`);
+            await this.store.addLog({
+              id: crypto.randomUUID(),
+              event: "whatsapp.message_handler_failure",
+              level: "error",
+              details: { error: message },
+              createdAt: Date.now(),
+            });
+            throw error;
+          }
+        });
       }
     });
     socket.ev.on("connection.update", (update) => {
@@ -193,6 +198,10 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
       contacts.set(id, { id, ...(pushName ? { displayName: pushName } : {}) });
     }
     return [...contacts.values()].sort((a, b) => (a.displayName ?? a.id).localeCompare(b.displayName ?? b.id));
+  }
+
+  queueStats(): QueueStats {
+    return this.messageQueue.stats();
   }
 
   async sendText(groupId: string, text: string, quotedMessageId?: string, mentionedIds?: string[]): Promise<void> {

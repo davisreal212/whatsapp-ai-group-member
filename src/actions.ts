@@ -4,9 +4,11 @@ import type { AppConfig, CanonicalMessage, DecisionPlan, GroupRecord } from "./t
 import type { Store } from "./store.js";
 import { isDirectMessageAllowed } from "./policy.js";
 import { isSafeHttpsUrl } from "./network.js";
+import type { QueueStats } from "./queue.js";
 
 export interface OutboundTransport {
   readonly connected: boolean;
+  queueStats?(): QueueStats;
   sendText(groupId: string, text: string, quotedMessageId?: string, mentionedIds?: string[]): Promise<void>;
   sendReaction(groupId: string, messageId: string, reaction: string): Promise<void>;
   sendMedia(groupId: string, mediaUrl: string, mimeType: string, caption?: string): Promise<void>;

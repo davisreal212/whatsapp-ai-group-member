@@ -223,6 +223,7 @@ export class BotRuntime {
       metrics: snapshot.runtime.metrics,
       providers: this.providers.statuses(),
       research: { tavilyAvailable: Boolean(this.config.tavilyApiKey) },
+      queue: this.transport.queueStats?.() ?? { pending: 0, processing: 0, failed: 0 },
       recentLogs: this.store.logs(30),
       recentActions: this.store.actions(30),
     };
