@@ -67,6 +67,7 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     await mkdir(this.authDir, { recursive: true });
     const { state, saveCreds } = await useMultiFileAuthState(this.authDir);
     this.authRegistered = state.creds.registered;
+    console.log(`[whatsapp] auth loaded registered=${this.authRegistered} pairingRequested=${Boolean(this.pairingPhoneNumber)}`);
     if (!this.authRegistered && !this.pairingPhoneNumber) {
       // An unfinished pairing attempt leaves a temporary `me` value in auth state.
       // Do not let the next boot treat that stale value as a logged-in session.
@@ -93,15 +94,31 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     socket.ev.on("creds.update", () => {
       this.credentialsSave = this.credentialsSave.then(() => saveCreds());
     });
-    socket.ev.on("messages.upsert", async ({ messages }) => {
+    socket.ev.on("messages.upsert", async ({ messages, type }) => {
+      console.log(`[whatsapp] messages.upsert type=${type} count=${messages.length}`);
       for (const raw of messages) {
         if (raw.key.id) this.rawMessages.set(raw.key.id, raw);
-        await this.events.onRawMessage(raw);
+        try {
+          await this.events.onRawMessage(raw);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "unknown";
+          console.error(`[whatsapp] message handler failed id=${raw.key.id ?? "unknown"}: ${message}`);
+          await this.store.addLog({
+            id: crypto.randomUUID(),
+            event: "whatsapp.message_handler_failure",
+            level: "error",
+            details: { error: message },
+            createdAt: Date.now(),
+          });
+        }
       }
     });
     socket.ev.on("connection.update", (update) => {
+      console.log(`[whatsapp] connection.update connection=${update.connection ?? "pending"} isNewLogin=${Boolean(update.isNewLogin)} hasQr=${Boolean(update.qr)} statusCode=${getDisconnectStatusCode(update.lastDisconnect?.error) ?? "none"}`);
       if (update.isNewLogin) void this.handleNewLogin(socket);
-      void this.handleConnectionUpdate(socket, update.connection === "open" || update.connection === "close" ? update.connection : undefined, update.lastDisconnect?.error);
+      void this.handleConnectionUpdate(socket, update.connection === "open" || update.connection === "close" ? update.connection : undefined, update.lastDisconnect?.error).catch((error) => {
+        console.error(`[whatsapp] connection handler failed: ${error instanceof Error ? error.message : "unknown"}`);
+      });
     });
 
     if (this.pairingPhoneNumber && !state.creds.registered) await this.requestPairingCode(socket, this.pairingPhoneNumber);
@@ -216,6 +233,7 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
   ): Promise<void> {
     if (this.socket !== socket) return;
     if (connection === "open") {
+      console.log("[whatsapp] connection opened");
       this.isOpen = true;
       this.authRegistered = true;
       this.reconnectAttempts = 0;
@@ -224,13 +242,12 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
       return;
     }
     if (connection !== "close") return;
+    const statusCode = getDisconnectStatusCode(error);
+    console.error(`[whatsapp] connection closed statusCode=${statusCode ?? "none"} reconnectAttempt=${this.reconnectAttempts + 1}`);
     this.socket = undefined;
     this.isOpen = false;
     this.pairingCodeRequest = undefined;
     if (this.manuallyDisconnected) return;
-    const statusCode = error && typeof error === "object" && "output" in error
-      ? (error as { output?: { statusCode?: number } }).output?.statusCode
-      : undefined;
     if (statusCode === DisconnectReason.loggedOut) {
       this.authRegistered = false;
       this.pairingPhoneNumber = undefined;
@@ -256,6 +273,7 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
       void this.connect(this.pairingPhoneNumber).catch(async (connectError) => {
+        console.error(`[whatsapp] reconnect failed: ${connectError instanceof Error ? connectError.message : "unknown"}`);
         await this.store.addLog({
           id: crypto.randomUUID(),
           event: "whatsapp.reconnect_failure",
@@ -318,6 +336,11 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     await this.credentialsSave.catch(() => undefined);
     await rm(this.authDir, { recursive: true, force: true });
   }
+}
+
+function getDisconnectStatusCode(error: unknown): number | undefined {
+  if (!error || typeof error !== "object" || !("output" in error)) return undefined;
+  return (error as { output?: { statusCode?: number } }).output?.statusCode;
 }
 
 export function normalizePairingPhoneNumber(phoneNumber: string): string {
