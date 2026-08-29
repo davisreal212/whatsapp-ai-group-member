@@ -141,6 +141,15 @@ export class ActionService {
       }
       await this.store.updateAction(action.id, { status: "SENT", executedAt: Date.now() });
       await this.store.incrementMetric("actionsSent");
+      await this.store.addLog({
+        id: randomUUID(),
+        event: "action.sent",
+        level: "info",
+        messageId: sourceMessage.id,
+        ...(sourceMessage.groupId ? { groupId: sourceMessage.groupId } : {}),
+        details: { decision: plan.decision, targetMessageId: plan.targetMessageId ?? sourceMessage.id },
+        createdAt: Date.now(),
+      });
       return { valid: true, reason: "sent", plan };
     } catch (error) {
       await this.store.updateAction(action.id, { status: "FAILED", error: error instanceof Error ? error.message : "unknown error" });

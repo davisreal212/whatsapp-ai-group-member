@@ -103,7 +103,11 @@ export class BotRuntime {
     const result = await this.decisions.decide(message, contextGroup, context, this.config);
     if (!result.local.relevant) {
       await this.store.incrementMetric("ignoredLocally");
-      await this.log("decision.ignore_local", "info", { reason: result.plan.reason }, message);
+      await this.log("decision.ignore_local", "info", {
+        reason: result.plan.reason,
+        localReason: result.local.reason,
+        directed: result.local.directed,
+      }, message);
       return;
     }
 
