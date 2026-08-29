@@ -278,7 +278,7 @@ export class BotRuntime {
         await this.log("media.search_failed", "warn", { query: mediaQuery }, message);
       }
     }
-    if (plan.decision !== "IGNORE" && !plan.text && !["REACT", "SEND_IMAGE", "SEND_AUDIO"].includes(plan.decision)) {
+    if (plan.decision !== "IGNORE" && !plan.text && !["REACT", "SEND_IMAGE"].includes(plan.decision)) {
       const input: ProviderInput = {
         messageText: message.text ?? message.media?.caption ?? "",
         messageType: message.type,
@@ -292,15 +292,21 @@ export class BotRuntime {
       const response = await this.providers.generateResponse(input, message.groupId);
       if (response) plan = { ...plan, text: response };
     }
-    if (this.shouldUseAudioReply(message) && plan.text && plan.decision !== "REACT" && plan.decision !== "IGNORE") {
+    if ((plan.decision === "SEND_AUDIO" || this.shouldUseAudioReply(message)) && plan.text && plan.decision !== "REACT" && plan.decision !== "IGNORE") {
       try {
         const audio = await this.media.synthesizeSpeech(plan.text);
         const audioPlan = { ...plan, decision: "SEND_AUDIO" as const, text: undefined, mediaUrl: undefined, mediaMimeType: audio.mimeType };
         const result = await this.actions.execute(audioPlan, message, group, audio);
-        if (result.reason === "sent" || result.reason === "transport_failure") return;
+        if (result.reason === "sent") return;
+        await this.log("media.audio_send_failed", "warn", { reason: result.reason }, message);
       } catch (error) {
         await this.log("media.tts_failed", "warn", { error: error instanceof Error ? error.message : "unknown" }, message);
       }
+      if (plan.decision === "SEND_AUDIO") {
+        plan = { ...plan, decision: "REPLY", reason: "audio_fallback_text", text: plan.text || "I couldn't send a voice note right now, so I'll reply in text.", mediaUrl: undefined, mediaMimeType: undefined, needsMedia: false };
+      }
+    } else if (plan.decision === "SEND_AUDIO") {
+      plan = { ...plan, decision: "REPLY", reason: "audio_fallback_text", text: plan.text || "I couldn't send a voice note right now, so I'll reply in text.", mediaUrl: undefined, mediaMimeType: undefined, needsMedia: false };
     }
     await this.actions.execute(plan, message, group);
     } catch (error) {

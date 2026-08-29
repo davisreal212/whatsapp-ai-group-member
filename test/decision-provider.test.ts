@@ -28,6 +28,11 @@ describe("decision safety helpers", () => {
     expect(parseDecisionPlan({ decision: "REPLY", confidence: 0.9, reason: "answer", text: "Hi", delayMs: 0, needsWeb: false, needsMedia: false, responseStyle: "unknown-style" }).responseStyle).toBe("short_casual");
   });
 
+  it("extracts a decision object when a provider adds a short preamble", () => {
+    const plan = parseDecisionPlan('Here is the JSON:\n{"decision":"IGNORE","confidence":1,"reason":"quiet","delayMs":0,"needsWeb":false,"needsMedia":false,"responseStyle":"short_casual"}');
+    expect(plan.decision).toBe("IGNORE");
+  });
+
   it("retries OpenRouter with its free model after a credit rejection", async () => {
     const originalFetch = globalThis.fetch;
     const requests: string[] = [];

@@ -27,7 +27,7 @@ export function parseDecisionPlan(input: string | unknown): DecisionPlan {
   let value: unknown = input;
   if (typeof input === "string") {
     const cleaned = input.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-    value = JSON.parse(cleaned);
+    value = parseJsonObject(cleaned);
   }
   const parsed = decisionSchema.parse(value);
   return {
@@ -48,6 +48,17 @@ export function parseDecisionPlan(input: string | unknown): DecisionPlan {
     ...(parsed.mentionAll !== undefined ? { mentionAll: parsed.mentionAll } : {}),
     responseStyle: parsed.responseStyle,
   };
+}
+
+function parseJsonObject(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    const start = value.indexOf("{");
+    const end = value.lastIndexOf("}");
+    if (start < 0 || end <= start) throw error;
+    return JSON.parse(value.slice(start, end + 1));
+  }
 }
 
 export interface LocalRelevance {
