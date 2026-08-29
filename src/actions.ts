@@ -124,7 +124,7 @@ export class ActionService {
     const conversationId = sourceMessage.groupId ?? sourceMessage.chatId;
     let admission: { validation: ActionValidation; actionId?: string } | undefined;
     await this.admissionQueue.enqueueAndWait(conversationId, async () => {
-      admission = await this.admit(plan, sourceMessage, group, conversationId, Boolean(generatedAudio));
+      admission = await this.admit(plan, sourceMessage, group, conversationId, generatedAudio);
     });
     if (!admission) throw new Error("Action admission did not complete");
     if (!admission.validation.valid || plan.decision === "IGNORE") return admission.validation;
@@ -135,7 +135,8 @@ export class ActionService {
     return { valid: false, reason: completed?.error ?? "transport_failure", plan };
   }
 
-  private async admit(plan: DecisionPlan, sourceMessage: CanonicalMessage, group: GroupRecord | undefined, conversationId: string, hasGeneratedAudio: boolean): Promise<{ validation: ActionValidation; actionId?: string }> {
+  private async admit(plan: DecisionPlan, sourceMessage: CanonicalMessage, group: GroupRecord | undefined, conversationId: string, generatedAudio?: { data: Buffer; mimeType: string }): Promise<{ validation: ActionValidation; actionId?: string }> {
+    const hasGeneratedAudio = Boolean(generatedAudio);
     const validation = validateActionPlan(plan, sourceMessage, group, this.store, this.config.outboundPaused, this.config.groupOnlyMode, this.config.directMessageAllowlist, this.config.quietHoursStart, this.config.quietHoursEnd, hasGeneratedAudio);
     if (!validation.valid || plan.decision === "IGNORE") {
       await this.store.incrementMetric("actionsSkipped");
@@ -210,6 +211,7 @@ export class ActionService {
     };
     if (hasGeneratedAudio && !this.transport.sendAudioBuffer) return { validation: await this.rejectRuntime(sourceMessage, plan, "audio_transport_unsupported") };
     if (!(await this.store.createAction(action))) return { validation: await this.rejectRuntime(sourceMessage, plan, "duplicate_action") };
+    if (generatedAudio) this.generatedAudio.set(action.id, generatedAudio);
     return { validation: { valid: true, reason: "admitted", plan }, actionId: action.id };
   }
 
