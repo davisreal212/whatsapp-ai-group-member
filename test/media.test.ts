@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { FallbackSpeechToTextProvider, FallbackTextToSpeechProvider, MediaProcessor, type DownloadedMedia, type SpeechToTextProvider, type TextToSpeechProvider, type VisionProvider } from "../src/media.js";
+import { describe, expect, it, vi } from "vitest";
+import { ElevenLabsSpeechToTextProvider, FallbackSpeechToTextProvider, FallbackTextToSpeechProvider, MediaProcessor, type DownloadedMedia, type SpeechToTextProvider, type TextToSpeechProvider, type VisionProvider } from "../src/media.js";
 
 const media: DownloadedMedia = { data: Buffer.from("voice"), mimeType: "audio/ogg" };
 
@@ -8,6 +8,16 @@ describe("media processing", () => {
     const primary: SpeechToTextProvider = { name: "primary", available: true, transcribe: async () => { throw new Error("offline"); } };
     const backup: SpeechToTextProvider = { name: "backup", available: true, transcribe: async () => ({ text: "Omo abeg check am", confidence: 0.88, language: "en" }) };
     await expect(new FallbackSpeechToTextProvider([primary, backup]).transcribe(media)).resolves.toMatchObject({ text: "Omo abeg check am", confidence: 0.88 });
+  });
+
+  it("transcribes with ElevenLabs Scribe when configured", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ text: "I dey come", language_code: "en", language_probability: 0.94 }), { status: 200, headers: { "content-type": "application/json" } }));
+    try {
+      await expect(new ElevenLabsSpeechToTextProvider("test-key").transcribe(media)).resolves.toMatchObject({ text: "I dey come", language: "en", confidence: 0.94 });
+      expect(fetchMock).toHaveBeenCalledWith("https://api.elevenlabs.io/v1/speech-to-text", expect.objectContaining({ method: "POST", headers: { "xi-api-key": "test-key" } }));
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it("does not transcribe the same audio hash twice", async () => {

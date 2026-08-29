@@ -27,6 +27,7 @@
     @media (max-width: 1050px) { .status-grid { grid-template-columns: repeat(3, 1fr); } .two-col { grid-template-columns: 1fr; } }
     @media (max-width: 760px) { .app { display: block; } .sidebar { position: sticky; top: 0; z-index: 2; padding: 12px 14px 10px; border-right: 0; border-bottom: 1px solid var(--line); } .brand { padding: 0 4px 10px; } .side-foot { display: none; } .nav { display: flex; overflow-x: auto; gap: 3px; } .nav button { min-width: max-content; padding: 8px 9px; } .nav button span { display: none; } .topbar { min-height: 65px; padding: 12px 18px; } .account { display: none; } .workspace { padding: 28px 16px 50px; } .view-head { align-items: start; flex-direction: column; } .status-grid, .metric-grid, .detail-grid { grid-template-columns: 1fr 1fr; } .hero-card .hero-mark { display: none; } }
     @media (max-width: 480px) { .status-grid, .metric-grid, .detail-grid { grid-template-columns: 1fr; } .form { align-items: stretch; flex-direction: column; } .top-actions { gap: 5px; } .top-actions button { padding: 8px; } .hero-card { padding: 20px; } }
+    .sidebar { position: sticky; top: 0; height: 100vh; align-self: start; } .status-grid, .metric-grid { grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); } .audit-tools { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; } .audit-tools button { padding: 5px 8px; color: var(--muted); font-size: 10px; } .audit-tools button.active { color: var(--lime); border-color: #55764b; background: #24362d; } .audit-level { flex: 0 0 auto; padding: 3px 7px; border-radius: 999px; font-size: 10px; font-weight: 800; text-transform: uppercase; } .audit-level.info { color: var(--blue); background: #1c3037; } .audit-level.warn { color: var(--amber); background: #3a3020; } .audit-level.error { color: var(--red); background: #3a2421; } .audit-row.warn, .audit-row.error { border-left: 3px solid var(--amber); padding-left: 10px; } .audit-row.error { border-left-color: var(--red); } @media (max-width: 760px) { .sidebar { height: auto; } }
   </style>
 </head>
 <body>
@@ -72,6 +73,77 @@
     function formatDate(value) { return value ? new Date(value).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '-'; }
     function escapeHtml(value) { return value.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char])); }
     document.querySelectorAll('[data-page]').forEach((button) => button.onclick = () => showPage(button.dataset.page)); $('refresh').onclick = refresh; $('overviewConnect').onclick = () => showPage('whatsapp'); $('overviewPause').onclick = () => control('outboundPaused', true); $('outbound').onclick = () => control('outboundPaused', !$('outbound').textContent.startsWith('Resume')); $('processing').onclick = () => control('aiProcessingPaused', !$('processing').textContent.startsWith('Resume')); $('memberRefresh').onclick = loadMembers; $('memberGroup').onchange = loadMembers; $('resetMemory').onclick = async () => { const scope = $('memoryScope').value.trim(); if (!scope) return message('Enter a group or chat ID first.', 'error'); try { const result = await api('/api/memory/' + encodeURIComponent(scope), { method: 'DELETE' }); $('memoryMessage').textContent = `Deleted ${result.deleted} memory records.`; } catch (error) { message(error.message, 'error'); } }; $('groupsSync').onclick = $('sync').onclick = async () => { try { await api('/api/groups/sync', { method: 'POST' }); refresh(); } catch (error) { message(error.message, 'error'); } }; $('connect').onclick = async () => { setBusy($('connect'), true, 'Connecting...'); try { await api('/api/whatsapp/connect', { method: 'POST', body: JSON.stringify({ phoneNumber: $('phone').value }) }); refresh(); } catch (error) { message(error.message, 'error'); } finally { setBusy($('connect'), false, 'Connect'); } }; $('disconnect').onclick = async () => { if (!confirm('Disconnect this WhatsApp session?')) return; try { await api('/api/whatsapp/disconnect', { method: 'POST' }); refresh(); } catch (error) { message(error.message, 'error'); } }; $('dmForm').onsubmit = async (event) => { event.preventDefault(); const input = $('dmContact'); const value = input.value.trim(); if (!value) return; await saveAllowlist([...new Set([...dmAllowlist, value])]); input.value = ''; }; $('signupTab').onclick = () => { authMode = 'signup'; $('signupTab').classList.add('active'); $('signinTab').classList.remove('active'); $('authSubmit').textContent = 'Open the control room'; $('password').autocomplete = 'new-password'; }; $('signinTab').onclick = () => { authMode = 'signin'; $('signinTab').classList.add('active'); $('signupTab').classList.remove('active'); $('authSubmit').textContent = 'Sign in'; $('password').autocomplete = 'current-password'; }; $('authForm').onsubmit = async (event) => { event.preventDefault(); setBusy($('authSubmit'), true, 'Working...'); try { const result = await api('/api/auth/' + authMode, { method: 'POST', body: JSON.stringify({ email: $('email').value, password: $('password').value }) }); showDashboard(result.user); } catch (error) { $('authMessage').textContent = error.message; $('authMessage').className = 'error'; } finally { setBusy($('authSubmit'), false, authMode === 'signup' ? 'Open the control room' : 'Sign in'); } }; $('signout').onclick = async () => { await api('/api/auth/signout', { method: 'POST' }).catch(() => {}); showLanding(); }; api('/api/auth/me').then((result) => showDashboard(result.user)).catch(() => showLanding());
+  </script>
+  <script>
+    (() => {
+      const originalRender = render;
+      let auditFilter = 'attention';
+      let auditControls;
+
+      function applyConnectionState(data) {
+        const status = data.connection?.connectionStatus || 'DISCONNECTED';
+        const labels = { CONNECTING: 'Connecting...', PAIRING: 'Pairing...', RECONNECTING: 'Reconnecting...', CONNECTED: 'Connected' };
+        const locked = ['CONNECTING', 'PAIRING', 'RECONNECTING', 'CONNECTED'].includes(status);
+        const button = $('connect');
+        button.disabled = locked;
+        button.textContent = labels[status] || 'Connect';
+        button.title = locked ? 'WhatsApp connection is already in progress or active.' : 'Connect WhatsApp';
+        button.style.opacity = locked ? '.65' : '';
+        const overviewButton = $('overviewConnect');
+        overviewButton.disabled = status === 'CONNECTED';
+        overviewButton.textContent = status === 'CONNECTED' ? 'WhatsApp connected' : 'Connect WhatsApp';
+        overviewButton.style.opacity = status === 'CONNECTED' ? '.65' : '';
+      }
+
+      function ensureAuditControls() {
+        if (auditControls || !$('logsList')) return;
+        const cardHead = $('logsList').parentElement.querySelector('.card-head');
+        auditControls = document.createElement('div');
+        auditControls.className = 'audit-tools';
+        [['attention', 'Needs attention'], ['all', 'All'], ['error', 'Errors'], ['warn', 'Warnings']].forEach(([value, label]) => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = label;
+          button.dataset.filter = value;
+          button.onclick = () => { auditFilter = value; renderAudit(appState?.recentLogs || []); };
+          auditControls.append(button);
+        });
+        cardHead.append(auditControls);
+      }
+
+      function renderAudit(logs) {
+        ensureAuditControls();
+        if (!auditControls) return;
+        auditControls.querySelectorAll('button').forEach((button) => button.classList.toggle('active', button.dataset.filter === auditFilter));
+        const visible = logs.filter((log) => auditFilter === 'all' || (auditFilter === 'attention' ? log.level !== 'info' : log.level === auditFilter));
+        const root = $('logsList');
+        root.replaceChildren();
+        if (!visible.length) {
+          root.append(Object.assign(document.createElement('p'), { className: 'empty', textContent: auditFilter === 'attention' ? 'No warnings or errors in the latest events.' : 'No events in this view.' }));
+          return;
+        }
+        visible.slice(0, 50).forEach((log) => {
+          const row = document.createElement('div');
+          row.className = `row audit-row ${log.level || 'info'}`;
+          const details = Object.entries(log.details || {}).map(([key, value]) => `${key}=${String(value)}`).join(' ');
+          const content = document.createElement('div');
+          content.className = 'log';
+          content.append(`${formatDate(log.createdAt)} `);
+          const event = document.createElement('b');
+          event.textContent = log.event;
+          content.append(event, ` ${details}`);
+          row.append(content, Object.assign(document.createElement('span'), { className: `audit-level ${log.level || 'info'}`, textContent: log.level || 'info' }));
+          root.append(row);
+        });
+      }
+
+      render = (data) => {
+        originalRender(data);
+        applyConnectionState(data);
+        ensureAuditControls();
+        renderAudit(data.recentLogs || []);
+      };
+    })();
   </script>
 </body>
 </html>

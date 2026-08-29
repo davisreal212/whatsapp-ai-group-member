@@ -262,7 +262,7 @@ export class ActionService {
     await this.store.addLog({
       id: randomUUID(),
       event: "action.skipped",
-      level: "warn",
+      level: auditLevelForSkip(reason),
       messageId: message.id,
       ...(message.groupId ? { groupId: message.groupId } : {}),
       details: { decision: plan.decision, reason },
@@ -284,7 +284,7 @@ export class ActionService {
     await this.store.addLog({
       id: randomUUID(),
       event: "action.skipped",
-      level: "warn",
+      level: auditLevelForSkip(reason),
       messageId: message.id,
       ...(message.groupId ? { groupId: message.groupId } : {}),
       details: { decision: plan.decision, reason },
@@ -318,4 +318,8 @@ function planFromAction(action: import("./types.js").ActionRecord): DecisionPlan
     needsMedia: Boolean(mediaUrl),
     responseStyle: "short_casual",
   };
+}
+
+function auditLevelForSkip(reason: string): "info" | "warn" {
+  return ["dry_run", "outbound_paused", "quiet_hours", "group_cooldown", "duplicate_action", "repetitive_response"].includes(reason) ? "info" : "warn";
 }

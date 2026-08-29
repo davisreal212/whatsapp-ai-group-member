@@ -98,7 +98,7 @@ export class DecisionEngine {
           decision: "REPLY",
           confidence: 1,
           reason: "low_transcript_confidence",
-          text: "I couldn't hear that clearly. Abeg send the voice note again or type it out.",
+          text: "I couldn't make that out clearly. Send the voice note again?",
           delayMs: 0,
           needsWeb: false,
           needsMedia: false,

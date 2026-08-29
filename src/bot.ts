@@ -11,7 +11,7 @@ import type { Store } from "./store.js";
 import { normalizeMessage } from "./normalize.js";
 import type { DiscoveredDirectMessage, DiscoveredGroup } from "./whatsapp.js";
 import { TaskService } from "./tasks.js";
-import { ElevenLabsTextToSpeechProvider, FallbackSpeechToTextProvider, FallbackTextToSpeechProvider, GeminiVisionProvider, GroqSpeechToTextProvider, MediaProcessor, OpenAITextToSpeechProvider } from "./media.js";
+import { ElevenLabsSpeechToTextProvider, ElevenLabsTextToSpeechProvider, FallbackSpeechToTextProvider, FallbackTextToSpeechProvider, GeminiVisionProvider, GroqSpeechToTextProvider, MediaProcessor, OpenAITextToSpeechProvider } from "./media.js";
 import { BackupService } from "./backup.js";
 import { KeyedJobQueue } from "./queue.js";
 
@@ -38,7 +38,7 @@ export class BotRuntime {
     this.decisions = new DecisionEngine(this.providers);
     this.actions = new ActionService(store, config, transport);
     this.tasks = new TaskService(store, config, transport);
-    this.media = new MediaProcessor(new FallbackSpeechToTextProvider([new GroqSpeechToTextProvider(config.groqApiKey)]), new GeminiVisionProvider(config.geminiApiKey, config.geminiModel), new FallbackTextToSpeechProvider([new OpenAITextToSpeechProvider(config.ttsApiKey, config.ttsBaseUrl, config.ttsModel, config.ttsVoice), new ElevenLabsTextToSpeechProvider(config.elevenLabsApiKey, config.elevenLabsVoiceId)]), config.mediaDownloadsPerHour);
+    this.media = new MediaProcessor(new FallbackSpeechToTextProvider([new GroqSpeechToTextProvider(config.groqApiKey), new ElevenLabsSpeechToTextProvider(config.elevenLabsApiKey)]), new GeminiVisionProvider(config.geminiApiKey, config.geminiModel), new FallbackTextToSpeechProvider([new OpenAITextToSpeechProvider(config.ttsApiKey, config.ttsBaseUrl, config.ttsModel, config.ttsVoice), new ElevenLabsTextToSpeechProvider(config.elevenLabsApiKey, config.elevenLabsVoiceId)]), config.mediaDownloadsPerHour);
     this.backups = new BackupService(store, config.dataDir, config.backupIntervalHours, config.backupRetentionCount);
   }
 
@@ -158,7 +158,10 @@ export class BotRuntime {
         await this.log("media.transcribed", "info", { type: "audio", confidence: transcript.confidence, ...(transcript.language ? { language: transcript.language } : {}) }, message);
       } catch (error) {
         await this.log("media.transcription_failed", "warn", { type: "audio", error: error instanceof Error ? error.message : "unknown" }, message);
+        message = { ...message, transcriptConfidence: 0 };
       }
+    } else if (message.type === "audio") {
+      message = { ...message, transcriptConfidence: 0 };
     }
     if (message.type === "image" && message.media?.hasDownloadableContent && loadMedia) {
       try {
@@ -298,7 +301,7 @@ export class BotRuntime {
     const allowlist = [...new Set(contacts.map((contact) => contact.trim()).filter(Boolean))];
     this.config.directMessageAllowlist = allowlist;
     await this.store.updateSettings({ directMessageAllowlist: allowlist });
-    await this.log("dm_allowlist.changed", "warn", { count: allowlist.length });
+    await this.log("dm_allowlist.changed", "info", { count: allowlist.length });
     return allowlist;
   }
 
@@ -347,7 +350,7 @@ export class BotRuntime {
       ...(update.outboundPaused !== undefined ? { outboundPaused: update.outboundPaused } : {}),
       ...(update.aiProcessingPaused !== undefined ? { aiProcessingPaused: update.aiProcessingPaused } : {}),
     });
-    await this.log("controls.changed", "warn", {
+    await this.log("controls.changed", "info", {
       outboundPaused: this.config.outboundPaused,
       aiProcessingPaused: this.config.aiProcessingPaused,
     });

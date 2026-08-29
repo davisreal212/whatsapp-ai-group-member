@@ -69,6 +69,37 @@ export class GroqSpeechToTextProvider implements SpeechToTextProvider {
   }
 }
 
+export class ElevenLabsSpeechToTextProvider implements SpeechToTextProvider {
+  readonly name = "elevenlabs-scribe";
+  readonly available: boolean;
+
+  constructor(private readonly apiKey?: string, private readonly model = "scribe_v1") {
+    this.available = Boolean(apiKey);
+  }
+
+  async transcribe(media: DownloadedMedia): Promise<TranscriptResult> {
+    if (!this.apiKey) throw new Error("ElevenLabs API key is not configured");
+    const form = new FormData();
+    const bytes = media.data.buffer.slice(media.data.byteOffset, media.data.byteOffset + media.data.byteLength) as ArrayBuffer;
+    form.append("file", new Blob([bytes], { type: media.mimeType }), "voice-note");
+    form.append("model_id", this.model);
+    form.append("tag_audio_events", "false");
+    const response = await fetch("https://api.elevenlabs.io/v1/speech-to-text", {
+      method: "POST",
+      headers: { "xi-api-key": this.apiKey },
+      body: form,
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!response.ok) throw new Error(`ElevenLabs transcription returned HTTP ${response.status}`);
+    const body = await response.json() as { text?: unknown; language_code?: unknown; language_probability?: unknown };
+    if (typeof body.text !== "string" || !body.text.trim()) throw new Error("Transcription provider returned no text");
+    const confidence = typeof body.language_probability === "number" && Number.isFinite(body.language_probability)
+      ? Math.min(1, Math.max(0, body.language_probability))
+      : 0.75;
+    return { text: body.text.trim().slice(0, 4000), confidence, ...(typeof body.language_code === "string" ? { language: body.language_code } : {}) };
+  }
+}
+
 export class GeminiVisionProvider implements VisionProvider {
   readonly name = "gemini-vision";
   readonly available: boolean;

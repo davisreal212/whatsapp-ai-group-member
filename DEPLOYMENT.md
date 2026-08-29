@@ -51,12 +51,12 @@ QUIET_HOURS_START=-1
 QUIET_HOURS_END=-1
 BACKUP_INTERVAL_HOURS=24
 BACKUP_RETENTION_COUNT=7
-AUDIO_REPLY_MODE=text
+AUDIO_REPLY_MODE=adaptive
 TTS_API_KEY=<optional>
 TTS_BASE_URL=https://api.openai.com/v1
 TTS_MODEL=gpt-4o-mini-tts
 TTS_VOICE=alloy
-ELEVENLABS_API_KEY=<optional backup TTS key>
+ELEVENLABS_API_KEY=<optional speech-to-text and TTS key>
 ELEVENLABS_VOICE_ID=21m00Tcm4TlvDq8ikWAM
 CMC_API_KEY=<optional CoinMarketCap key>
 MAX_MEDIA_BYTES=10485760
@@ -108,7 +108,7 @@ The pinned dependency is `@whiskeysockets/baileys@6.7.24`. That version exports 
 - The dashboard's DM allowlist is persisted in the application database and can be edited without rebuilding the service.
 - **Sync DMs** lists recent direct-message contacts seen by the current WhatsApp session; it does not import message content or automatically authorize anyone.
 - The service writes protected application-state snapshots under `DATA_DIR/backups` on startup and on the configured interval. Back up the persistent volume separately; it contains the WhatsApp auth state and local application state.
-- Set `AUDIO_REPLY_MODE=adaptive` with `TTS_API_KEY` to reply to voice notes with audio when the provider and adapter support it. Synthesis failures fall back to text.
+- Set `AUDIO_REPLY_MODE=adaptive` with `TTS_API_KEY` or `ELEVENLABS_API_KEY` to reply to voice notes with audio when the provider and adapter support it. ElevenLabs also provides speech-to-text fallback for incoming voice notes. Synthesis failures fall back to text.
 - Monitor container logs, disk usage, connection status, provider failures, action skips, and daily action counts.
 - Keep the reverse proxy on HTTPS and restrict dashboard access by network or identity provider where possible.
 
