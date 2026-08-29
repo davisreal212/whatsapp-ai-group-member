@@ -67,6 +67,11 @@ describe("decision safety helpers", () => {
     expect(localRelevance(message, "Kola", "bot@s.whatsapp.net", 0.35, ["bot-lid@lid"]).directed).toBe(true);
   });
 
+  it("forces an allowlisted DM through the response path", () => {
+    const message = { id: "dm-message", chatId: "user@s.whatsapp.net", senderId: "user@s.whatsapp.net", timestamp: Date.now(), type: "text" as const, text: "just checking in", mentionedIds: [], isGroup: false, isStatus: false, isFromBot: false };
+    expect(localRelevance(message, "Kola", undefined, 0.1, [], true)).toEqual({ relevant: true, reason: "allowlisted_dm", directed: true });
+  });
+
   it("lets substantive group conversation reach the classifier", () => {
     const message = { id: "3", chatId: "g@g.us", groupId: "g@g.us", senderId: "u", timestamp: Date.now(), type: "text" as const, text: "The meeting starts at eight tonight", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
     expect(localRelevance(message, "Kola", undefined, 0.35).reason).toBe("group_conversation");

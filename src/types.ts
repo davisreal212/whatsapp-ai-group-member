@@ -58,6 +58,21 @@ export interface AppConfig {
   actionsPerMinute: number;
   actionsPerHour: number;
   actionMaxAttempts: number;
+  quietHoursStart: number;
+  quietHoursEnd: number;
+  backupIntervalHours: number;
+  backupRetentionCount: number;
+  audioReplyMode: "text" | "adaptive" | "always";
+  ttsApiKey?: string;
+  ttsBaseUrl: string;
+  ttsModel: string;
+  ttsVoice: string;
+  elevenLabsApiKey?: string;
+  elevenLabsVoiceId: string;
+  cmcApiKey?: string;
+  maxMediaBytes: number;
+  maxVideoDurationSeconds: number;
+  mediaDownloadsPerHour: number;
   messageRetentionDays: number;
   tavilyApiKey?: string;
   tavilyMaxResults: number;
@@ -148,6 +163,21 @@ export interface MemoryRecord {
 
 export interface StoredMessage extends CanonicalMessage {
   storedAt: number;
+}
+
+export type InboundJobStatus = "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
+
+export interface InboundJobRecord {
+  id: string;
+  messageId: string;
+  chatId: string;
+  message: CanonicalMessage;
+  status: InboundJobStatus;
+  attempts: number;
+  createdAt: number;
+  updatedAt: number;
+  nextAttemptAt?: number;
+  lastError?: string;
 }
 
 export interface DecisionPlan {
@@ -285,6 +315,7 @@ export interface PersistedState {
   memories: Record<string, MemoryRecord>;
   actions: Record<string, ActionRecord>;
   tasks: Record<string, TaskRecord>;
+  inboundJobs: Record<string, InboundJobRecord>;
   logs: AuditLog[];
   providerUsage: ProviderUsageRecord[];
   users: Record<string, UserRecord>;

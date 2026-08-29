@@ -48,8 +48,9 @@ export interface LocalRelevance {
   directed: boolean;
 }
 
-export function localRelevance(message: CanonicalMessage, botName: string, botJid?: string, talkativeness = 0.35, botJids: string[] = []): LocalRelevance {
+export function localRelevance(message: CanonicalMessage, botName: string, botJid?: string, talkativeness = 0.35, botJids: string[] = [], alwaysReplyToAllowedDm = false): LocalRelevance {
   const text = message.text ?? "";
+  if (!message.isGroup && alwaysReplyToAllowedDm) return { relevant: true, reason: "allowlisted_dm", directed: true };
   const named = botName.trim().length > 0 && new RegExp(`(?:^|[^\\p{L}\\p{N}_])@?${escapeRegExp(botName.trim())}(?=$|[^\\p{L}\\p{N}_])`, "iu").test(text);
   const identities = [botJid, ...botJids].filter((value): value is string => Boolean(value));
   const mentionedBot = message.mentionedIds.some((mentionedId) => identities.some((identity) => sameJid(mentionedId, identity)));
@@ -82,9 +83,9 @@ export class DecisionEngine {
     message: CanonicalMessage,
     group: GroupRecord,
     context: ContextSnapshot,
-    config: Pick<AppConfig, "botName" | "botJid"> & Partial<Pick<AppConfig, "botJids">>,
+    config: Pick<AppConfig, "botName" | "botJid"> & Partial<Pick<AppConfig, "botJids">> & { alwaysReplyToAllowedDm?: boolean },
   ): Promise<{ plan: DecisionPlan; local: LocalRelevance; usedAi: boolean }> {
-    const local = localRelevance(message, config.botName, config.botJid, context.personality.talkativeness, config.botJids ?? []);
+    const local = localRelevance(message, config.botName, config.botJid, context.personality.talkativeness, config.botJids ?? [], config.alwaysReplyToAllowedDm ?? false);
     if (!local.relevant) {
       return { plan: ignorePlan("Local relevance gate chose silence."), local, usedAi: false };
     }

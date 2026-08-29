@@ -7,6 +7,8 @@ import type {
   AuditLog,
   ConnectionStatus,
   GroupRecord,
+  InboundJobRecord,
+  InboundJobStatus,
   MemberRecord,
   MemoryRecord,
   PersistedState,
@@ -34,13 +36,14 @@ export class PostgresStore implements Store {
     if (this.initialized) return;
     await this.createSchema();
     this.state = emptyState();
-    const [groups, members, messages, memories, actions, tasks, logs, usage, runtime, settings, users, sessions] = await Promise.all([
+    const [groups, members, messages, memories, actions, tasks, inboundJobs, logs, usage, runtime, settings, users, sessions] = await Promise.all([
       this.sql`SELECT id, whatsapp_group_id, subject, participant_count, is_admin, enabled, ai_paused, personality_override_json, last_seen_at FROM groups`,
       this.sql`SELECT id, group_id, whatsapp_member_id, display_name, behavior_profile_json, confidence_json, first_seen_at, last_seen_at FROM members`,
       this.sql`SELECT id, chat_id, group_id, sender_id, sender_name, timestamp_ms, message_type, text_or_transcript, transcript_confidence, transcript_language, quoted_message_id, quoted_sender_id, mentioned_member_ids_json, media_metadata_json, is_group, is_status, is_from_bot, stored_at FROM messages`,
       this.sql`SELECT id, scope_type, scope_id, memory_type, value_json, confidence, evidence_count, created_at, last_confirmed_at, expires_at FROM memories`,
       this.sql`SELECT id, idempotency_key, group_id, source_message_id, action_type, target_message_id, payload_json, scheduled_for, status, attempts, next_attempt_at, executed_at, error FROM ai_actions`,
       this.sql`SELECT id, group_id, creator_id, creator_chat_id, type, condition_json, message, status, trigger_at, recurrence, notification_target, notification_chat_id, created_at, last_checked_at, last_successful_check, last_error, retry_count FROM tasks`,
+      this.sql`SELECT id, message_id, chat_id, message_json, status, attempts, created_at, updated_at, next_attempt_at, last_error FROM inbound_jobs ORDER BY created_at ASC`,
       this.sql`SELECT id, event, level, message_id, group_id, details_json, created_at FROM audit_logs ORDER BY created_at DESC LIMIT 500`,
       this.sql`SELECT provider, operation, group_id, units, success, latency_ms, created_at FROM provider_usage ORDER BY created_at DESC LIMIT 1000`,
       this.sql`SELECT connection_status, pairing_code, last_connected_at, metrics_json FROM runtime_state WHERE id = 1`,
@@ -54,6 +57,7 @@ export class PostgresStore implements Store {
     for (const row of memories as Row[]) this.state.memories[String(row.id)] = memoryFromRow(row);
     for (const row of actions as Row[]) this.state.actions[String(row.id)] = actionFromRow(row);
     for (const row of tasks as Row[]) this.state.tasks[String(row.id)] = taskFromRow(row);
+    for (const row of inboundJobs as Row[]) this.state.inboundJobs[String(row.id)] = inboundJobFromRow(row);
     this.state.logs = (logs as Row[]).reverse().map(logFromRow);
     this.state.providerUsage = (usage as Row[]).reverse().map(usageFromRow);
     const runtimeRow = (runtime as Row[])[0];
@@ -270,15 +274,37 @@ export class PostgresStore implements Store {
   task(id: string): TaskRecord | undefined { return this.state.tasks[id]; }
   tasks(status?: TaskStatus): TaskRecord[] { return Object.values(this.state.tasks).filter((task) => !status || task.status === status).sort((a, b) => b.createdAt - a.createdAt); }
 
+  async createInboundJob(job: InboundJobRecord): Promise<boolean> {
+    const rows = await this.sql`INSERT INTO inbound_jobs (id, message_id, chat_id, message_json, status, attempts, created_at, updated_at, next_attempt_at, last_error)
+      VALUES (${job.id}, ${job.messageId}, ${job.chatId}, ${JSON.stringify(job.message)}::jsonb, ${job.status}, ${job.attempts}, ${job.createdAt}, ${job.updatedAt}, ${job.nextAttemptAt ?? null}, ${job.lastError ?? null})
+      ON CONFLICT (message_id) DO NOTHING RETURNING id`;
+    if (!(rows as Row[]).length) return false;
+    this.state.inboundJobs[job.id] = job;
+    return true;
+  }
+
+  async updateInboundJob(id: string, update: Partial<InboundJobRecord>): Promise<InboundJobRecord | undefined> {
+    const current = this.state.inboundJobs[id];
+    if (!current) return undefined;
+    const job = { ...current, ...update, updatedAt: Date.now() };
+    await this.sql`UPDATE inbound_jobs SET status = ${job.status}, message_json = ${JSON.stringify(job.message)}::jsonb, attempts = ${job.attempts}, updated_at = ${job.updatedAt}, next_attempt_at = ${job.nextAttemptAt ?? null}, last_error = ${job.lastError ?? null} WHERE id = ${id}`;
+    this.state.inboundJobs[id] = job;
+    return job;
+  }
+
+  inboundJobByMessageId(messageId: string): InboundJobRecord | undefined { return Object.values(this.state.inboundJobs).find((job) => job.messageId === messageId); }
+  inboundJobs(status?: InboundJobStatus): InboundJobRecord[] { return Object.values(this.state.inboundJobs).filter((job) => !status || job.status === status).sort((a, b) => a.createdAt - b.createdAt); }
+
   async pruneExpired(retentionDays: number, now = Date.now()): Promise<PruneResult> {
     const cutoff = now - Math.max(1, retentionDays) * 24 * 60 * 60 * 1000;
-    const [messages, memories, actions, logs, providerUsage, sessions] = await Promise.all([
+    const [messages, memories, actions, logs, providerUsage, sessions, inboundJobs] = await Promise.all([
       this.sql`DELETE FROM messages WHERE stored_at < ${cutoff} RETURNING id`,
       this.sql`DELETE FROM memories WHERE (expires_at IS NOT NULL AND expires_at <= ${now}) OR last_confirmed_at < ${cutoff} RETURNING id`,
       this.sql`DELETE FROM ai_actions WHERE status <> 'PENDING' AND COALESCE(executed_at, scheduled_for) < ${cutoff} RETURNING id`,
       this.sql`DELETE FROM audit_logs WHERE created_at < ${cutoff} RETURNING id`,
       this.sql`DELETE FROM provider_usage WHERE created_at < ${cutoff} RETURNING id`,
       this.sql`DELETE FROM sessions WHERE expires_at <= ${now} RETURNING token_hash`,
+      this.sql`DELETE FROM inbound_jobs WHERE status NOT IN ('PENDING', 'PROCESSING') AND updated_at < ${cutoff} RETURNING id`,
     ]);
     const result: PruneResult = {
       messages: (messages as Row[]).length,
@@ -287,11 +313,13 @@ export class PostgresStore implements Store {
       logs: (logs as Row[]).length,
       providerUsage: (providerUsage as Row[]).length,
       sessions: (sessions as Row[]).length,
+      inboundJobs: (inboundJobs as Row[]).length,
     };
     for (const row of messages as Row[]) delete this.state.messages[String(row.id)];
     for (const row of memories as Row[]) delete this.state.memories[String(row.id)];
     for (const row of actions as Row[]) delete this.state.actions[String(row.id)];
     for (const row of sessions as Row[]) delete this.state.sessions[String(row.token_hash)];
+    for (const row of inboundJobs as Row[]) delete this.state.inboundJobs[String(row.id)];
     this.state.logs = this.state.logs.filter((log) => log.createdAt >= cutoff);
     this.state.providerUsage = this.state.providerUsage.filter((usage) => usage.createdAt >= cutoff);
     return result;
@@ -311,8 +339,10 @@ export class PostgresStore implements Store {
     await this.sql`ALTER TABLE ai_actions ADD COLUMN IF NOT EXISTS attempts integer NOT NULL DEFAULT 0`;
     await this.sql`ALTER TABLE ai_actions ADD COLUMN IF NOT EXISTS next_attempt_at bigint`;
     await this.sql`CREATE INDEX IF NOT EXISTS actions_group_time_idx ON ai_actions (group_id, scheduled_for DESC)`;
-    await this.sql`CREATE TABLE IF NOT EXISTS tasks (id text PRIMARY KEY, group_id text NOT NULL, creator_id text NOT NULL, creator_chat_id text NOT NULL, type text NOT NULL, condition_json jsonb, message text NOT NULL, status text NOT NULL, trigger_at bigint, recurrence text NOT NULL, notification_target text NOT NULL, notification_chat_id text NOT NULL, created_at bigint NOT NULL, last_checked_at bigint, last_successful_check bigint, last_error text, retry_count integer NOT NULL DEFAULT 0)`;
-    await this.sql`CREATE INDEX IF NOT EXISTS tasks_status_trigger_idx ON tasks (status, trigger_at)`;
+     await this.sql`CREATE TABLE IF NOT EXISTS tasks (id text PRIMARY KEY, group_id text NOT NULL, creator_id text NOT NULL, creator_chat_id text NOT NULL, type text NOT NULL, condition_json jsonb, message text NOT NULL, status text NOT NULL, trigger_at bigint, recurrence text NOT NULL, notification_target text NOT NULL, notification_chat_id text NOT NULL, created_at bigint NOT NULL, last_checked_at bigint, last_successful_check bigint, last_error text, retry_count integer NOT NULL DEFAULT 0)`;
+     await this.sql`CREATE INDEX IF NOT EXISTS tasks_status_trigger_idx ON tasks (status, trigger_at)`;
+     await this.sql`CREATE TABLE IF NOT EXISTS inbound_jobs (id text PRIMARY KEY, message_id text UNIQUE NOT NULL, chat_id text NOT NULL, message_json jsonb NOT NULL, status text NOT NULL, attempts integer NOT NULL DEFAULT 0, created_at bigint NOT NULL, updated_at bigint NOT NULL, next_attempt_at bigint, last_error text)`;
+     await this.sql`CREATE INDEX IF NOT EXISTS inbound_jobs_status_created_idx ON inbound_jobs (status, created_at)`;
     await this.sql`CREATE TABLE IF NOT EXISTS audit_logs (id text PRIMARY KEY, event text NOT NULL, level text NOT NULL, message_id text, group_id text, details_json jsonb NOT NULL, created_at bigint NOT NULL)`;
     await this.sql`CREATE INDEX IF NOT EXISTS audit_logs_time_idx ON audit_logs (created_at DESC)`;
     await this.sql`CREATE TABLE IF NOT EXISTS provider_usage (id bigserial PRIMARY KEY, provider text NOT NULL, operation text NOT NULL, group_id text, units integer NOT NULL, success boolean NOT NULL, latency_ms integer NOT NULL, created_at bigint NOT NULL)`;
@@ -385,6 +415,21 @@ function taskFromRow(row: Row): TaskRecord {
     ...(row.last_successful_check ? { lastSuccessfulCheck: Number(row.last_successful_check) } : {}),
     ...(row.last_error ? { lastError: String(row.last_error) } : {}),
     retryCount: Number(row.retry_count),
+  };
+}
+
+function inboundJobFromRow(row: Row): InboundJobRecord {
+  return {
+    id: String(row.id),
+    messageId: String(row.message_id),
+    chatId: String(row.chat_id),
+    message: jsonObject(row.message_json, {}) as unknown as InboundJobRecord["message"],
+    status: String(row.status) as InboundJobRecord["status"],
+    attempts: Number(row.attempts),
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+    ...(row.next_attempt_at ? { nextAttemptAt: Number(row.next_attempt_at) } : {}),
+    ...(row.last_error ? { lastError: String(row.last_error) } : {}),
   };
 }
 

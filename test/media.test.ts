@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FallbackSpeechToTextProvider, MediaProcessor, type DownloadedMedia, type SpeechToTextProvider, type VisionProvider } from "../src/media.js";
+import { FallbackSpeechToTextProvider, FallbackTextToSpeechProvider, MediaProcessor, type DownloadedMedia, type SpeechToTextProvider, type TextToSpeechProvider, type VisionProvider } from "../src/media.js";
 
 const media: DownloadedMedia = { data: Buffer.from("voice"), mimeType: "audio/ogg" };
 
@@ -26,5 +26,37 @@ describe("media processing", () => {
     await processor.analyzeImage(async () => ({ data: Buffer.from("image"), mimeType: "image/png" }));
     await processor.analyzeImage(async () => ({ data: Buffer.from("image"), mimeType: "image/png" }));
     expect(calls).toBe(1);
+  });
+
+  it("generates audio only when a TTS provider is available", async () => {
+    const tts: TextToSpeechProvider = { name: "test-tts", available: true, synthesize: async () => media };
+    await expect(new MediaProcessor({ name: "unused", available: false, transcribe: async () => ({ text: "", confidence: 0 }) }, undefined, tts).synthesizeSpeech("Hello"))
+      .resolves.toEqual(media);
+    await expect(new MediaProcessor({ name: "unused", available: false, transcribe: async () => ({ text: "", confidence: 0 }) }).synthesizeSpeech("Hello"))
+      .rejects.toThrow("No TTS provider");
+  });
+
+  it("falls back to the secondary TTS provider", async () => {
+    const primary: TextToSpeechProvider = { name: "primary", available: true, synthesize: async () => { throw new Error("quota"); } };
+    const backup: TextToSpeechProvider = { name: "elevenlabs", available: true, synthesize: async () => media };
+    await expect(new FallbackTextToSpeechProvider([primary, backup]).synthesize("Hello")).resolves.toEqual(media);
+  });
+
+  it("enforces a per-scope hourly media download limit", async () => {
+    let downloads = 0;
+    const provider: SpeechToTextProvider = { name: "test", available: true, transcribe: async () => ({ text: "cached", confidence: 0.9 }) };
+    const processor = new MediaProcessor(provider, undefined, undefined, 1);
+    const loader = async () => { downloads += 1; return media; };
+    await processor.transcribeAudio(loader, "chat-1");
+    await expect(processor.transcribeAudio(loader, "chat-1")).rejects.toThrow("media_download_rate_limit");
+    expect(downloads).toBe(1);
+  });
+
+  it("extracts text documents locally and rejects binary documents", async () => {
+    const processor = new MediaProcessor({ name: "unused", available: false, transcribe: async () => ({ text: "", confidence: 0 }) });
+    await expect(processor.extractDocumentText(async () => ({ data: Buffer.from("hello document"), mimeType: "text/plain" }), "chat-1"))
+      .resolves.toEqual({ text: "hello document", mimeType: "text/plain" });
+    await expect(processor.extractDocumentText(async () => ({ data: Buffer.from("pdf"), mimeType: "application/pdf" }), "chat-2"))
+      .rejects.toThrow("document_text_extraction_unsupported");
   });
 });

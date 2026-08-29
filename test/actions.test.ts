@@ -127,6 +127,33 @@ describe("validated outbound actions", () => {
     expect(sent).toEqual([]);
   });
 
+  it("holds sends during configured quiet hours", async () => {
+    const { store, config } = await setup();
+    const hour = new Date().getHours();
+    config.quietHoursStart = hour;
+    config.quietHoursEnd = (hour + 1) % 24;
+    const transport = { connected: true, sendText: async () => { throw new Error("must not send"); }, sendReaction: async () => {}, sendMedia: async () => {} };
+    const service = new ActionService(store, config, transport);
+    const plan = { decision: "REPLY" as const, confidence: 1, reason: "test", text: "Quiet", delayMs: 0, needsWeb: false, needsMedia: false, responseStyle: "short_casual" as const };
+    expect((await service.execute(plan, source, group)).reason).toBe("quiet_hours");
+  });
+
+  it("sends generated audio through the validated action queue", async () => {
+    const { store, config } = await setup();
+    const sent: Array<{ chatId: string; bytes: number; quoted?: string }> = [];
+    const transport = {
+      connected: true,
+      sendText: async () => {},
+      sendReaction: async () => {},
+      sendMedia: async () => { throw new Error("URL media should not be used"); },
+      sendAudioBuffer: async (chatId: string, data: Buffer, _mimeType: string, _caption?: string, quoted?: string) => { sent.push({ chatId, bytes: data.length, ...(quoted ? { quoted } : {}) }); },
+    };
+    const service = new ActionService(store, config, transport);
+    const plan = { decision: "SEND_AUDIO" as const, confidence: 1, reason: "voice reply", targetMessageId: source.id, delayMs: 0, needsWeb: false, needsMedia: true, responseStyle: "short_casual" as const };
+    expect((await service.execute(plan, source, group, { data: Buffer.from("audio"), mimeType: "audio/ogg" })).reason).toBe("sent");
+    expect(sent).toEqual([{ chatId: group.id, bytes: 5, quoted: source.id }]);
+  });
+
   it("rejects private and credential-bearing media URLs", async () => {
     const { store, config } = await setup();
     const transport = { connected: true, sendText: async () => {}, sendReaction: async () => {}, sendMedia: async () => {} };

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { FileStore } from "../src/store.js";
+import type { CanonicalMessage } from "../src/types.js";
 
 const tempDirs: string[] = [];
 afterEach(async () => {
@@ -26,5 +27,19 @@ describe("store retention", () => {
     expect(store.message("old-message")).toBeUndefined();
     expect(store.message("new-message")).toBeDefined();
     expect(store.actions().map((action) => action.id)).toEqual(["pending-action"]);
+  });
+
+  it("deduplicates inbound jobs by message id and preserves pending work", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-inbound-"));
+    tempDirs.push(dir);
+    const store = new FileStore(dir);
+    await store.init();
+    const message: CanonicalMessage = { id: "inbound-message", chatId: "chat", senderId: "sender", timestamp: Date.now(), type: "text", text: "hello", mentionedIds: [], isGroup: false, isStatus: false, isFromBot: false };
+    const job = { id: "inbound-job", messageId: message.id, chatId: message.chatId, message, status: "PENDING" as const, attempts: 0, createdAt: Date.now(), updatedAt: Date.now() };
+    expect(await store.createInboundJob(job)).toBe(true);
+    expect(await store.createInboundJob({ ...job, id: "duplicate-job" })).toBe(false);
+    expect(store.inboundJobByMessageId(message.id)?.id).toBe(job.id);
+    await store.updateInboundJob(job.id, { status: "PROCESSING", attempts: 1 });
+    expect(store.inboundJobs("PROCESSING")[0]?.attempts).toBe(1);
   });
 });

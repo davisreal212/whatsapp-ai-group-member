@@ -14,7 +14,7 @@ async function main(): Promise<void> {
     onRawMessage: async (message, loadMedia) => runtime.handleRawMessage(message, loadMedia),
     onGroups: async (groups) => runtime.syncGroups(groups),
     onIdentity: async (identities) => runtime.setBotIdentities(identities),
-  });
+  }, config.maxMediaBytes, config.maxVideoDurationSeconds);
   runtime = new BotRuntime(store, config, whatsapp);
   await runtime.init();
   runtime.startBackgroundWorkers();

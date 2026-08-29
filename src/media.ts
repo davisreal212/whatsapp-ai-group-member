@@ -17,6 +17,11 @@ export interface VisionResult {
   confidence: number;
 }
 
+export interface DocumentTextResult {
+  text: string;
+  mimeType: string;
+}
+
 export interface SpeechToTextProvider {
   readonly name: string;
   readonly available: boolean;
@@ -27,6 +32,12 @@ export interface VisionProvider {
   readonly name: string;
   readonly available: boolean;
   analyze(media: DownloadedMedia): Promise<VisionResult>;
+}
+
+export interface TextToSpeechProvider {
+  readonly name: string;
+  readonly available: boolean;
+  synthesize(text: string): Promise<DownloadedMedia>;
 }
 
 export class GroqSpeechToTextProvider implements SpeechToTextProvider {
@@ -85,6 +96,79 @@ export class GeminiVisionProvider implements VisionProvider {
   }
 }
 
+export class OpenAITextToSpeechProvider implements TextToSpeechProvider {
+  readonly name = "openai-tts";
+  readonly available: boolean;
+
+  constructor(
+    private readonly apiKey?: string,
+    private readonly baseUrl = "https://api.openai.com/v1",
+    private readonly model = "gpt-4o-mini-tts",
+    private readonly voice = "alloy",
+  ) {
+    this.available = Boolean(apiKey);
+  }
+
+  async synthesize(text: string): Promise<DownloadedMedia> {
+    if (!this.apiKey) throw new Error("TTS API key is not configured");
+    const response = await fetch(`${this.baseUrl.replace(/\/$/, "")}/audio/speech`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${this.apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ model: this.model, voice: this.voice, input: text.slice(0, 4000), response_format: "opus" }),
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!response.ok) throw new Error(`TTS provider returned HTTP ${response.status}`);
+    const data = Buffer.from(await response.arrayBuffer());
+    if (!data.length || data.length > 10 * 1024 * 1024) throw new Error("TTS audio is empty or exceeds the 10 MB limit");
+    return { data, mimeType: response.headers.get("content-type")?.split(";", 1)[0] || "audio/ogg" };
+  }
+}
+
+export class ElevenLabsTextToSpeechProvider implements TextToSpeechProvider {
+  readonly name = "elevenlabs-tts";
+  readonly available: boolean;
+
+  constructor(private readonly apiKey?: string, private readonly voiceId = "21m00Tcm4TlvDq8ikWAM") {
+    this.available = Boolean(apiKey);
+  }
+
+  async synthesize(text: string): Promise<DownloadedMedia> {
+    if (!this.apiKey) throw new Error("ElevenLabs API key is not configured");
+    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(this.voiceId)}`, {
+      method: "POST",
+      headers: { "xi-api-key": this.apiKey, "content-type": "application/json", accept: "audio/ogg" },
+      body: JSON.stringify({ text: text.slice(0, 4000), model_id: "eleven_multilingual_v2", output_format: "opus_48000_128" }),
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!response.ok) throw new Error(`ElevenLabs returned HTTP ${response.status}`);
+    const data = Buffer.from(await response.arrayBuffer());
+    if (!data.length || data.length > 10 * 1024 * 1024) throw new Error("ElevenLabs audio is empty or exceeds the 10 MB limit");
+    return { data, mimeType: response.headers.get("content-type")?.split(";", 1)[0] || "audio/ogg" };
+  }
+}
+
+export class FallbackTextToSpeechProvider implements TextToSpeechProvider {
+  readonly name = "tts-fallback";
+  readonly available: boolean;
+
+  constructor(private readonly providers: TextToSpeechProvider[]) {
+    this.available = providers.some((provider) => provider.available);
+  }
+
+  async synthesize(text: string): Promise<DownloadedMedia> {
+    let lastError: unknown;
+    for (const provider of this.providers) {
+      if (!provider.available) continue;
+      try {
+        return await provider.synthesize(text);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error("No TTS provider is configured");
+  }
+}
+
 export class FallbackSpeechToTextProvider implements SpeechToTextProvider {
   readonly name = "speech-fallback";
   readonly available: boolean;
@@ -110,10 +194,12 @@ export class FallbackSpeechToTextProvider implements SpeechToTextProvider {
 export class MediaProcessor {
   private readonly cache = new Map<string, TranscriptResult>();
   private readonly visionCache = new Map<string, VisionResult>();
+  private readonly downloadTimes = new Map<string, number[]>();
 
-  constructor(private readonly speech: SpeechToTextProvider, private readonly vision?: VisionProvider) {}
+  constructor(private readonly speech: SpeechToTextProvider, private readonly vision?: VisionProvider, private readonly tts?: TextToSpeechProvider, private readonly downloadsPerHour = 100) {}
 
-  async transcribeAudio(loader: () => Promise<DownloadedMedia>): Promise<TranscriptResult> {
+  async transcribeAudio(loader: () => Promise<DownloadedMedia>, scopeId?: string): Promise<TranscriptResult> {
+    this.reserveDownload(scopeId);
     const media = await loader();
     const hash = createHash("sha256").update(media.data).digest("hex");
     const cached = this.cache.get(hash);
@@ -124,8 +210,9 @@ export class MediaProcessor {
     return transcript;
   }
 
-  async analyzeImage(loader: () => Promise<DownloadedMedia>): Promise<VisionResult> {
+  async analyzeImage(loader: () => Promise<DownloadedMedia>, scopeId?: string): Promise<VisionResult> {
     if (!this.vision?.available) throw new Error("No vision provider is configured");
+    this.reserveDownload(scopeId);
     const media = await loader();
     const hash = createHash("sha256").update(media.data).digest("hex");
     const cached = this.visionCache.get(hash);
@@ -134,5 +221,34 @@ export class MediaProcessor {
     this.visionCache.set(hash, result);
     if (this.visionCache.size > 100) this.visionCache.delete(this.visionCache.keys().next().value as string);
     return result;
+  }
+
+  async synthesizeSpeech(text: string): Promise<DownloadedMedia> {
+    if (!this.tts?.available) throw new Error("No TTS provider is configured");
+    return this.tts.synthesize(text);
+  }
+
+  async extractDocumentText(loader: () => Promise<DownloadedMedia>, scopeId?: string): Promise<DocumentTextResult> {
+    this.reserveDownload(scopeId);
+    const media = await loader();
+    const mimeType = media.mimeType.toLowerCase();
+    if (!mimeType.startsWith("text/") && !["application/json", "application/xml", "application/javascript"].includes(mimeType)) throw new Error("document_text_extraction_unsupported");
+    const text = media.data.toString("utf8").replace(/\u0000/g, "").trim();
+    if (!text) throw new Error("document_has_no_text");
+    return { text: text.slice(0, 4000), mimeType };
+  }
+
+  health(): { speechToText: boolean; vision: boolean; textToSpeech: boolean } {
+    return { speechToText: this.speech.available, vision: Boolean(this.vision?.available), textToSpeech: Boolean(this.tts?.available) };
+  }
+
+  private reserveDownload(scopeId?: string): void {
+    if (!scopeId) return;
+    if (this.downloadsPerHour <= 0) throw new Error("media_download_rate_limit");
+    const now = Date.now();
+    const recent = (this.downloadTimes.get(scopeId) ?? []).filter((timestamp) => timestamp > now - 60 * 60 * 1000);
+    if (recent.length >= this.downloadsPerHour) throw new Error("media_download_rate_limit");
+    recent.push(now);
+    this.downloadTimes.set(scopeId, recent);
   }
 }

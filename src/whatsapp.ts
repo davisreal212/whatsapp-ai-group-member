@@ -53,6 +53,8 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     private readonly authDir: string,
     private readonly store: Store,
     private readonly events: WhatsAppEvents,
+    private readonly maxMediaBytes = 10 * 1024 * 1024,
+    private readonly maxVideoDurationSeconds = 300,
   ) {}
 
   get connected(): boolean {
@@ -106,20 +108,36 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
       for (const raw of messages) {
         if (raw.key.id) this.rawMessages.set(raw.key.id, raw);
         this.messageQueue.enqueue(raw.key.remoteJid ?? "unknown", async () => {
-          try {
-            await this.events.onRawMessage(raw, () => this.downloadMedia(raw));
-          } catch (error) {
-            const message = error instanceof Error ? error.message : "unknown";
-            console.error(`[whatsapp] message handler failed id=${raw.key.id ?? "unknown"}: ${message}`);
-            await this.store.addLog({
-              id: crypto.randomUUID(),
-              event: "whatsapp.message_handler_failure",
-              level: "error",
-              details: { error: message },
-              createdAt: Date.now(),
-            });
-            throw error;
+          let lastError: unknown;
+          for (let attempt = 1; attempt <= 3; attempt += 1) {
+            try {
+              await this.events.onRawMessage(raw, () => this.downloadMedia(raw));
+              return;
+            } catch (error) {
+              lastError = error;
+              const message = error instanceof Error ? error.message : "unknown";
+              if (attempt < 3) {
+                await this.store.addLog({
+                  id: crypto.randomUUID(),
+                  event: "whatsapp.message_retry",
+                  level: "warn",
+                  details: { messageId: raw.key.id ?? "unknown", attempt, error: message },
+                  createdAt: Date.now(),
+                });
+                await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** (attempt - 1)));
+                continue;
+              }
+              console.error(`[whatsapp] message handler failed id=${raw.key.id ?? "unknown"}: ${message}`);
+              await this.store.addLog({
+                id: crypto.randomUUID(),
+                event: "whatsapp.message_handler_failure",
+                level: "error",
+                details: { messageId: raw.key.id ?? "unknown", error: message, attempts: attempt },
+                createdAt: Date.now(),
+              });
+            }
           }
+          throw lastError instanceof Error ? lastError : new Error("message handler failed");
         });
       }
     });
@@ -156,6 +174,7 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
         socket.end(undefined);
       }
     }
+    await this.messageQueue.waitForIdle();
     await this.clearAuthState();
     this.reconnectAttempts = 0;
     await this.store.setConnection("DISCONNECTED");
@@ -182,6 +201,7 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     this.pairingPhoneNumber = undefined;
     this.rawMessages.clear();
     socket?.end(undefined);
+    await this.messageQueue.waitForIdle();
     await this.credentialsSave.catch(() => undefined);
     await this.store.setConnection("DISCONNECTED");
   }
@@ -231,8 +251,8 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     const expectedKind = mimeType.split("/", 1)[0]?.toLowerCase();
     if (responseMimeType && expectedKind && !responseMimeType.startsWith(`${expectedKind}/`)) throw new Error("Media content type does not match the requested action");
     const length = Number(response.headers.get("content-length") ?? 0);
-    if (!Number.isFinite(length) || length < 0 || length > 10 * 1024 * 1024) throw new Error("Media exceeds the 10 MB limit");
-    const body = await readResponseBody(response, 10 * 1024 * 1024);
+    if (!Number.isFinite(length) || length < 0 || length > this.maxMediaBytes) throw new Error("Media exceeds the configured size limit");
+    const body = await readResponseBody(response, this.maxMediaBytes);
     if (mimeType.startsWith("image/")) {
       await this.socket.sendMessage(groupId, { image: body, mimetype: mimeType, ...(caption ? { caption } : {}) });
     } else if (mimeType.startsWith("audio/")) {
@@ -240,6 +260,13 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     } else {
       throw new Error("Unsupported media type");
     }
+  }
+
+  async sendAudioBuffer(groupId: string, data: Buffer, mimeType: string, caption?: string, quotedMessageId?: string): Promise<void> {
+    if (!this.socket) throw new Error("WhatsApp is not connected");
+    if (data.byteLength > this.maxMediaBytes) throw new Error("Media exceeds the configured size limit");
+    const quoted = quotedMessageId ? this.rawMessages.get(quotedMessageId) : undefined;
+    await this.socket.sendMessage(groupId, { audio: data, mimetype: mimeType, ptt: true, ...(caption ? { caption } : {}) }, quoted ? { quoted } : undefined);
   }
 
   private async handleConnectionUpdate(
@@ -323,6 +350,9 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
   private async downloadMedia(raw: WAMessage): Promise<DownloadedMedia> {
     const found = findMediaMessage(raw.message as Record<string, unknown> | null | undefined);
     if (!found) throw new Error("Downloadable media content was not found");
+    const duration = found.payload.seconds;
+    const durationSeconds = typeof duration === "number" ? duration : duration && typeof duration === "object" && "low" in duration && typeof duration.low === "number" ? duration.low : undefined;
+    if (found.type === "video" && durationSeconds !== undefined && durationSeconds > this.maxVideoDurationSeconds) throw new Error("Video exceeds the configured duration limit");
     const stream = await downloadContentFromMessage(
       found.payload as Parameters<typeof downloadContentFromMessage>[0],
       found.type as Parameters<typeof downloadContentFromMessage>[1],
@@ -332,7 +362,7 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     for await (const chunk of stream) {
       const value = Buffer.from(chunk);
       size += value.byteLength;
-      if (size > 10 * 1024 * 1024) throw new Error("Media exceeds the 10 MB limit");
+      if (size > this.maxMediaBytes) throw new Error("Media exceeds the configured size limit");
       chunks.push(value);
     }
     return { data: Buffer.concat(chunks, size), mimeType: typeof found.payload.mimetype === "string" ? found.payload.mimetype : `${found.type}/ogg` };

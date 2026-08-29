@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { AppConfig, CanonicalMessage, TaskRecord } from "./types.js";
 import type { Store } from "./store.js";
 import type { OutboundTransport } from "./actions.js";
+import { isQuietHours } from "./policy.js";
 
 const CHECK_INTERVAL_MS = 30_000;
 const PRICE_CHECK_INTERVAL_MS = 60_000;
@@ -10,6 +11,7 @@ const SUPPORTED_ASSETS = ["bitcoin", "ethereum"] as const;
 
 export interface PriceProvider {
   readonly name: string;
+  readonly available?: boolean;
   getPrices(assets: string[]): Promise<Record<string, number>>;
 }
 
@@ -23,13 +25,16 @@ export class TaskService {
   private running = false;
   private lastRunAt?: number;
   private lastError?: string;
+  private readonly priceProvider: PriceProvider;
 
   constructor(
     private readonly store: Store,
     private readonly config: AppConfig,
     private readonly transport: OutboundTransport,
-    private readonly priceProvider: PriceProvider = new FallbackPriceProvider(),
-  ) {}
+    priceProvider?: PriceProvider,
+  ) {
+    this.priceProvider = priceProvider ?? new FallbackPriceProvider(config.cmcApiKey);
+  }
 
   start(): void {
     if (this.timer) return;
@@ -82,7 +87,7 @@ export class TaskService {
         type: "REMINDER",
         message: reminder.message,
         triggerAt: reminder.triggerAt,
-        recurrence: "ONCE",
+        recurrence: reminder.recurrence,
       }) };
     }
 
@@ -174,8 +179,8 @@ export class TaskService {
   }
 
   private async notify(task: TaskRecord, text: string): Promise<boolean> {
-    if (this.config.dryRun || this.config.outboundPaused || !this.transport.connected) {
-      await this.store.updateTask(task.id, { lastError: this.config.dryRun ? "dry_run" : this.config.outboundPaused ? "outbound_paused" : "transport_disconnected" });
+    if (this.config.dryRun || this.config.outboundPaused || isQuietHours(this.config.quietHoursStart, this.config.quietHoursEnd) || !this.transport.connected) {
+      await this.store.updateTask(task.id, { lastError: this.config.dryRun ? "dry_run" : this.config.outboundPaused ? "outbound_paused" : isQuietHours(this.config.quietHoursStart, this.config.quietHoursEnd) ? "quiet_hours" : "transport_disconnected" });
       return false;
     }
     try {
@@ -196,11 +201,16 @@ export class TaskService {
 
 class FallbackPriceProvider implements PriceProvider {
   readonly name = "coingecko+coinbase";
-  private readonly providers: PriceProvider[] = [new CoinGeckoPriceProvider(), new CoinbasePriceProvider()];
+  private readonly providers: PriceProvider[];
+
+  constructor(cmcApiKey?: string) {
+    this.providers = [new CoinGeckoPriceProvider(), new CoinMarketCapPriceProvider(cmcApiKey), new CoinbasePriceProvider()];
+  }
 
   async getPrices(assets: string[]): Promise<Record<string, number>> {
     let lastError: unknown;
     for (const provider of this.providers) {
+      if (provider.available === false) continue;
       try {
         return await provider.getPrices(assets);
       } catch (error) {
@@ -208,6 +218,34 @@ class FallbackPriceProvider implements PriceProvider {
       }
     }
     throw lastError instanceof Error ? lastError : new Error("all price providers failed");
+  }
+}
+
+export class CoinMarketCapPriceProvider implements PriceProvider {
+  readonly name = "coinmarketcap";
+  readonly available: boolean;
+
+  constructor(private readonly apiKey?: string) {
+    this.available = Boolean(apiKey);
+  }
+
+  async getPrices(assets: string[]): Promise<Record<string, number>> {
+    if (!this.apiKey) throw new Error("CoinMarketCap API key is not configured");
+    const symbols = assets.map((asset) => asset === "bitcoin" ? "BTC" : asset === "ethereum" ? "ETH" : undefined).filter((symbol): symbol is "BTC" | "ETH" => Boolean(symbol));
+    if (!symbols.length) return {};
+    const response = await fetch(`https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?symbol=${symbols.join(",")}&convert=USD`, {
+      headers: { "X-CMC_PRO_API_KEY": this.apiKey, accept: "application/json" },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) throw new Error(`CoinMarketCap returned HTTP ${response.status}`);
+    const body = await response.json() as { data?: Record<string, { quote?: { USD?: { price?: unknown } } }> };
+    const prices: Record<string, number> = {};
+    for (const symbol of symbols) {
+      const price = body.data?.[symbol]?.quote?.USD?.price;
+      if (typeof price !== "number" || !Number.isFinite(price)) throw new Error(`CoinMarketCap returned no USD price for ${symbol}`);
+      prices[symbol === "BTC" ? "bitcoin" : "ethereum"] = price;
+    }
+    return prices;
   }
 }
 
@@ -267,16 +305,19 @@ function parsePriceAlert(text: string): TaskDraft | undefined {
   return { type: "PRICE_ALERT", message: `${asset} ${operator} ${threshold}`, condition: { asset, operator, threshold, currency: "USD" }, recurrence: "ONCE" };
 }
 
-function parseReminder(text: string): { triggerAt?: number; message?: string; error?: string } {
-  const body = text.replace(/^.*?\bremind me\b/i, "").trim();
+function parseReminder(text: string): { triggerAt?: number; message?: string; recurrence: TaskRecord["recurrence"]; error?: string } {
+  let body = text.replace(/^.*?\bremind me\b/i, "").trim();
+  const recurring = body.match(/^every\s+(day|daily|week|weekly)\b\s*/i);
+  const recurrence: TaskRecord["recurrence"] = recurring && /week/i.test(recurring[1] ?? "") ? "WEEKLY" : recurring ? "DAILY" : "ONCE";
+  if (recurring) body = body.slice(recurring[0].length).trim();
   const match = body.match(/^(?:(today|tomorrow)\b\s*)?(?:at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b\s*)?(?:to\s+)?(.+)$/i);
-  if (!match) return { error: "Tell me the day, time, and reminder, for example: remind me tomorrow at 8pm to call David." };
+  if (!match) return { recurrence, error: "Tell me the day, time, and reminder, for example: remind me tomorrow at 8pm to call David." };
   const day = match[1]?.toLowerCase();
   const hour = match[2] ? Number(match[2]) : undefined;
   const minute = match[3] ? Number(match[3]) : 0;
   const meridiem = match[4]?.toLowerCase();
   const message = match[5]?.trim();
-  if (hour === undefined || !message || minute > 59 || hour > 23 || (meridiem && hour > 12)) return { error: "What day and time should I use? For example: remind me tomorrow at 8pm to call David." };
+  if (hour === undefined || !message || minute > 59 || hour > 23 || (meridiem && hour > 12)) return { recurrence, error: "What day and time should I use? For example: remind me tomorrow at 8pm to call David." };
   let normalizedHour = hour;
   if (meridiem === "pm" && normalizedHour < 12) normalizedHour += 12;
   if (meridiem === "am" && normalizedHour === 12) normalizedHour = 0;
@@ -284,7 +325,7 @@ function parseReminder(text: string): { triggerAt?: number; message?: string; er
   if (day === "tomorrow") trigger.setDate(trigger.getDate() + 1);
   trigger.setHours(normalizedHour, minute, 0, 0);
   if (!day && trigger.getTime() <= Date.now()) trigger.setDate(trigger.getDate() + 1);
-  return { triggerAt: trigger.getTime(), message };
+  return { triggerAt: trigger.getTime(), message, recurrence };
 }
 
 function formatTaskList(tasks: TaskRecord[]): string {

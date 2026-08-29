@@ -118,6 +118,20 @@ export function createApp(runtime: BotRuntime, config: AppConfig) {
     response.json(runtime.store.logs(parsed.success ? parsed.data : 100));
   });
   app.get("/api/actions", (_request, response) => response.json(runtime.store.actions(200)));
+  app.get("/api/backups", async (_request, response, next) => {
+    try {
+      response.json(await runtime.listBackups());
+    } catch (error) {
+      next(error);
+    }
+  });
+  app.post("/api/backups", async (_request, response, next) => {
+    try {
+      response.status(201).json(await runtime.createBackup());
+    } catch (error) {
+      next(error);
+    }
+  });
   app.get("/api/tasks", (request, response) => {
     const status = typeof request.query.status === "string" ? request.query.status : undefined;
     response.json(runtime.store.tasks(status === "ACTIVE" || status === "TRIGGERED" || status === "PAUSED" || status === "CANCELLED" ? status : undefined));

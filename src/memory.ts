@@ -88,6 +88,26 @@ export class MemoryService {
         });
       }
     }
+
+    const recent = conversationId.endsWith("@g.us")
+      ? this.store.recentMessages(conversationId, 20)
+      : this.store.recentChatMessages(conversationId, 20);
+    if (recent.length >= 5 && recent.length % 5 === 0) {
+      const summary = recent.slice(-8).map((item) => `${item.senderName ?? item.senderId}: ${(item.text ?? `[${item.type}]`).slice(0, 180)}`).join(" | ");
+      const previousSummary = this.store.memories(conversationId).find((item) => item.memoryType === "conversation-summary");
+      await this.store.upsertMemory({
+        id: createHash("sha256").update(`${conversationId}:conversation-summary`).digest("hex"),
+        scopeType: message.groupId ? "group" : "relationship",
+        scopeId: conversationId,
+        memoryType: "conversation-summary",
+        value: { summary: summary.slice(0, 1800), messageCount: recent.length },
+        confidence: 0.65,
+        evidenceCount: (previousSummary?.evidenceCount ?? 0) + 1,
+        createdAt: previousSummary?.createdAt ?? now,
+        lastConfirmedAt: now,
+        expiresAt: now + 7 * 24 * 60 * 60 * 1000,
+      });
+    }
   }
 
   context(group: GroupRecord, senderId: string, personality: Personality, query = ""): ContextSnapshot {

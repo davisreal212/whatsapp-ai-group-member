@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { AppConfig, CanonicalMessage, DecisionPlan, GroupRecord } from "./types.js";
 import type { Store } from "./store.js";
-import { isDirectMessageAllowed } from "./policy.js";
+import { isDirectMessageAllowed, isQuietHours } from "./policy.js";
 import { isSafeHttpsUrl } from "./network.js";
 import { KeyedJobQueue, type QueueStats } from "./queue.js";
 
@@ -12,6 +12,7 @@ export interface OutboundTransport {
   sendText(groupId: string, text: string, quotedMessageId?: string, mentionedIds?: string[]): Promise<void>;
   sendReaction(groupId: string, messageId: string, reaction: string): Promise<void>;
   sendMedia(groupId: string, mediaUrl: string, mimeType: string, caption?: string): Promise<void>;
+  sendAudioBuffer?(groupId: string, data: Buffer, mimeType: string, caption?: string, quotedMessageId?: string): Promise<void>;
 }
 
 const planSchema = z.object({
@@ -43,6 +44,9 @@ export function validateActionPlan(
   outboundPaused: boolean,
   groupOnlyMode = true,
   directMessageAllowlist: string[] = [],
+  quietHoursStart = -1,
+  quietHoursEnd = -1,
+  allowGeneratedAudio = false,
 ): ActionValidation {
   const parsed = planSchema.safeParse(plan);
   if (!parsed.success) return { valid: false, reason: "malformed_action_plan" };
@@ -56,6 +60,7 @@ export function validateActionPlan(
     if (!group.enabled || group.aiPaused) return { valid: false, reason: "group_not_enabled" };
   }
   if (outboundPaused) return { valid: false, reason: "outbound_paused" };
+  if (isQuietHours(quietHoursStart, quietHoursEnd)) return { valid: false, reason: "quiet_hours" };
 
   const targetId = plan.targetMessageId ?? sourceMessage.id;
   const target = store.message(targetId);
@@ -65,7 +70,8 @@ export function validateActionPlan(
   }
   if (plan.decision === "REACT" && !plan.reaction) return { valid: false, reason: "reaction_required" };
   if (["SEND_IMAGE", "SEND_AUDIO"].includes(plan.decision)) {
-    if (!plan.mediaUrl || !isSafeHttpsUrl(plan.mediaUrl)) return { valid: false, reason: "safe_media_url_required" };
+    if (!(allowGeneratedAudio && plan.decision === "SEND_AUDIO") && (!plan.mediaUrl || !isSafeHttpsUrl(plan.mediaUrl))) return { valid: false, reason: "safe_media_url_required" };
+    if (plan.mediaUrl && !isSafeHttpsUrl(plan.mediaUrl)) return { valid: false, reason: "safe_media_url_required" };
     if (plan.decision === "SEND_IMAGE" && plan.mediaMimeType && !plan.mediaMimeType.startsWith("image/")) return { valid: false, reason: "image_mime_required" };
     if (plan.decision === "SEND_AUDIO" && plan.mediaMimeType && !plan.mediaMimeType.startsWith("audio/")) return { valid: false, reason: "audio_mime_required" };
   }
@@ -76,6 +82,7 @@ export class ActionService {
   private readonly queue = new KeyedJobQueue(2);
   private readonly retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private started = false;
+  private readonly generatedAudio = new Map<string, { data: Buffer; mimeType: string }>();
 
   constructor(
     private readonly store: Store,
@@ -106,8 +113,8 @@ export class ActionService {
     return { running: this.started, queue: this.queue.stats() };
   }
 
-  async execute(plan: DecisionPlan, sourceMessage: CanonicalMessage, group: GroupRecord | undefined): Promise<ActionValidation> {
-    const validation = validateActionPlan(plan, sourceMessage, group, this.store, this.config.outboundPaused, this.config.groupOnlyMode, this.config.directMessageAllowlist);
+  async execute(plan: DecisionPlan, sourceMessage: CanonicalMessage, group: GroupRecord | undefined, generatedAudio?: { data: Buffer; mimeType: string }): Promise<ActionValidation> {
+    const validation = validateActionPlan(plan, sourceMessage, group, this.store, this.config.outboundPaused, this.config.groupOnlyMode, this.config.directMessageAllowlist, this.config.quietHoursStart, this.config.quietHoursEnd, Boolean(generatedAudio));
     if (!validation.valid || plan.decision === "IGNORE") {
       await this.store.incrementMetric(validation.valid ? "actionsSkipped" : "actionsSkipped");
       await this.store.addLog({
@@ -166,7 +173,9 @@ export class ActionService {
       status: "PENDING" as const,
       attempts: 0,
     };
+    if (generatedAudio && !this.transport.sendAudioBuffer) return this.rejectRuntime(sourceMessage, plan, "audio_transport_unsupported");
     if (!(await this.store.createAction(action))) return this.rejectRuntime(sourceMessage, plan, "duplicate_action");
+    if (generatedAudio) this.generatedAudio.set(action.id, generatedAudio);
 
     await this.queue.enqueueAndWait(conversationId, () => this.runPendingAction(action.id));
     const completed = this.store.action(action.id);
@@ -187,7 +196,8 @@ export class ActionService {
     }
     const group = sourceMessage.groupId ? this.store.group(sourceMessage.groupId) : undefined;
     const plan = planFromAction(action);
-    const validation = validateActionPlan(plan, sourceMessage, group, this.store, this.config.outboundPaused, this.config.groupOnlyMode, this.config.directMessageAllowlist);
+    const generatedAudio = this.generatedAudio.get(id);
+    const validation = validateActionPlan(plan, sourceMessage, group, this.store, this.config.outboundPaused, this.config.groupOnlyMode, this.config.directMessageAllowlist, this.config.quietHoursStart, this.config.quietHoursEnd, Boolean(generatedAudio));
     if (!validation.valid) {
       await this.skipAction(id, sourceMessage, plan, validation.reason);
       return;
@@ -209,13 +219,18 @@ export class ActionService {
       if (plan.decision === "REACT") {
         await this.transport.sendReaction(conversationId, plan.targetMessageId ?? sourceMessage.id, plan.reaction as string);
       } else if (plan.decision === "SEND_IMAGE" || plan.decision === "SEND_AUDIO") {
-        await this.transport.sendMedia(conversationId, plan.mediaUrl as string, plan.mediaMimeType ?? (plan.decision === "SEND_IMAGE" ? "image/jpeg" : "audio/ogg"), plan.text);
+        if (plan.decision === "SEND_AUDIO" && generatedAudio && this.transport.sendAudioBuffer) {
+          await this.transport.sendAudioBuffer(conversationId, generatedAudio.data, generatedAudio.mimeType, undefined, plan.targetMessageId ?? sourceMessage.id);
+        } else {
+          await this.transport.sendMedia(conversationId, plan.mediaUrl as string, plan.mediaMimeType ?? (plan.decision === "SEND_IMAGE" ? "image/jpeg" : "audio/ogg"), plan.text);
+        }
       } else {
         await this.transport.sendText(conversationId, plan.text as string, ["REPLY_QUOTED", "MENTION_REPLY"].includes(plan.decision) ? plan.targetMessageId ?? sourceMessage.id : undefined, plan.decision === "MENTION_REPLY" ? [sourceMessage.senderId] : undefined);
       }
       await this.store.updateAction(id, { status: "SENT", executedAt: Date.now(), error: undefined, nextAttemptAt: undefined });
       await this.store.incrementMetric("actionsSent");
       await this.store.addLog({ id: randomUUID(), event: "action.sent", level: "info", messageId: sourceMessage.id, ...(sourceMessage.groupId ? { groupId: sourceMessage.groupId } : {}), details: { decision: plan.decision, targetMessageId: plan.targetMessageId ?? sourceMessage.id }, createdAt: Date.now() });
+      this.generatedAudio.delete(id);
     } catch (error) {
       const message = error instanceof Error ? error.message : "unknown error";
       const attempts = (action.attempts ?? 0) + 1;

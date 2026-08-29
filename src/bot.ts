@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { WAMessage } from "@whiskeysockets/baileys";
 import { ActionService, type OutboundTransport } from "./actions.js";
 import { DecisionEngine } from "./decision.js";
-import type { AppConfig, CanonicalMessage, GroupRecord, TaskRecord } from "./types.js";
+import type { AppConfig, CanonicalMessage, GroupRecord, InboundJobRecord, TaskRecord } from "./types.js";
 import { MemoryService } from "./memory.js";
 import { isCurrentInformationQuestion, evaluateInboundPolicy } from "./policy.js";
 import { ProviderRouter, type ProviderInput } from "./providers.js";
@@ -11,7 +11,9 @@ import type { Store } from "./store.js";
 import { normalizeMessage } from "./normalize.js";
 import type { DiscoveredDirectMessage, DiscoveredGroup } from "./whatsapp.js";
 import { TaskService } from "./tasks.js";
-import { FallbackSpeechToTextProvider, GeminiVisionProvider, GroqSpeechToTextProvider, MediaProcessor } from "./media.js";
+import { ElevenLabsTextToSpeechProvider, FallbackSpeechToTextProvider, FallbackTextToSpeechProvider, GeminiVisionProvider, GroqSpeechToTextProvider, MediaProcessor, OpenAITextToSpeechProvider } from "./media.js";
+import { BackupService } from "./backup.js";
+import { KeyedJobQueue } from "./queue.js";
 
 export class BotRuntime {
   readonly memory: MemoryService;
@@ -21,6 +23,9 @@ export class BotRuntime {
   readonly actions: ActionService;
   readonly tasks: TaskService;
   readonly media: MediaProcessor;
+  readonly backups: BackupService;
+  private readonly inboundQueue = new KeyedJobQueue(4);
+  private lastDecisionDiagnostics?: Record<string, unknown>;
 
   constructor(
     readonly store: Store,
@@ -33,7 +38,8 @@ export class BotRuntime {
     this.decisions = new DecisionEngine(this.providers);
     this.actions = new ActionService(store, config, transport);
     this.tasks = new TaskService(store, config, transport);
-    this.media = new MediaProcessor(new FallbackSpeechToTextProvider([new GroqSpeechToTextProvider(config.groqApiKey)]), new GeminiVisionProvider(config.geminiApiKey, config.geminiModel));
+    this.media = new MediaProcessor(new FallbackSpeechToTextProvider([new GroqSpeechToTextProvider(config.groqApiKey)]), new GeminiVisionProvider(config.geminiApiKey, config.geminiModel), new FallbackTextToSpeechProvider([new OpenAITextToSpeechProvider(config.ttsApiKey, config.ttsBaseUrl, config.ttsModel, config.ttsVoice), new ElevenLabsTextToSpeechProvider(config.elevenLabsApiKey, config.elevenLabsVoiceId)]), config.mediaDownloadsPerHour);
+    this.backups = new BackupService(store, config.dataDir, config.backupIntervalHours, config.backupRetentionCount);
   }
 
   async init(): Promise<void> {
@@ -49,6 +55,7 @@ export class BotRuntime {
       await this.store.updateSettings({ outboundPaused: this.config.outboundPaused, aiProcessingPaused: this.config.aiProcessingPaused, directMessageAllowlist: this.config.directMessageAllowlist, personality: this.config.personality });
     }
     this.actions.start();
+    this.backups.start();
   }
 
   async connect(phoneNumber?: string): Promise<void> {
@@ -63,11 +70,13 @@ export class BotRuntime {
 
   startBackgroundWorkers(): void {
     this.tasks.start();
+    void this.drainInboundJobs();
   }
 
   async stopBackgroundWorkers(): Promise<void> {
     this.tasks.stop();
     await this.actions.stop();
+    this.backups.stop();
   }
 
   async cancelTask(id: string): Promise<TaskRecord | undefined> {
@@ -96,11 +105,35 @@ export class BotRuntime {
   }
 
   async handleRawMessage(raw: WAMessage, loadMedia?: () => Promise<import("./media.js").DownloadedMedia>): Promise<void> {
-    let message = normalizeMessage(raw as unknown as Parameters<typeof normalizeMessage>[0], this.config.botJid);
+    const message = normalizeMessage(raw as unknown as Parameters<typeof normalizeMessage>[0], this.config.botJid);
     if (!message) {
       await this.log("message.invalid", "warn", { reason: "normalization_failed" });
       return;
     }
+    await this.inboundQueue.enqueueAndWait(message.chatId, () => this.processInboundMessage(message, loadMedia));
+  }
+
+  private async processInboundMessage(initialMessage: CanonicalMessage, loadMedia?: () => Promise<import("./media.js").DownloadedMedia>): Promise<void> {
+    const existing = this.store.inboundJobByMessageId(initialMessage.id);
+    if (existing?.status === "COMPLETED") return;
+    const draft: InboundJobRecord = existing ?? {
+      id: randomUUID(),
+      messageId: initialMessage.id,
+      chatId: initialMessage.chatId,
+      message: initialMessage,
+      status: "PENDING",
+      attempts: 0,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    const created = existing ? true : await this.store.createInboundJob(draft);
+    const job = created ? draft : this.store.inboundJobByMessageId(initialMessage.id);
+    if (!job || job.status === "COMPLETED") return;
+    if ((job.nextAttemptAt ?? 0) > Date.now()) await waitFor(Math.min(job.nextAttemptAt as number - Date.now(), 5_000));
+    await this.store.updateInboundJob(job.id, { status: "PROCESSING", attempts: job.attempts + 1, nextAttemptAt: undefined, lastError: undefined });
+    let failed = false;
+    let message = initialMessage;
+    try {
     await this.store.incrementMetric("observed");
     const group = message.groupId ? this.store.group(message.groupId) : undefined;
     const policy = evaluateInboundPolicy(message, group, this.config);
@@ -120,7 +153,7 @@ export class BotRuntime {
 
     if (message.type === "audio" && message.media?.hasDownloadableContent && loadMedia) {
       try {
-        const transcript = await this.media.transcribeAudio(loadMedia);
+        const transcript = await this.media.transcribeAudio(loadMedia, message.chatId);
         message = { ...message, text: transcript.text, transcriptConfidence: transcript.confidence, ...(transcript.language ? { transcriptLanguage: transcript.language } : {}) };
         await this.log("media.transcribed", "info", { type: "audio", confidence: transcript.confidence, ...(transcript.language ? { language: transcript.language } : {}) }, message);
       } catch (error) {
@@ -129,11 +162,20 @@ export class BotRuntime {
     }
     if (message.type === "image" && message.media?.hasDownloadableContent && loadMedia) {
       try {
-        const vision = await this.media.analyzeImage(loadMedia);
+        const vision = await this.media.analyzeImage(loadMedia, message.chatId);
         message = { ...message, text: [message.text, vision.description, vision.ocrText].filter(Boolean).join("\n"), media: { ...message.media, description: vision.description, ...(vision.ocrText ? { ocrText: vision.ocrText } : {}) } };
         await this.log("media.image_analyzed", "info", { type: "image", confidence: vision.confidence, ocr: Boolean(vision.ocrText) }, message);
       } catch (error) {
         await this.log("media.image_analysis_failed", "warn", { type: "image", error: error instanceof Error ? error.message : "unknown" }, message);
+      }
+    }
+    if (message.type === "document" && message.media?.hasDownloadableContent && loadMedia && isTextDocument(message.media.mimeType)) {
+      try {
+        const document = await this.media.extractDocumentText(loadMedia, message.chatId);
+        message = { ...message, text: [message.text, document.text].filter(Boolean).join("\n"), media: { ...message.media, description: "Text document extracted locally" } };
+        await this.log("media.document_extracted", "info", { type: "document", mimeType: document.mimeType }, message);
+      } catch (error) {
+        await this.log("media.document_extraction_failed", "warn", { type: "document", error: error instanceof Error ? error.message : "unknown" }, message);
       }
     }
 
@@ -152,7 +194,19 @@ export class BotRuntime {
         return;
       }
     }
-    const result = await this.decisions.decide(message, contextGroup, context, this.config);
+    const result = await this.decisions.decide(message, contextGroup, context, { ...this.config, alwaysReplyToAllowedDm: !message.isGroup });
+    this.lastDecisionDiagnostics = {
+      messageId: message.id,
+      ...(message.groupId ? { groupId: message.groupId } : { chatId: message.chatId }),
+      messageType: message.type,
+      localRelevance: result.local.reason,
+      directed: result.local.directed,
+      decision: result.plan.decision,
+      decisionReason: result.plan.reason,
+      searchRequired: false,
+      context: { recentMessages: context.recentMessages.length, memories: context.memories.length, recentActions: context.recentActions?.length ?? 0, memberProfile: Boolean(context.member) },
+      recordedAt: Date.now(),
+    };
     if (!result.local.relevant) {
       await this.store.incrementMetric("ignoredLocally");
       await this.log("decision.ignore_local", "info", {
@@ -172,6 +226,7 @@ export class BotRuntime {
       }
     }
     const currentQuestion = isCurrentInformationQuestion(message.text ?? "");
+    this.lastDecisionDiagnostics = { ...this.lastDecisionDiagnostics, searchRequired: Boolean(plan.needsWeb || currentQuestion) };
     const evidence = plan.decision !== "IGNORE" && (plan.needsWeb || currentQuestion)
       ? await this.research.research(message.text ?? "", this.config.tavilyMaxResults)
       : undefined;
@@ -192,7 +247,27 @@ export class BotRuntime {
       const response = await this.providers.generateResponse(input, message.groupId);
       if (response) plan = { ...plan, text: response };
     }
+    if (this.shouldUseAudioReply(message) && plan.text && plan.decision !== "REACT" && plan.decision !== "IGNORE") {
+      try {
+        const audio = await this.media.synthesizeSpeech(plan.text);
+        const audioPlan = { ...plan, decision: "SEND_AUDIO" as const, text: undefined, mediaUrl: undefined, mediaMimeType: audio.mimeType };
+        const result = await this.actions.execute(audioPlan, message, group, audio);
+        if (result.reason === "sent" || result.reason === "transport_failure") return;
+      } catch (error) {
+        await this.log("media.tts_failed", "warn", { error: error instanceof Error ? error.message : "unknown" }, message);
+      }
+    }
     await this.actions.execute(plan, message, group);
+    } catch (error) {
+      failed = true;
+      const message = error instanceof Error ? error.message : "inbound processing failed";
+      const attempts = this.store.inboundJobByMessageId(initialMessage.id)?.attempts ?? job.attempts;
+      await this.store.updateInboundJob(job.id, { status: "FAILED", attempts, lastError: message, nextAttemptAt: attempts < 3 ? Date.now() + 500 : undefined });
+      await this.log("message.processing_failed", "error", { error: message, attempts }, initialMessage);
+      throw error;
+    } finally {
+      if (!failed) await this.store.updateInboundJob(job.id, { status: "COMPLETED", nextAttemptAt: undefined, lastError: undefined });
+    }
   }
 
   async syncGroups(groups: DiscoveredGroup[]): Promise<void> {
@@ -216,6 +291,7 @@ export class BotRuntime {
       await this.store.upsertGroup(group);
     }
     await this.log("groups.synced", "info", { count: groups.length });
+    await this.drainInboundJobs();
   }
 
   async setDirectMessageAllowlist(contacts: string[]): Promise<string[]> {
@@ -256,6 +332,14 @@ export class BotRuntime {
     return count;
   }
 
+  async listBackups() {
+    return this.backups.list();
+  }
+
+  async createBackup() {
+    return this.backups.create();
+  }
+
   async setControls(update: { outboundPaused?: boolean; aiProcessingPaused?: boolean }): Promise<void> {
     if (update.outboundPaused !== undefined) this.config.outboundPaused = update.outboundPaused;
     if (update.aiProcessingPaused !== undefined) this.config.aiProcessingPaused = update.aiProcessingPaused;
@@ -279,10 +363,18 @@ export class BotRuntime {
         outboundPaused: this.config.outboundPaused,
         aiProcessingPaused: this.config.aiProcessingPaused,
         dryRun: this.config.dryRun,
+        quietHoursStart: this.config.quietHoursStart,
+        quietHoursEnd: this.config.quietHoursEnd,
+        audioReplyMode: this.config.audioReplyMode,
+        maxMediaBytes: this.config.maxMediaBytes,
+        maxVideoDurationSeconds: this.config.maxVideoDurationSeconds,
+      mediaDownloadsPerHour: this.config.mediaDownloadsPerHour,
       },
+      diagnostics: this.lastDecisionDiagnostics,
       groups: this.store.groups(),
       metrics: snapshot.runtime.metrics,
       providers: this.providers.statuses(),
+      media: this.media.health(),
       research: { tavilyAvailable: Boolean(this.config.tavilyApiKey) },
       queue: this.transport.queueStats?.() ?? { pending: 0, processing: 0, failed: 0 },
       outboundQueue: this.actions.queueStats(),
@@ -290,7 +382,9 @@ export class BotRuntime {
         whatsapp: { running: Boolean(this.transport.connected), queue: this.transport.queueStats?.() ?? { pending: 0, processing: 0, failed: 0 } },
         outbound: this.actions.health(),
         tasks: this.tasks.health(),
+        backups: this.backups.health(),
       },
+      inboundQueue: this.inboundQueue.stats(),
       recentLogs: this.store.logs(30),
       recentActions: this.store.actions(30),
       tasks: this.store.tasks().slice(0, 100),
@@ -305,6 +399,17 @@ export class BotRuntime {
 
   private personality(group: GroupRecord) {
     return { ...this.config.personality, ...(group.personalityOverride ?? {}) };
+  }
+
+  private async drainInboundJobs(): Promise<void> {
+    if (!this.transport.connected) return;
+    for (const job of this.store.inboundJobs().filter((item) => (item.status === "PENDING" || item.status === "FAILED") && item.attempts < 3)) {
+      await this.inboundQueue.enqueueAndWait(job.chatId, () => this.processInboundMessage(job.message)).catch(() => undefined);
+    }
+  }
+
+  private shouldUseAudioReply(message: CanonicalMessage): boolean {
+    return this.config.audioReplyMode === "always" || (this.config.audioReplyMode === "adaptive" && message.type === "audio");
   }
 
   private async executeTaskResult(result: { reply?: string }, message: CanonicalMessage, group?: GroupRecord): Promise<void> {
@@ -342,4 +447,13 @@ function directMessageContext(chatId: string): GroupRecord {
     aiPaused: false,
     lastSeenAt: Date.now(),
   };
+}
+
+function isTextDocument(mimeType?: string): boolean {
+  const normalized = mimeType?.toLowerCase();
+  return Boolean(normalized?.startsWith("text/") || ["application/json", "application/xml", "application/javascript"].includes(normalized ?? ""));
+}
+
+function waitFor(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

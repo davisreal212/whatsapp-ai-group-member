@@ -42,4 +42,20 @@ describe("conversation memory", () => {
     expect(topic?.evidenceCount).toBe(2);
     expect(topic?.confidence).toBeGreaterThan(0.25);
   });
+
+  it("creates a scoped conversation summary after enough stored messages", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-summary-"));
+    dirs.push(dir);
+    const store = new FileStore(dir);
+    await store.init();
+    const memory = new MemoryService(store);
+    for (let index = 0; index < 5; index += 1) {
+      const message: CanonicalMessage = { id: `summary-${index}`, chatId: "group@g.us", groupId: "group@g.us", senderId: `member-${index}`, timestamp: Date.now() + index, type: "text", text: `topic ${index}`, mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+      await store.storeMessage({ ...message, storedAt: Date.now() });
+      await memory.observe(message);
+    }
+    const summary = store.memories("group@g.us").find((item) => item.memoryType === "conversation-summary");
+    expect(summary?.value.summary).toContain("topic 4");
+    expect(summary?.expiresAt).toBeGreaterThan(Date.now());
+  });
 });

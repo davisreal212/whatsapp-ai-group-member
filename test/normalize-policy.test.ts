@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { normalizeMessage } from "../src/normalize.js";
-import { evaluateInboundPolicy } from "../src/policy.js";
+import { evaluateInboundPolicy, isQuietHours } from "../src/policy.js";
 import { normalizeWhatsAppJid, sameWhatsAppIdentity } from "../src/identity.js";
 import type { AppConfig, GroupRecord } from "../src/types.js";
 
@@ -21,6 +21,12 @@ describe("message normalization and inbound policy", () => {
     expect(normalizeWhatsAppJid("234:7@S.WHATSAPP.NET")).toBe("234@s.whatsapp.net");
     expect(sameWhatsAppIdentity("234:7@s.whatsapp.net", "234@s.whatsapp.net")).toBe(true);
     expect(sameWhatsAppIdentity("234@lid", "234@s.whatsapp.net")).toBe(false);
+  });
+
+  it("handles overnight quiet-hour windows", () => {
+    expect(isQuietHours(22, 7, new Date(2026, 0, 1, 23))).toBe(true);
+    expect(isQuietHours(22, 7, new Date(2026, 0, 1, 6))).toBe(true);
+    expect(isQuietHours(22, 7, new Date(2026, 0, 1, 12))).toBe(false);
   });
 
   it("normalizes text, mentions, and quote metadata without exposing transport shape", () => {

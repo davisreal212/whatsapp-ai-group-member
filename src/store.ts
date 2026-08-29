@@ -6,6 +6,8 @@ import type {
   AuditLog,
   ConnectionStatus,
   GroupRecord,
+  InboundJobRecord,
+  InboundJobStatus,
   MemberRecord,
   MemoryRecord,
   PersistedState,
@@ -57,6 +59,10 @@ export interface Store {
   updateTask(id: string, update: Partial<TaskRecord>): Promise<TaskRecord | undefined>;
   task(id: string): TaskRecord | undefined;
   tasks(status?: TaskStatus): TaskRecord[];
+  createInboundJob(job: InboundJobRecord): Promise<boolean>;
+  updateInboundJob(id: string, update: Partial<InboundJobRecord>): Promise<InboundJobRecord | undefined>;
+  inboundJobByMessageId(messageId: string): InboundJobRecord | undefined;
+  inboundJobs(status?: InboundJobStatus): InboundJobRecord[];
   pruneExpired(retentionDays: number, now?: number): Promise<PruneResult>;
 }
 
@@ -67,6 +73,7 @@ export interface PruneResult {
   logs: number;
   providerUsage: number;
   sessions: number;
+  inboundJobs: number;
 }
 
 export const emptyMetrics = (): AppMetrics => ({
@@ -87,6 +94,7 @@ export const emptyState = (): PersistedState => ({
   memories: {},
   actions: {},
   tasks: {},
+  inboundJobs: {},
   logs: [],
   providerUsage: [],
   users: {},
@@ -110,6 +118,7 @@ export class FileStore implements Store {
     try {
       const raw = await readFile(this.filePath, "utf8");
       this.state = { ...emptyState(), ...JSON.parse(raw) } as PersistedState;
+      this.state.inboundJobs = { ...emptyState().inboundJobs, ...this.state.inboundJobs };
       this.state.users = { ...emptyState().users, ...this.state.users };
       this.state.sessions = { ...emptyState().sessions, ...this.state.sessions };
       this.state.runtime = {
@@ -339,9 +348,34 @@ export class FileStore implements Store {
       .sort((a, b) => b.createdAt - a.createdAt);
   }
 
+  async createInboundJob(job: InboundJobRecord): Promise<boolean> {
+    if (this.state.inboundJobs[job.id] || this.inboundJobByMessageId(job.messageId)) return false;
+    this.state.inboundJobs[job.id] = job;
+    await this.persist();
+    return true;
+  }
+
+  async updateInboundJob(id: string, update: Partial<InboundJobRecord>): Promise<InboundJobRecord | undefined> {
+    const job = this.state.inboundJobs[id];
+    if (!job) return undefined;
+    this.state.inboundJobs[id] = { ...job, ...update, updatedAt: Date.now() };
+    await this.persist();
+    return this.state.inboundJobs[id];
+  }
+
+  inboundJobByMessageId(messageId: string): InboundJobRecord | undefined {
+    return Object.values(this.state.inboundJobs).find((job) => job.messageId === messageId);
+  }
+
+  inboundJobs(status?: InboundJobStatus): InboundJobRecord[] {
+    return Object.values(this.state.inboundJobs)
+      .filter((job) => !status || job.status === status)
+      .sort((a, b) => a.createdAt - b.createdAt);
+  }
+
   async pruneExpired(retentionDays: number, now = Date.now()): Promise<PruneResult> {
     const cutoff = now - Math.max(1, retentionDays) * 24 * 60 * 60 * 1000;
-    const result: PruneResult = { messages: 0, memories: 0, actions: 0, logs: 0, providerUsage: 0, sessions: 0 };
+    const result: PruneResult = { messages: 0, memories: 0, actions: 0, logs: 0, providerUsage: 0, sessions: 0, inboundJobs: 0 };
     for (const [id, message] of Object.entries(this.state.messages)) {
       if (message.storedAt < cutoff) {
         delete this.state.messages[id];
@@ -370,6 +404,12 @@ export class FileStore implements Store {
       if (session.expiresAt <= now) {
         delete this.state.sessions[tokenHash];
         result.sessions += 1;
+      }
+    }
+    for (const [id, job] of Object.entries(this.state.inboundJobs)) {
+      if (job.status !== "PENDING" && job.status !== "PROCESSING" && job.updatedAt < cutoff) {
+        delete this.state.inboundJobs[id];
+        result.inboundJobs += 1;
       }
     }
     if (Object.values(result).some((count) => count > 0)) await this.persist();

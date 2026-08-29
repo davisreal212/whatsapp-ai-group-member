@@ -47,6 +47,21 @@ DAILY_ACTION_LIMIT=50
 ACTIONS_PER_MINUTE=10
 ACTIONS_PER_HOUR=50
 ACTION_MAX_ATTEMPTS=3
+QUIET_HOURS_START=-1
+QUIET_HOURS_END=-1
+BACKUP_INTERVAL_HOURS=24
+BACKUP_RETENTION_COUNT=7
+AUDIO_REPLY_MODE=text
+TTS_API_KEY=<optional>
+TTS_BASE_URL=https://api.openai.com/v1
+TTS_MODEL=gpt-4o-mini-tts
+TTS_VOICE=alloy
+ELEVENLABS_API_KEY=<optional backup TTS key>
+ELEVENLABS_VOICE_ID=21m00Tcm4TlvDq8ikWAM
+CMC_API_KEY=<optional CoinMarketCap key>
+MAX_MEDIA_BYTES=10485760
+MAX_VIDEO_DURATION_SECONDS=300
+MEDIA_DOWNLOADS_PER_HOUR=100
 MESSAGE_RETENTION_DAYS=30
 GEMINI_API_KEY=<optional>
 GEMINI_MODEL=gemini-3.6-flash
@@ -92,7 +107,8 @@ The pinned dependency is `@whiskeysockets/baileys@6.7.24`. That version exports 
 - The dashboard has an outbound kill switch and an AI-processing pause switch.
 - The dashboard's DM allowlist is persisted in the application database and can be edited without rebuilding the service.
 - **Sync DMs** lists recent direct-message contacts seen by the current WhatsApp session; it does not import message content or automatically authorize anyone.
-- Back up the persistent volume. It contains the WhatsApp auth state and local application state.
+- The service writes protected application-state snapshots under `DATA_DIR/backups` on startup and on the configured interval. Back up the persistent volume separately; it contains the WhatsApp auth state and local application state.
+- Set `AUDIO_REPLY_MODE=adaptive` with `TTS_API_KEY` to reply to voice notes with audio when the provider and adapter support it. Synthesis failures fall back to text.
 - Monitor container logs, disk usage, connection status, provider failures, action skips, and daily action counts.
 - Keep the reverse proxy on HTTPS and restrict dashboard access by network or identity provider where possible.
 

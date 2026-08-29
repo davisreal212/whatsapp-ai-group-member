@@ -8,13 +8,16 @@ A safety-first WhatsApp group agent based on the supplied implementation manual.
 - Group discovery with explicit allowlisting. Newly discovered groups are disabled.
 - Hard group-only policy by default: DMs, status events, unknown groups, disabled groups, bot messages, duplicates, and unsupported events are rejected before AI calls. If group-only mode is disabled, only `DIRECT_MESSAGE_ALLOWLIST` contacts can use DMs.
 - Canonical message normalization with quote, mention, media, and sender metadata.
-- Voice-note transcription through a cached, fallback-ready speech provider and optional Gemini image description/OCR.
+- Voice-note transcription through a cached, fallback-ready speech provider, optional Gemini image description/OCR, and optional TTS audio replies with OpenAI/ElevenLabs fallback and text fallback.
 - Local relevance gates so casual chatter can be ignored without consuming AI quota.
 - Gemini, Groq, and OpenRouter adapters behind one provider router with circuit health and cooldowns.
-- Tavily plus DuckDuckGo research providers with evidence bundles and an unverified fallback.
+- Tavily plus no-key DuckDuckGo research providers with evidence bundles and an unverified fallback.
+- CoinGecko, optional CoinMarketCap, and Coinbase price-provider fallback for alerts.
 - Lightweight member communication observations with confidence and forgetting-ready timestamps.
-- Structured action plans, same-group target validation, per-minute/hour/day limits, cooldowns, dry-run mode, idempotency, retry, and pending-action recovery.
+- Structured action plans, same-group target validation, per-minute/hour/day limits, quiet hours, cooldowns, dry-run mode, idempotency, retry, and pending-action recovery.
 - Persistent reminders and BTC/ETH price alerts with a deterministic task worker and dashboard controls.
+- Normalized inbound job envelopes with bounded retries, restart recovery, media limits, and per-chat processing order.
+- Protected application-state snapshots under `DATA_DIR/backups` with configurable interval and retention.
 - Neon PostgreSQL persistence in production through `DATABASE_URL`, with local durable JSON state only when no database URL is configured.
 - Admin dashboard for connection, group authorization, kill switches, provider status, logs, and memory deletion.
 - Landing page with email/password signup and sign-in. The first account becomes the administrator; public signup closes after that.
@@ -51,7 +54,7 @@ The service defaults to silence when no provider is configured, when a provider 
 - Set `NODE_ENV=production`, `ADMIN_TOKEN`, provider quotas, and a real database/queue adapter.
 - Keep `DRY_RUN=true` until controlled test-group scenarios pass.
 - Review provider pricing and rate limits at deployment time.
-- Add reverse-proxy TLS, authenticated sessions/CSRF protection, backups, log retention, and monitoring.
+- Add reverse-proxy TLS, authenticated sessions/CSRF protection, managed database backups, log retention, and monitoring.
 - Validate the real WhatsApp adapter against a controlled account separately from the AI brain.
 
 For Docker or manual Railway deployment, use [`DEPLOYMENT.md`](./DEPLOYMENT.md) and `.env.production.example`. The production profile requires a Neon `DATABASE_URL`, an absolute persistent auth path, and an admin token of at least 24 characters. It starts with both dry-run and outbound pause enabled; remove those safeguards only after controlled verification.
