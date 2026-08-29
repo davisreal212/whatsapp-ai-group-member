@@ -56,4 +56,20 @@ describe("task service", () => {
     expect(result.reply).toContain("day and time");
     expect(store.tasks()).toHaveLength(0);
   });
+
+  it("triggers a due one-time reminder only once", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-due-task-"));
+    tempDirs.push(dir);
+    const store = new FileStore(dir);
+    await store.init();
+    const config = loadConfig({ NODE_ENV: "test", DATA_DIR: dir, DRY_RUN: "false", OUTBOUND_PAUSED: "false" });
+    const sent: string[] = [];
+    const service = new TaskService(store, config, { connected: true, sendText: async (_chatId, text) => { sent.push(text); }, sendReaction: async () => {}, sendMedia: async () => {} });
+    await store.createTask({ id: "due-reminder", groupId: "234@s.whatsapp.net", creatorId: "234@s.whatsapp.net", creatorChatId: "234@s.whatsapp.net", type: "REMINDER", message: "call David", status: "ACTIVE", triggerAt: Date.now() - 1, recurrence: "ONCE", notificationTarget: "USER", notificationChatId: "234@s.whatsapp.net", createdAt: Date.now(), retryCount: 0 });
+    service.start();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    service.stop();
+    expect(sent).toEqual(["Reminder: call David"]);
+    expect(store.task("due-reminder")?.status).toBe("TRIGGERED");
+  });
 });
