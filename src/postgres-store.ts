@@ -11,6 +11,8 @@ import type {
   InboundJobStatus,
   MemberRecord,
   MemoryRecord,
+  MemoryVectorJobRecord,
+  MemoryVectorJobStatus,
   PersistedState,
   ProviderUsageRecord,
   SessionRecord,
@@ -36,11 +38,12 @@ export class PostgresStore implements Store {
     if (this.initialized) return;
     await this.createSchema();
     this.state = emptyState();
-    const [groups, members, messages, memories, actions, tasks, inboundJobs, logs, usage, runtime, settings, users, sessions] = await Promise.all([
+    const [groups, members, messages, memories, memoryVectorJobs, actions, tasks, inboundJobs, logs, usage, runtime, settings, users, sessions] = await Promise.all([
        this.sql`SELECT id, whatsapp_group_id, subject, participant_count, is_admin, enabled, ai_paused, personality_override_json, participation_override_json, last_seen_at FROM groups`,
       this.sql`SELECT id, group_id, whatsapp_member_id, display_name, behavior_profile_json, confidence_json, first_seen_at, last_seen_at FROM members`,
       this.sql`SELECT id, chat_id, group_id, sender_id, sender_name, timestamp_ms, message_type, text_or_transcript, transcript_confidence, transcript_language, quoted_message_id, quoted_sender_id, mentioned_member_ids_json, media_metadata_json, is_group, is_status, is_from_bot, stored_at FROM messages`,
        this.sql`SELECT id, scope_type, scope_id, memory_type, value_json, confidence, importance, status, evidence_count, created_at, last_confirmed_at, updated_at, source_message_id, source_timestamp, source_member_id, expires_at FROM memories`,
+       this.sql`SELECT id, memory_id, operation, memory_updated_at, status, attempts, created_at, updated_at, next_attempt_at, last_error FROM memory_vector_jobs ORDER BY created_at ASC`,
       this.sql`SELECT id, idempotency_key, group_id, source_message_id, action_type, target_message_id, payload_json, scheduled_for, status, attempts, next_attempt_at, executed_at, error FROM ai_actions`,
       this.sql`SELECT id, group_id, creator_id, creator_chat_id, type, condition_json, message, status, trigger_at, recurrence, notification_target, notification_chat_id, created_at, last_checked_at, last_successful_check, last_error, retry_count FROM tasks`,
       this.sql`SELECT id, message_id, chat_id, message_json, status, attempts, created_at, updated_at, next_attempt_at, last_error FROM inbound_jobs ORDER BY created_at ASC`,
@@ -55,6 +58,7 @@ export class PostgresStore implements Store {
     for (const row of members as Row[]) this.state.members[String(row.id)] = memberFromRow(row);
     for (const row of messages as Row[]) this.state.messages[String(row.id)] = messageFromRow(row);
     for (const row of memories as Row[]) this.state.memories[String(row.id)] = memoryFromRow(row);
+    for (const row of memoryVectorJobs as Row[]) this.state.memoryVectorJobs[String(row.id)] = memoryVectorJobFromRow(row);
     for (const row of actions as Row[]) this.state.actions[String(row.id)] = actionFromRow(row);
     for (const row of tasks as Row[]) this.state.tasks[String(row.id)] = taskFromRow(row);
     for (const row of inboundJobs as Row[]) this.state.inboundJobs[String(row.id)] = inboundJobFromRow(row);
@@ -174,6 +178,34 @@ export class PostgresStore implements Store {
     const ids = (rows as Row[]).map((row) => String(row.id));
     for (const id of ids) delete this.state.memories[id];
     return ids.length;
+  }
+
+  async enqueueMemoryVectorJob(job: MemoryVectorJobRecord): Promise<boolean> {
+    const current = this.state.memoryVectorJobs[job.id];
+    if (current?.status === "PROCESSING") return false;
+    if (current?.memoryUpdatedAt === job.memoryUpdatedAt && current.operation === job.operation) return false;
+    const rows = await this.sql`INSERT INTO memory_vector_jobs (id, memory_id, operation, memory_updated_at, status, attempts, created_at, updated_at, next_attempt_at, last_error)
+      VALUES (${job.id}, ${job.memoryId}, ${job.operation}, ${job.memoryUpdatedAt}, ${job.status}, ${job.attempts}, ${job.createdAt}, ${job.updatedAt}, ${job.nextAttemptAt ?? null}, ${job.lastError ?? null})
+      ON CONFLICT (memory_id) DO UPDATE SET id = EXCLUDED.id, operation = EXCLUDED.operation, memory_updated_at = EXCLUDED.memory_updated_at, status = EXCLUDED.status, attempts = EXCLUDED.attempts, created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at, next_attempt_at = EXCLUDED.next_attempt_at, last_error = EXCLUDED.last_error
+      RETURNING id`;
+    if (!(rows as Row[]).length) return false;
+    this.state.memoryVectorJobs[job.id] = job;
+    return true;
+  }
+
+  async updateMemoryVectorJob(id: string, update: Partial<MemoryVectorJobRecord>): Promise<MemoryVectorJobRecord | undefined> {
+    const current = this.state.memoryVectorJobs[id];
+    if (!current) return undefined;
+    const job = { ...current, ...update, updatedAt: Date.now() };
+    await this.sql`UPDATE memory_vector_jobs SET operation = ${job.operation}, memory_updated_at = ${job.memoryUpdatedAt}, status = ${job.status}, attempts = ${job.attempts}, updated_at = ${job.updatedAt}, next_attempt_at = ${job.nextAttemptAt ?? null}, last_error = ${job.lastError ?? null} WHERE id = ${id}`;
+    this.state.memoryVectorJobs[id] = job;
+    return job;
+  }
+
+  memoryVectorJobs(status?: MemoryVectorJobStatus): MemoryVectorJobRecord[] {
+    return Object.values(this.state.memoryVectorJobs)
+      .filter((job) => !status || job.status === status)
+      .sort((a, b) => a.createdAt - b.createdAt);
   }
 
   async createAction(action: ActionRecord): Promise<boolean> {
@@ -299,9 +331,10 @@ export class PostgresStore implements Store {
 
   async pruneExpired(retentionDays: number, now = Date.now()): Promise<PruneResult> {
     const cutoff = now - Math.max(1, retentionDays) * 24 * 60 * 60 * 1000;
-    const [messages, memories, actions, logs, providerUsage, sessions, inboundJobs] = await Promise.all([
+    const [messages, memories, memoryVectorJobs, actions, logs, providerUsage, sessions, inboundJobs] = await Promise.all([
       this.sql`DELETE FROM messages WHERE stored_at < ${cutoff} RETURNING id`,
       this.sql`DELETE FROM memories WHERE (expires_at IS NOT NULL AND expires_at <= ${now}) OR last_confirmed_at < ${cutoff} RETURNING id`,
+      this.sql`DELETE FROM memory_vector_jobs WHERE status NOT IN ('PENDING', 'PROCESSING') AND updated_at < ${cutoff} RETURNING id`,
       this.sql`DELETE FROM ai_actions WHERE status <> 'PENDING' AND COALESCE(executed_at, scheduled_for) < ${cutoff} RETURNING id`,
       this.sql`DELETE FROM audit_logs WHERE created_at < ${cutoff} RETURNING id`,
       this.sql`DELETE FROM provider_usage WHERE created_at < ${cutoff} RETURNING id`,
@@ -311,6 +344,7 @@ export class PostgresStore implements Store {
     const result: PruneResult = {
       messages: (messages as Row[]).length,
       memories: (memories as Row[]).length,
+      memoryVectorJobs: (memoryVectorJobs as Row[]).length,
       actions: (actions as Row[]).length,
       logs: (logs as Row[]).length,
       providerUsage: (providerUsage as Row[]).length,
@@ -319,6 +353,7 @@ export class PostgresStore implements Store {
     };
     for (const row of messages as Row[]) delete this.state.messages[String(row.id)];
     for (const row of memories as Row[]) delete this.state.memories[String(row.id)];
+    for (const row of memoryVectorJobs as Row[]) delete this.state.memoryVectorJobs[String(row.id)];
     for (const row of actions as Row[]) delete this.state.actions[String(row.id)];
     for (const row of sessions as Row[]) delete this.state.sessions[String(row.token_hash)];
     for (const row of inboundJobs as Row[]) delete this.state.inboundJobs[String(row.id)];
@@ -336,7 +371,7 @@ export class PostgresStore implements Store {
     await this.sql`ALTER TABLE messages ADD COLUMN IF NOT EXISTS transcript_confidence real`;
     await this.sql`ALTER TABLE messages ADD COLUMN IF NOT EXISTS transcript_language text`;
     await this.sql`CREATE INDEX IF NOT EXISTS messages_group_time_idx ON messages (group_id, timestamp_ms DESC)`;
-     await this.sql`CREATE TABLE IF NOT EXISTS memories (id text PRIMARY KEY, scope_type text NOT NULL, scope_id text NOT NULL, memory_type text NOT NULL, value_json jsonb NOT NULL, confidence real NOT NULL, importance real NOT NULL DEFAULT 0.5, status text NOT NULL DEFAULT 'ACTIVE', evidence_count integer NOT NULL, created_at bigint NOT NULL, last_confirmed_at bigint NOT NULL, updated_at bigint NOT NULL DEFAULT 0, source_message_id text, source_timestamp bigint, source_member_id text, expires_at bigint)`;
+      await this.sql`CREATE TABLE IF NOT EXISTS memories (id text PRIMARY KEY, scope_type text NOT NULL, scope_id text NOT NULL, memory_type text NOT NULL, value_json jsonb NOT NULL, confidence real NOT NULL, importance real NOT NULL DEFAULT 0.5, status text NOT NULL DEFAULT 'ACTIVE', evidence_count integer NOT NULL, created_at bigint NOT NULL, last_confirmed_at bigint NOT NULL, updated_at bigint NOT NULL DEFAULT 0, source_message_id text, source_timestamp bigint, source_member_id text, expires_at bigint)`;
      await this.sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS importance real NOT NULL DEFAULT 0.5`;
      await this.sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'ACTIVE'`;
      await this.sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS updated_at bigint NOT NULL DEFAULT 0`;
@@ -344,7 +379,10 @@ export class PostgresStore implements Store {
      await this.sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS source_timestamp bigint`;
      await this.sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS source_member_id text`;
      await this.sql`UPDATE memories SET updated_at = last_confirmed_at WHERE updated_at = 0`;
-    await this.sql`CREATE INDEX IF NOT EXISTS memories_scope_idx ON memories (scope_id)`;
+     await this.sql`CREATE INDEX IF NOT EXISTS memories_scope_idx ON memories (scope_id)`;
+      await this.sql`CREATE TABLE IF NOT EXISTS memory_vector_jobs (id text PRIMARY KEY, memory_id text UNIQUE NOT NULL, operation text NOT NULL DEFAULT 'UPSERT', memory_updated_at bigint NOT NULL, status text NOT NULL, attempts integer NOT NULL DEFAULT 0, created_at bigint NOT NULL, updated_at bigint NOT NULL, next_attempt_at bigint, last_error text)`;
+      await this.sql`ALTER TABLE memory_vector_jobs ADD COLUMN IF NOT EXISTS operation text NOT NULL DEFAULT 'UPSERT'`;
+     await this.sql`CREATE INDEX IF NOT EXISTS memory_vector_jobs_status_idx ON memory_vector_jobs (status, next_attempt_at, created_at)`;
     await this.sql`CREATE TABLE IF NOT EXISTS ai_actions (id text PRIMARY KEY, idempotency_key text UNIQUE NOT NULL, group_id text NOT NULL, source_message_id text NOT NULL, action_type text NOT NULL, target_message_id text, payload_json jsonb NOT NULL, scheduled_for bigint NOT NULL, status text NOT NULL, attempts integer NOT NULL DEFAULT 0, next_attempt_at bigint, executed_at bigint, error text)`;
     await this.sql`ALTER TABLE ai_actions ADD COLUMN IF NOT EXISTS attempts integer NOT NULL DEFAULT 0`;
     await this.sql`ALTER TABLE ai_actions ADD COLUMN IF NOT EXISTS next_attempt_at bigint`;
@@ -402,6 +440,21 @@ function messageFromRow(row: Row): StoredMessage {
 
 function memoryFromRow(row: Row): MemoryRecord {
   return { id: String(row.id), scopeType: String(row.scope_type) as MemoryRecord["scopeType"], scopeId: String(row.scope_id), memoryType: String(row.memory_type), value: jsonObject(row.value_json, {}), confidence: Number(row.confidence), importance: Number(row.importance ?? 0.5), status: String(row.status ?? "ACTIVE") as MemoryRecord["status"], evidenceCount: Number(row.evidence_count), createdAt: Number(row.created_at), lastConfirmedAt: Number(row.last_confirmed_at), updatedAt: Number(row.updated_at ?? row.last_confirmed_at), ...(row.source_message_id ? { sourceMessageId: String(row.source_message_id) } : {}), ...(row.source_timestamp ? { sourceTimestamp: Number(row.source_timestamp) } : {}), ...(row.source_member_id ? { sourceMemberId: String(row.source_member_id) } : {}), ...(row.expires_at ? { expiresAt: Number(row.expires_at) } : {}) };
+}
+
+function memoryVectorJobFromRow(row: Row): MemoryVectorJobRecord {
+  return {
+    id: String(row.id),
+    memoryId: String(row.memory_id),
+    operation: String(row.operation ?? "UPSERT") as MemoryVectorJobRecord["operation"],
+    memoryUpdatedAt: Number(row.memory_updated_at),
+    status: String(row.status) as MemoryVectorJobRecord["status"],
+    attempts: Number(row.attempts),
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+    ...(row.next_attempt_at ? { nextAttemptAt: Number(row.next_attempt_at) } : {}),
+    ...(row.last_error ? { lastError: String(row.last_error) } : {}),
+  };
 }
 
 function actionFromRow(row: Row): ActionRecord {

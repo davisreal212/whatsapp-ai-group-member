@@ -10,6 +10,8 @@ import type {
   InboundJobStatus,
   MemberRecord,
   MemoryRecord,
+  MemoryVectorJobRecord,
+  MemoryVectorJobStatus,
   PersistedState,
   ProviderUsageRecord,
   StoredMessage,
@@ -34,6 +36,9 @@ export interface Store {
   storeMessage(message: StoredMessage): Promise<boolean>;
   upsertMemory(memory: MemoryRecord): Promise<void>;
   deleteMemories(scopeId: string): Promise<number>;
+  enqueueMemoryVectorJob(job: MemoryVectorJobRecord): Promise<boolean>;
+  updateMemoryVectorJob(id: string, update: Partial<MemoryVectorJobRecord>): Promise<MemoryVectorJobRecord | undefined>;
+  memoryVectorJobs(status?: MemoryVectorJobStatus): MemoryVectorJobRecord[];
   createAction(action: ActionRecord): Promise<boolean>;
   updateAction(id: string, update: Partial<ActionRecord>): Promise<ActionRecord | undefined>;
   addLog(log: AuditLog): Promise<void>;
@@ -69,6 +74,7 @@ export interface Store {
 export interface PruneResult {
   messages: number;
   memories: number;
+  memoryVectorJobs: number;
   actions: number;
   logs: number;
   providerUsage: number;
@@ -92,6 +98,7 @@ export const emptyState = (): PersistedState => ({
   members: {},
   messages: {},
   memories: {},
+  memoryVectorJobs: {},
   actions: {},
   tasks: {},
   inboundJobs: {},
@@ -119,6 +126,7 @@ export class FileStore implements Store {
       const raw = await readFile(this.filePath, "utf8");
       this.state = { ...emptyState(), ...JSON.parse(raw) } as PersistedState;
       this.state.inboundJobs = { ...emptyState().inboundJobs, ...this.state.inboundJobs };
+      this.state.memoryVectorJobs = { ...emptyState().memoryVectorJobs, ...this.state.memoryVectorJobs };
       this.state.users = { ...emptyState().users, ...this.state.users };
       this.state.sessions = { ...emptyState().sessions, ...this.state.sessions };
       this.state.runtime = {
@@ -127,6 +135,7 @@ export class FileStore implements Store {
         metrics: { ...emptyMetrics(), ...this.state.runtime?.metrics },
       };
       this.state.memories = Object.fromEntries(Object.entries(this.state.memories).map(([id, memory]) => [id, normalizeMemory(memory)]));
+      this.state.memoryVectorJobs = Object.fromEntries(Object.entries(this.state.memoryVectorJobs).map(([id, job]) => [id, normalizeMemoryVectorJob(job)]));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       await this.persist();
@@ -215,6 +224,29 @@ export class FileStore implements Store {
     for (const id of ids) delete this.state.memories[id];
     await this.persist();
     return ids.length;
+  }
+
+  async enqueueMemoryVectorJob(job: MemoryVectorJobRecord): Promise<boolean> {
+    const current = this.state.memoryVectorJobs[job.id];
+    if (current?.status === "PROCESSING") return false;
+    if (current?.memoryUpdatedAt === job.memoryUpdatedAt && current.operation === job.operation) return false;
+    this.state.memoryVectorJobs[job.id] = job;
+    await this.persist();
+    return true;
+  }
+
+  async updateMemoryVectorJob(id: string, update: Partial<MemoryVectorJobRecord>): Promise<MemoryVectorJobRecord | undefined> {
+    const job = this.state.memoryVectorJobs[id];
+    if (!job) return undefined;
+    this.state.memoryVectorJobs[id] = { ...job, ...update, updatedAt: Date.now() };
+    await this.persist();
+    return this.state.memoryVectorJobs[id];
+  }
+
+  memoryVectorJobs(status?: MemoryVectorJobStatus): MemoryVectorJobRecord[] {
+    return Object.values(this.state.memoryVectorJobs)
+      .filter((job) => !status || job.status === status)
+      .sort((a, b) => a.createdAt - b.createdAt);
   }
 
   async createAction(action: ActionRecord): Promise<boolean> {
@@ -381,7 +413,7 @@ export class FileStore implements Store {
 
   async pruneExpired(retentionDays: number, now = Date.now()): Promise<PruneResult> {
     const cutoff = now - Math.max(1, retentionDays) * 24 * 60 * 60 * 1000;
-    const result: PruneResult = { messages: 0, memories: 0, actions: 0, logs: 0, providerUsage: 0, sessions: 0, inboundJobs: 0 };
+    const result: PruneResult = { messages: 0, memories: 0, memoryVectorJobs: 0, actions: 0, logs: 0, providerUsage: 0, sessions: 0, inboundJobs: 0 };
     for (const [id, message] of Object.entries(this.state.messages)) {
       if (message.storedAt < cutoff) {
         delete this.state.messages[id];
@@ -398,6 +430,12 @@ export class FileStore implements Store {
       if (action.status !== "PENDING" && (action.executedAt ?? action.scheduledFor) < cutoff) {
         delete this.state.actions[id];
         result.actions += 1;
+      }
+    }
+    for (const [id, job] of Object.entries(this.state.memoryVectorJobs)) {
+      if (job.status !== "PENDING" && job.status !== "PROCESSING" && job.updatedAt < cutoff) {
+        delete this.state.memoryVectorJobs[id];
+        result.memoryVectorJobs += 1;
       }
     }
     const originalLogs = this.state.logs.length;
@@ -443,5 +481,16 @@ function normalizeMemory(memory: MemoryRecord): MemoryRecord {
     importance: Number.isFinite(importance) ? Math.min(1, Math.max(0, importance)) : 0.5,
     status,
     updatedAt: Number.isFinite(updatedAt) ? updatedAt : memory.lastConfirmedAt || memory.createdAt,
+  };
+}
+
+function normalizeMemoryVectorJob(job: MemoryVectorJobRecord): MemoryVectorJobRecord {
+  const operation = job.operation === "DELETE" ? "DELETE" : "UPSERT";
+  const status = ["PENDING", "PROCESSING", "COMPLETED", "FAILED"].includes(job.status) ? job.status : "PENDING";
+  return {
+    ...job,
+    operation,
+    status,
+    memoryUpdatedAt: Number.isFinite(Number(job.memoryUpdatedAt)) ? Number(job.memoryUpdatedAt) : 0,
   };
 }

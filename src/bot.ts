@@ -18,6 +18,8 @@ import { formatNigeriaDateTime, NIGERIA_TIME_ZONE } from "./time.js";
 import { groupActivityState, groupParticipation } from "./participation.js";
 import type { ParticipationSettings } from "./types.js";
 import { isSafeHttpsUrl } from "./network.js";
+import { GeminiEmbeddingProvider, QdrantVectorMemoryProvider } from "./vector-memory.js";
+import { MemoryVectorWorker } from "./memory-vector-worker.js";
 
 export class BotRuntime {
   readonly memory: MemoryService;
@@ -28,6 +30,7 @@ export class BotRuntime {
   readonly tasks: TaskService;
   readonly media: MediaProcessor;
   readonly backups: BackupService;
+  readonly memoryVector: MemoryVectorWorker;
   private readonly inboundQueue = new KeyedJobQueue(4);
   private lastDecisionDiagnostics?: Record<string, unknown>;
 
@@ -36,9 +39,12 @@ export class BotRuntime {
     readonly config: AppConfig,
     private readonly transport: OutboundTransport,
   ) {
-    this.memory = new MemoryService(store);
+    const embedding = config.embeddingProvider === "gemini" ? new GeminiEmbeddingProvider(config.geminiApiKey, config.embeddingModel, config.embeddingDimensions) : undefined;
+    const vector = new QdrantVectorMemoryProvider(config.qdrantUrl, config.qdrantApiKey, config.qdrantCollection, config.embeddingDimensions);
+    this.memoryVector = new MemoryVectorWorker(store, embedding, vector);
+    this.memory = new MemoryService(store, (memory) => this.memoryVector.enqueue(memory));
     this.providers = new ProviderRouter(store, config);
-    this.research = new ResearchService(store, [new TavilyProvider(config.tavilyApiKey), new DuckDuckGoProvider()], [new DuckDuckGoImageProvider(), new WikimediaImageProvider()]);
+    this.research = new ResearchService(store, [new TavilyProvider(config.tavilyApiKey), new DuckDuckGoProvider()], [new DuckDuckGoImageProvider(), new WikimediaImageProvider()], (memory) => this.memoryVector.enqueue(memory));
     this.decisions = new DecisionEngine(this.providers);
     this.actions = new ActionService(store, config, transport);
     this.tasks = new TaskService(store, config, transport);
@@ -76,11 +82,13 @@ export class BotRuntime {
 
   startBackgroundWorkers(): void {
     this.tasks.start();
+    this.memoryVector.start();
     void this.drainInboundJobs();
   }
 
   async stopBackgroundWorkers(): Promise<void> {
     this.tasks.stop();
+    await this.memoryVector.stop();
     await this.actions.stop();
     this.backups.stop();
   }
@@ -394,6 +402,8 @@ export class BotRuntime {
   }
 
   async resetMemory(scopeId: string): Promise<number> {
+    const memoryIds = this.store.memories(scopeId).map((memory) => memory.id);
+    for (const memoryId of memoryIds) await this.memoryVector.enqueueDeletion(memoryId);
     const count = await this.store.deleteMemories(scopeId);
     await this.log("memory.deleted", "info", { scopeId, count });
     return count;
@@ -453,6 +463,7 @@ export class BotRuntime {
         outbound: this.actions.health(),
         tasks: this.tasks.health(),
         backups: this.backups.health(),
+        memoryVector: this.memoryVector.health(),
       },
       inboundQueue: this.inboundQueue.stats(),
       recentLogs: this.store.logs(30),

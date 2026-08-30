@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { CanonicalMessage, GroupRecord, MemberRecord, MemoryRecord, MemoryStatus, Personality } from "./types.js";
+import type { CanonicalMessage, GroupRecord, MemberRecord, MemoryRecord, MemoryStatus, MemoryUpsertHook, Personality } from "./types.js";
 import type { Store } from "./store.js";
 
 export interface ContextSnapshot {
@@ -12,7 +12,7 @@ export interface ContextSnapshot {
 }
 
 export class MemoryService {
-  constructor(private readonly store: Store) {}
+  constructor(private readonly store: Store, private readonly onMemoryUpsert?: MemoryUpsertHook) {}
 
   async observe(message: CanonicalMessage): Promise<void> {
     const conversationId = message.groupId ?? message.chatId;
@@ -73,14 +73,14 @@ export class MemoryService {
       sourceTimestamp: message.timestamp,
       sourceMemberId: message.senderId,
     };
-    await this.store.upsertMemory(memory);
+    await this.saveMemory(memory);
 
     if (message.groupId) {
       const topic = extractTopic(text);
       if (topic) {
         const previousTopic = this.store.memories(message.groupId).find((item) => item.memoryType === "group-topic" && item.value.topic === topic);
         const topicCount = (previousTopic?.evidenceCount ?? 0) + 1;
-        await this.store.upsertMemory({
+        await this.saveMemory({
           id: createHash("sha256").update(`${message.groupId}:topic:${topic}`).digest("hex"),
           scopeType: "group",
           scopeId: message.groupId,
@@ -107,7 +107,7 @@ export class MemoryService {
     if (recent.length >= 5 && recent.length % 5 === 0) {
       const summary = recent.slice(-8).map((item) => `${item.senderName ?? item.senderId}: ${(item.text ?? `[${item.type}]`).slice(0, 180)}`).join(" | ");
       const previousSummary = this.store.memories(conversationId).find((item) => item.memoryType === "conversation-summary");
-      await this.store.upsertMemory({
+      await this.saveMemory({
         id: createHash("sha256").update(`${conversationId}:conversation-summary`).digest("hex"),
         scopeType: message.groupId ? "group" : "relationship",
         scopeId: conversationId,
@@ -125,6 +125,11 @@ export class MemoryService {
         expiresAt: now + 7 * 24 * 60 * 60 * 1000,
       });
     }
+  }
+
+  private async saveMemory(memory: MemoryRecord): Promise<void> {
+    await this.store.upsertMemory(memory);
+    await this.onMemoryUpsert?.(memory);
   }
 
   context(group: GroupRecord, senderId: string, personality: Personality, query = ""): ContextSnapshot {

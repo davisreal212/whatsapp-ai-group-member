@@ -193,6 +193,23 @@ export interface MemoryRecord {
   expiresAt?: number;
 }
 
+export type MemoryUpsertHook = (memory: MemoryRecord) => Promise<void>;
+
+export type MemoryVectorJobStatus = "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
+
+export interface MemoryVectorJobRecord {
+  id: string;
+  memoryId: string;
+  operation: "UPSERT" | "DELETE";
+  memoryUpdatedAt: number;
+  status: MemoryVectorJobStatus;
+  attempts: number;
+  createdAt: number;
+  updatedAt: number;
+  nextAttemptAt?: number;
+  lastError?: string;
+}
+
 export interface StoredMessage extends CanonicalMessage {
   storedAt: number;
 }
@@ -349,6 +366,7 @@ export interface PersistedState {
   members: Record<string, MemberRecord>;
   messages: Record<string, StoredMessage>;
   memories: Record<string, MemoryRecord>;
+  memoryVectorJobs: Record<string, MemoryVectorJobRecord>;
   actions: Record<string, ActionRecord>;
   tasks: Record<string, TaskRecord>;
   inboundJobs: Record<string, InboundJobRecord>;

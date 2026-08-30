@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { AppConfig, EvidenceBundle, EvidenceSource } from "./types.js";
+import type { AppConfig, EvidenceBundle, EvidenceSource, MemoryRecord, MemoryUpsertHook } from "./types.js";
 import type { Store } from "./store.js";
 import { isSafeHttpsUrl } from "./network.js";
 
@@ -143,7 +143,7 @@ export class ResearchService {
   private readonly providers: WebResearchProvider[];
   private readonly mediaProviders: MediaSearchProvider[];
 
-  constructor(private readonly store: Store, provider: WebResearchProvider | WebResearchProvider[], mediaProviders: MediaSearchProvider[] = [new DuckDuckGoImageProvider(), new WikimediaImageProvider()]) {
+  constructor(private readonly store: Store, provider: WebResearchProvider | WebResearchProvider[], mediaProviders: MediaSearchProvider[] = [new DuckDuckGoImageProvider(), new WikimediaImageProvider()], private readonly onMemoryUpsert?: MemoryUpsertHook) {
     this.providers = Array.isArray(provider) ? provider : [provider];
     this.mediaProviders = mediaProviders;
   }
@@ -197,7 +197,7 @@ export class ResearchService {
           ...(result.content ? { evidence: result.content.slice(0, 1000) } : {}),
         }));
       for (const source of sources) {
-        await this.store.upsertMemory({
+        const memory: MemoryRecord = {
           id: createHash("sha256").update(`${question}:${source.url}`).digest("hex"),
           scopeType: "source",
           scopeId: question,
@@ -211,7 +211,9 @@ export class ResearchService {
           lastConfirmedAt: source.retrievedAt,
           updatedAt: source.retrievedAt,
           expiresAt: Date.now() + 6 * 60 * 60 * 1000,
-        });
+        };
+        await this.store.upsertMemory(memory);
+        await this.onMemoryUpsert?.(memory);
       }
       const bundle: EvidenceBundle = {
         question,
