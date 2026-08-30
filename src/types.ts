@@ -99,6 +99,12 @@ export interface AppConfig {
   phoenixApiBaseUrl: string;
   phoenixPrimaryModel: string;
   phoenixSecondaryModel: string;
+  qdrantUrl?: string;
+  qdrantApiKey?: string;
+  qdrantCollection: string;
+  embeddingProvider: "none" | "gemini";
+  embeddingModel: string;
+  embeddingDimensions: number;
   providerFailureThreshold: number;
   providerCooldownMs: number;
   personality: Personality;
