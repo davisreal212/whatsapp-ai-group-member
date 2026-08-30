@@ -87,6 +87,16 @@ export function createApp(runtime: BotRuntime, config: AppConfig) {
       next(error);
     }
   });
+  app.post("/api/groups/:id/learning", async (request, response, next) => {
+    try {
+      const body = z.object({ enabled: z.boolean() }).parse(request.body);
+      const group = await runtime.setGroupLearning(request.params.id, body.enabled);
+      if (!group) return response.status(404).json({ error: "Group not found" });
+      response.json(group);
+    } catch (error) {
+      next(error);
+    }
+  });
   app.post("/api/groups/:id/personality", async (request, response, next) => {
     try {
       const body = personalitySchema.partial().parse(request.body);
@@ -106,6 +116,15 @@ export function createApp(runtime: BotRuntime, config: AppConfig) {
     }
   });
   app.get("/api/members", (request, response) => response.json(runtime.store.members(typeof request.query.groupId === "string" ? request.query.groupId : undefined)));
+  app.get("/api/memory/export", (request, response) => response.json(runtime.memoryExport(typeof request.query.scopeId === "string" ? request.query.scopeId : undefined)));
+  app.post("/api/memory/rebuild", async (request, response, next) => {
+    try {
+      const body = z.object({ scopeId: z.string().trim().min(1).max(200).optional() }).parse(request.body);
+      response.json(await runtime.rebuildMemoryVectors(body.scopeId));
+    } catch (error) {
+      next(error);
+    }
+  });
   app.delete("/api/memory/:scopeId", async (request, response, next) => {
     try {
       response.json({ deleted: await runtime.resetMemory(request.params.scopeId) });

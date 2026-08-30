@@ -345,6 +345,7 @@ export class BotRuntime {
         isAdmin: discovered.isAdmin,
         enabled: current?.enabled ?? false,
         aiPaused: current?.aiPaused ?? false,
+        learningEnabled: current?.learningEnabled ?? true,
         ...(current?.personalityOverride ? { personalityOverride: current.personalityOverride } : {}),
         ...(current?.participationOverride ? { participationOverride: current.participationOverride } : {}),
         lastSeenAt: Date.now(),
@@ -372,6 +373,12 @@ export class BotRuntime {
   async setGroupPaused(id: string, aiPaused: boolean): Promise<GroupRecord | undefined> {
     const group = await this.store.updateGroup(id, { aiPaused });
     if (group) await this.log("group.pause_changed", "info", { aiPaused }, undefined, id);
+    return group;
+  }
+
+  async setGroupLearning(id: string, learningEnabled: boolean): Promise<GroupRecord | undefined> {
+    const group = await this.store.updateGroup(id, { learningEnabled });
+    if (group) await this.log("group.learning_changed", "info", { learningEnabled }, undefined, id);
     return group;
   }
 
@@ -409,6 +416,17 @@ export class BotRuntime {
     return count;
   }
 
+  async rebuildMemoryVectors(scopeId?: string): Promise<{ requested: number; enabled: boolean; queue: Record<string, unknown> }> {
+    const memories = scopeId ? this.store.memories(scopeId) : this.store.memories();
+    for (const memory of memories) await this.memoryVector.enqueue(memory);
+    return { requested: memories.length, enabled: this.memoryVector.enabled, queue: this.memoryVector.health().queue as Record<string, unknown> };
+  }
+
+  memoryExport(scopeId?: string): { exportedAt: number; scopeId?: string; memories: ReturnType<Store["memories"]> } {
+    const memories = scopeId ? this.store.memories(scopeId) : this.store.memories();
+    return { exportedAt: Date.now(), ...(scopeId ? { scopeId } : {}), memories };
+  }
+
   async listBackups() {
     return this.backups.list();
   }
@@ -432,6 +450,8 @@ export class BotRuntime {
 
   dashboardState(): Record<string, unknown> {
     const snapshot = this.store.snapshot;
+    const memories = Object.values(snapshot.memories);
+    const memoryVector = this.memoryVector.health();
     return {
       connection: snapshot.runtime,
       time: { timeZone: NIGERIA_TIME_ZONE, current: formatNigeriaDateTime() },
@@ -456,6 +476,17 @@ export class BotRuntime {
       providers: this.providers.statuses(),
       media: this.media.health(),
       research: { tavilyAvailable: Boolean(this.config.tavilyApiKey) },
+      memory: {
+        totalMessages: Object.keys(snapshot.messages).length,
+        storedMemories: memories.length,
+        activeMemories: memories.filter((memory) => memory.status === "ACTIVE").length,
+        archivedMemories: memories.filter((memory) => memory.status === "ARCHIVED").length,
+        groups: Object.keys(snapshot.groups).length,
+        members: Object.keys(snapshot.members).length,
+        queue: memoryVector.queue,
+        vectorDatabase: { name: memoryVector.vectorProvider, enabled: memoryVector.enabled, ready: memoryVector.collectionReady },
+        embeddingProvider: { name: memoryVector.embeddingProvider, enabled: memoryVector.enabled },
+      },
       queue: this.transport.queueStats?.() ?? { pending: 0, processing: 0, failed: 0 },
       outboundQueue: this.actions.queueStats(),
       workers: {
@@ -526,6 +557,7 @@ function directMessageContext(chatId: string): GroupRecord {
     isAdmin: false,
     enabled: true,
     aiPaused: false,
+    learningEnabled: true,
     lastSeenAt: Date.now(),
   };
 }

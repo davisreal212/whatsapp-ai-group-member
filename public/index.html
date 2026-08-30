@@ -260,5 +260,69 @@
       applySidebar();
     })();
   </script>
+  <script>
+    (() => {
+      let panel;
+      function ensureMemoryPanel() {
+        if (panel) return panel;
+        const view = document.querySelector('[data-view="memory"]');
+        panel = document.createElement('section');
+        panel.id = 'memoryControlPanel';
+        panel.className = 'card large-card';
+        panel.style.marginTop = '12px';
+        panel.innerHTML = `<div class="card-head"><h2>Memory telemetry</h2><span id="memoryVectorStatus" class="pill">-</span></div><div class="metric-grid"><div class="metric"><small>Messages</small><strong id="memoryMessages">-</strong></div><div class="metric"><small>Stored memories</small><strong id="memoryStored">-</strong></div><div class="metric"><small>Active memories</small><strong id="memoryActive">-</strong></div><div class="metric"><small>Archived memories</small><strong id="memoryArchived">-</strong></div><div class="metric"><small>Groups</small><strong id="memoryGroups">-</strong></div><div class="metric"><small>Members</small><strong id="memoryMembers">-</strong></div></div><div class="row"><div><strong id="memoryVectorDetail">Vector database</strong><small id="memoryEmbeddingDetail">Embedding provider</small></div><span id="memoryQueueDetail" class="pill">Queue: -</span></div><div class="form" style="margin-top:18px"><button id="memoryRebuild" class="primary" type="button">Rebuild embeddings</button><button id="memoryExport" type="button">Export memory</button></div><div class="card-head" style="margin-top:24px"><h2>Group learning</h2><small>New learning can be disabled without pausing replies.</small></div><div id="memoryLearningList" class="list"></div>`;
+        view.append(panel);
+        $('memoryRebuild').onclick = async () => {
+          const scopeId = $('memoryScope').value.trim();
+          setBusy($('memoryRebuild'), true, 'Queueing...');
+          try { const result = await api('/api/memory/rebuild', { method: 'POST', body: JSON.stringify(scopeId ? { scopeId } : {}) }); message(result.enabled ? `${result.requested} memory records queued for embedding.` : 'Embeddings are not configured; no jobs were queued.', result.enabled ? 'success' : 'error'); refresh(); } catch (error) { message(error.message, 'error'); } finally { setBusy($('memoryRebuild'), false, 'Rebuild embeddings'); }
+        };
+        $('memoryExport').onclick = async () => {
+          try {
+            const scopeId = $('memoryScope').value.trim();
+            const response = await fetch('/api/memory/export' + (scopeId ? '?scopeId=' + encodeURIComponent(scopeId) : ''), { credentials: 'include' });
+            if (!response.ok) throw new Error('Export failed');
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(await response.blob());
+            link.download = scopeId ? `memory-${scopeId.replace(/[^a-z0-9_-]/gi, '_')}.json` : 'memory-export.json';
+            link.click();
+            URL.revokeObjectURL(link.href);
+          } catch (error) { message(error.message, 'error'); }
+        };
+        return panel;
+      }
+      function renderMemory(data) {
+        ensureMemoryPanel();
+        const value = data.memory || {};
+        const vector = value.vectorDatabase || {};
+        const embedding = value.embeddingProvider || {};
+        const queue = value.queue || {};
+        $('memoryMessages').textContent = value.totalMessages || 0;
+        $('memoryStored').textContent = value.storedMemories || 0;
+        $('memoryActive').textContent = value.activeMemories || 0;
+        $('memoryArchived').textContent = value.archivedMemories || 0;
+        $('memoryGroups').textContent = value.groups || 0;
+        $('memoryMembers').textContent = value.members || 0;
+        $('memoryVectorStatus').textContent = vector.enabled ? (vector.ready ? 'Ready' : 'Configured') : 'Disabled';
+        $('memoryVectorStatus').className = 'pill' + (vector.enabled ? '' : ' warn');
+        $('memoryVectorDetail').textContent = `${vector.name || 'Vector database'} / ${vector.enabled ? (vector.ready ? 'ready' : 'starting') : 'not configured'}`;
+        $('memoryEmbeddingDetail').textContent = `${embedding.name || 'No embedding provider'} / ${embedding.enabled ? 'available' : 'not configured'}`;
+        $('memoryQueueDetail').textContent = `Queue: ${queue.pending || 0} pending / ${queue.failed || 0} failed`;
+        const root = $('memoryLearningList');
+        root.replaceChildren();
+        const groups = data.groups || [];
+        if (!groups.length) { root.append(Object.assign(document.createElement('p'), { className: 'empty', textContent: 'Sync WhatsApp groups to manage learning.' })); return; }
+        groups.forEach((group) => {
+          const row = document.createElement('div'); row.className = 'row';
+          const info = document.createElement('div'); info.innerHTML = `<strong>${escapeHtml(group.subject || group.whatsappGroupId)}</strong><small>${group.learningEnabled === false ? 'Learning is off' : 'Learning is on'}</small>`;
+          const button = document.createElement('button'); button.type = 'button'; button.className = group.learningEnabled === false ? 'primary' : 'danger'; button.textContent = group.learningEnabled === false ? 'Enable learning' : 'Disable learning';
+          button.onclick = async () => { try { await api('/api/groups/' + encodeURIComponent(group.id) + '/learning', { method: 'POST', body: JSON.stringify({ enabled: group.learningEnabled === false }) }); message('Group learning updated.'); refresh(); } catch (error) { message(error.message, 'error'); } };
+          row.append(info, button); root.append(row);
+        });
+      }
+      const previousRender = render;
+      render = (data) => { previousRender(data); renderMemory(data); };
+    })();
+  </script>
 </body>
 </html>

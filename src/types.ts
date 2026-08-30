@@ -149,6 +149,7 @@ export interface GroupRecord {
   isAdmin: boolean;
   enabled: boolean;
   aiPaused: boolean;
+  learningEnabled?: boolean;
   personalityOverride?: Partial<Personality>;
   participationOverride?: Partial<ParticipationSettings>;
   lastSeenAt: number;

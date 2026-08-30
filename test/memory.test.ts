@@ -82,7 +82,7 @@ describe("conversation memory", () => {
     const now = Date.now();
     const semanticMemory = { id: "semantic-group", scopeType: "group" as const, scopeId: "group@g.us", memoryType: "inside-joke", value: { joke: "old bitcoin joke" }, confidence: 0.8, importance: 0.7, status: "ACTIVE" as const, evidenceCount: 3, createdAt: now - 365 * 86_400_000, lastConfirmedAt: now - 365 * 86_400_000, updatedAt: now - 365 * 86_400_000 };
     await store.upsertMemory(semanticMemory);
-    for (let index = 0; index < 15; index += 1) {
+    for (let index = 0; index < 20; index += 1) {
       await store.upsertMemory({ id: `recent-${index}`, scopeType: "group", scopeId: "group@g.us", memoryType: "topic", value: { topic: `recent-${index}` }, confidence: 0.5, importance: 0.5, status: "ACTIVE", evidenceCount: 1, createdAt: now, lastConfirmedAt: now, updatedAt: now });
     }
     const requestedScopes: string[] = [];
@@ -94,5 +94,17 @@ describe("conversation memory", () => {
 
     expect(requestedScopes).toEqual(["group@g.us", "group@g.us:member"]);
     expect(context.memories.some((item) => item.id === semanticMemory.id)).toBe(true);
+  });
+
+  it("does not learn new group context when learning is disabled", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-learning-toggle-"));
+    dirs.push(dir);
+    const store = new FileStore(dir);
+    await store.init();
+    await store.upsertGroup({ id: "group@g.us", whatsappGroupId: "group@g.us", subject: "Group", participantCount: 1, isAdmin: false, enabled: true, aiPaused: false, learningEnabled: false, lastSeenAt: Date.now() });
+    await new MemoryService(store).observe({ id: "message", chatId: "group@g.us", groupId: "group@g.us", senderId: "member", timestamp: Date.now(), type: "text", text: "bitcoin", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false });
+
+    expect(store.members("group@g.us")).toHaveLength(0);
+    expect(store.memories("group@g.us")).toHaveLength(0);
   });
 });

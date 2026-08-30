@@ -51,6 +51,15 @@ describe("admin HTTP surface", () => {
 
     await runtime.syncGroups([{ id: "old@g.us", subject: "Old group", participantCount: 1, isAdmin: true }]);
     expect(runtime.store.groups()).toHaveLength(1);
+    await runtime.store.upsertMemory({ id: "memory", scopeType: "group", scopeId: "old@g.us", memoryType: "topic", value: { topic: "bitcoin" }, confidence: 0.8, importance: 0.5, status: "ACTIVE", evidenceCount: 1, createdAt: Date.now(), lastConfirmedAt: Date.now(), updatedAt: Date.now() });
+    const memoryStatus = await fetch(`${base}/api/status`, { headers: { authorization: "Bearer test-token-that-is-long-enough" } });
+    expect((await memoryStatus.json()).memory).toMatchObject({ storedMemories: 1, activeMemories: 1, groups: 1 });
+    const rebuild = await fetch(`${base}/api/memory/rebuild`, { method: "POST", headers: { authorization: "Bearer test-token-that-is-long-enough", "content-type": "application/json" }, body: "{}" });
+    expect(await rebuild.json()).toMatchObject({ requested: 1, enabled: false });
+    const exported = await fetch(`${base}/api/memory/export`, { headers: { authorization: "Bearer test-token-that-is-long-enough" } });
+    expect((await exported.json()).memories).toHaveLength(1);
+    const learning = await fetch(`${base}/api/groups/old@g.us/learning`, { method: "POST", headers: { authorization: "Bearer test-token-that-is-long-enough", "content-type": "application/json" }, body: JSON.stringify({ enabled: false }) });
+    expect((await learning.json()).learningEnabled).toBe(false);
     await runtime.syncGroups([]);
     expect(runtime.store.groups()).toHaveLength(0);
   });

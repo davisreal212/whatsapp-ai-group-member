@@ -15,6 +15,7 @@ export class MemoryService {
   constructor(private readonly store: Store, private readonly onMemoryUpsert?: MemoryUpsertHook, private readonly retrieveMemory?: MemoryRetriever) {}
 
   async observe(message: CanonicalMessage): Promise<void> {
+    if (message.groupId && this.store.group(message.groupId)?.learningEnabled === false) return;
     const conversationId = message.groupId ?? message.chatId;
     const memberId = `${conversationId}:${message.senderId}`;
     const previous = this.store.members(conversationId).find((item) => item.id === memberId);

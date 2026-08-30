@@ -39,7 +39,7 @@ export class PostgresStore implements Store {
     await this.createSchema();
     this.state = emptyState();
     const [groups, members, messages, memories, memoryVectorJobs, actions, tasks, inboundJobs, logs, usage, runtime, settings, users, sessions] = await Promise.all([
-       this.sql`SELECT id, whatsapp_group_id, subject, participant_count, is_admin, enabled, ai_paused, personality_override_json, participation_override_json, last_seen_at FROM groups`,
+       this.sql`SELECT id, whatsapp_group_id, subject, participant_count, is_admin, enabled, ai_paused, learning_enabled, personality_override_json, participation_override_json, last_seen_at FROM groups`,
       this.sql`SELECT id, group_id, whatsapp_member_id, display_name, behavior_profile_json, confidence_json, first_seen_at, last_seen_at FROM members`,
       this.sql`SELECT id, chat_id, group_id, sender_id, sender_name, timestamp_ms, message_type, text_or_transcript, transcript_confidence, transcript_language, quoted_message_id, quoted_sender_id, mentioned_member_ids_json, media_metadata_json, is_group, is_status, is_from_bot, stored_at FROM messages`,
        this.sql`SELECT id, scope_type, scope_id, memory_type, value_json, confidence, importance, status, evidence_count, created_at, last_confirmed_at, updated_at, source_message_id, source_timestamp, source_member_id, expires_at FROM memories`,
@@ -127,9 +127,9 @@ export class PostgresStore implements Store {
   }
 
   async upsertGroup(group: GroupRecord): Promise<void> {
-    await this.sql`INSERT INTO groups (id, whatsapp_group_id, subject, participant_count, is_admin, enabled, ai_paused, personality_override_json, participation_override_json, last_seen_at)
-      VALUES (${group.id}, ${group.whatsappGroupId}, ${group.subject}, ${group.participantCount}, ${group.isAdmin}, ${group.enabled}, ${group.aiPaused}, ${group.personalityOverride ? JSON.stringify(group.personalityOverride) : null}::jsonb, ${group.participationOverride ? JSON.stringify(group.participationOverride) : null}::jsonb, ${group.lastSeenAt})
-      ON CONFLICT (id) DO UPDATE SET whatsapp_group_id = EXCLUDED.whatsapp_group_id, subject = EXCLUDED.subject, participant_count = EXCLUDED.participant_count, is_admin = EXCLUDED.is_admin, enabled = EXCLUDED.enabled, ai_paused = EXCLUDED.ai_paused, personality_override_json = EXCLUDED.personality_override_json, participation_override_json = EXCLUDED.participation_override_json, last_seen_at = EXCLUDED.last_seen_at`;
+    await this.sql`INSERT INTO groups (id, whatsapp_group_id, subject, participant_count, is_admin, enabled, ai_paused, learning_enabled, personality_override_json, participation_override_json, last_seen_at)
+      VALUES (${group.id}, ${group.whatsappGroupId}, ${group.subject}, ${group.participantCount}, ${group.isAdmin}, ${group.enabled}, ${group.aiPaused}, ${group.learningEnabled ?? true}, ${group.personalityOverride ? JSON.stringify(group.personalityOverride) : null}::jsonb, ${group.participationOverride ? JSON.stringify(group.participationOverride) : null}::jsonb, ${group.lastSeenAt})
+      ON CONFLICT (id) DO UPDATE SET whatsapp_group_id = EXCLUDED.whatsapp_group_id, subject = EXCLUDED.subject, participant_count = EXCLUDED.participant_count, is_admin = EXCLUDED.is_admin, enabled = EXCLUDED.enabled, ai_paused = EXCLUDED.ai_paused, learning_enabled = EXCLUDED.learning_enabled, personality_override_json = EXCLUDED.personality_override_json, participation_override_json = EXCLUDED.participation_override_json, last_seen_at = EXCLUDED.last_seen_at`;
     this.state.groups[group.id] = group;
   }
 
@@ -364,8 +364,9 @@ export class PostgresStore implements Store {
 
   private async createSchema(): Promise<void> {
     await this.sql`CREATE TABLE IF NOT EXISTS schema_migrations (version integer PRIMARY KEY, applied_at bigint NOT NULL)`;
-     await this.sql`CREATE TABLE IF NOT EXISTS groups (id text PRIMARY KEY, whatsapp_group_id text UNIQUE NOT NULL, subject text NOT NULL, participant_count integer NOT NULL, is_admin boolean NOT NULL DEFAULT false, enabled boolean NOT NULL DEFAULT false, ai_paused boolean NOT NULL DEFAULT false, personality_override_json jsonb, participation_override_json jsonb, last_seen_at bigint NOT NULL)`;
+     await this.sql`CREATE TABLE IF NOT EXISTS groups (id text PRIMARY KEY, whatsapp_group_id text UNIQUE NOT NULL, subject text NOT NULL, participant_count integer NOT NULL, is_admin boolean NOT NULL DEFAULT false, enabled boolean NOT NULL DEFAULT false, ai_paused boolean NOT NULL DEFAULT false, learning_enabled boolean NOT NULL DEFAULT true, personality_override_json jsonb, participation_override_json jsonb, last_seen_at bigint NOT NULL)`;
      await this.sql`ALTER TABLE groups ADD COLUMN IF NOT EXISTS participation_override_json jsonb`;
+     await this.sql`ALTER TABLE groups ADD COLUMN IF NOT EXISTS learning_enabled boolean NOT NULL DEFAULT true`;
     await this.sql`CREATE TABLE IF NOT EXISTS members (id text PRIMARY KEY, group_id text NOT NULL, whatsapp_member_id text NOT NULL, display_name text, behavior_profile_json jsonb NOT NULL, confidence_json jsonb NOT NULL, first_seen_at bigint NOT NULL, last_seen_at bigint NOT NULL)`;
     await this.sql`CREATE TABLE IF NOT EXISTS messages (id text PRIMARY KEY, chat_id text NOT NULL, group_id text, sender_id text NOT NULL, sender_name text, timestamp_ms bigint NOT NULL, message_type text NOT NULL, text_or_transcript text, transcript_confidence real, transcript_language text, quoted_message_id text, quoted_sender_id text, mentioned_member_ids_json jsonb NOT NULL DEFAULT '[]'::jsonb, media_metadata_json jsonb, is_group boolean NOT NULL, is_status boolean NOT NULL, is_from_bot boolean NOT NULL, stored_at bigint NOT NULL)`;
     await this.sql`ALTER TABLE messages ADD COLUMN IF NOT EXISTS transcript_confidence real`;
@@ -425,7 +426,7 @@ function groupFromRow(row: Row): GroupRecord {
   return {
     id: String(row.id), whatsappGroupId: String(row.whatsapp_group_id), subject: String(row.subject), participantCount: Number(row.participant_count), isAdmin: Boolean(row.is_admin), enabled: Boolean(row.enabled), aiPaused: Boolean(row.ai_paused),
     ...(Object.keys(personality).length ? { personalityOverride: personality } : {}),
-    ...(Object.keys(participation).length ? { participationOverride: participation } : {}), lastSeenAt: Number(row.last_seen_at),
+    ...(Object.keys(participation).length ? { participationOverride: participation } : {}), learningEnabled: row.learning_enabled === undefined || row.learning_enabled === null ? true : Boolean(row.learning_enabled), lastSeenAt: Number(row.last_seen_at),
   };
 }
 
