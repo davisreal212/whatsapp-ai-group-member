@@ -107,4 +107,40 @@ describe("conversation memory", () => {
     expect(store.members("group@g.us")).toHaveLength(0);
     expect(store.memories("group@g.us")).toHaveLength(0);
   });
+
+  it("keeps conversation summaries on five-message boundaries", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-summary-batches-"));
+    dirs.push(dir);
+    const store = new FileStore(dir);
+    await store.init();
+    const memory = new MemoryService(store);
+    for (let index = 0; index < 6; index += 1) {
+      const message: CanonicalMessage = { id: `batch-${index}`, chatId: "batch@g.us", groupId: "batch@g.us", senderId: `member-${index}`, timestamp: Date.now() + index, type: "text", text: `bitcoin update ${index}`, mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+      await store.storeMessage({ ...message, storedAt: Date.now() });
+      await memory.observe(message);
+    }
+    expect(store.memories("batch@g.us").find((item) => item.memoryType === "conversation-summary")?.value.messageCount).toBe(5);
+
+    for (let index = 6; index < 10; index += 1) {
+      const message: CanonicalMessage = { id: `batch-${index}`, chatId: "batch@g.us", groupId: "batch@g.us", senderId: `member-${index}`, timestamp: Date.now() + index, type: "text", text: `bitcoin update ${index}`, mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+      await store.storeMessage({ ...message, storedAt: Date.now() });
+      await memory.observe(message);
+    }
+    expect(store.memories("batch@g.us").find((item) => item.memoryType === "conversation-summary")?.value.messageCount).toBe(10);
+  });
+
+  it("ages and merges memory records within the same scope", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-memory-maintenance-"));
+    dirs.push(dir);
+    const store = new FileStore(dir);
+    await store.init();
+    const old = Date.now() - 40 * 86_400_000;
+    await store.upsertMemory({ id: "memory-a", scopeType: "group", scopeId: "group@g.us", memoryType: "topic", value: { topic: "btc" }, confidence: 0.6, importance: 0.4, status: "ACTIVE", evidenceCount: 1, createdAt: old, lastConfirmedAt: old, updatedAt: old });
+    await store.upsertMemory({ id: "memory-b", scopeType: "group", scopeId: "group@g.us", memoryType: "topic", value: { topic: "btc" }, confidence: 0.9, importance: 0.8, status: "ACTIVE", evidenceCount: 2, createdAt: old, lastConfirmedAt: old, updatedAt: old + 1 });
+    const result = await new MemoryService(store, undefined, undefined, { staleAfterDays: 30, archiveAfterDays: 90 }).maintain(Date.now());
+
+    expect(result.merged).toBe(1);
+    expect(store.memories("group@g.us")).toHaveLength(1);
+    expect(store.memories("group@g.us")[0]).toMatchObject({ evidenceCount: 3, status: "STALE", confidence: 0.9, importance: 0.8 });
+  });
 });

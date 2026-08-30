@@ -112,4 +112,47 @@ describe("memory vector worker", () => {
     expect(vector.delete).toHaveBeenCalledWith(memory.id);
     expect(store.memoryVectorJobs("COMPLETED")).toHaveLength(1);
   });
+
+  it("can force a completed memory job back into the queue", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-vector-rebuild-"));
+    dirs.push(dir);
+    const store = new FileStore(dir);
+    await store.init();
+    await store.upsertMemory(memory);
+    const { embedding, vector } = providers();
+    const worker = new MemoryVectorWorker(store, embedding, vector);
+
+    await worker.enqueue(memory);
+    await worker.runOnce();
+    await worker.enqueue(memory);
+    expect(store.memoryVectorJobs("PENDING")).toHaveLength(0);
+    await worker.enqueue(memory, true);
+    expect(store.memoryVectorJobs("PENDING")).toHaveLength(1);
+  });
+
+  it("does not mark an upsert complete after a concurrent deletion supersedes it", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-vector-race-"));
+    dirs.push(dir);
+    const store = new FileStore(dir);
+    await store.init();
+    await store.upsertMemory(memory);
+    let upsertStarted!: () => void;
+    const started = new Promise<void>((resolve) => { upsertStarted = resolve; });
+    let releaseUpsert!: () => void;
+    const upsertPaused = new Promise<void>((resolve) => { releaseUpsert = resolve; });
+    const { embedding, vector } = providers(async () => {
+      upsertStarted();
+      await upsertPaused;
+    });
+    const worker = new MemoryVectorWorker(store, embedding, vector);
+
+    await worker.enqueue(memory);
+    const run = worker.runOnce();
+    await started;
+    await store.deleteMemory(memory.id);
+    releaseUpsert();
+    await run;
+
+    expect(store.memoryVectorJobs("PENDING")[0]).toMatchObject({ memoryId: memory.id, operation: "DELETE" });
+  });
 });

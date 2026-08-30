@@ -13,12 +13,12 @@ A safety-first WhatsApp group agent based on the supplied implementation manual.
 - Phoenix FastAPI (`deepseek-v4-flash` and `glm-5.3`), Gemini, Groq, and OpenRouter adapters behind one provider router with circuit health and cooldowns.
 - Tavily plus no-key DuckDuckGo research providers with evidence bundles and an unverified fallback, plus DuckDuckGo/Wikimedia image search for requested pictures and memes.
 - CoinGecko, optional CoinMarketCap, and Coinbase price-provider fallback for alerts.
-- Lightweight member communication observations with confidence and forgetting-ready timestamps.
+- Lightweight member communication observations with confidence and forgetting-ready timestamps, bounded group/member retrieval, batched summaries, and maintenance for stale, archived, or duplicate memories.
 - Structured action plans, same-group target validation, per-minute/hour/day limits, quiet hours, cooldowns, dry-run mode, idempotency, retry, and pending-action recovery.
 - Persistent reminders and BTC/ETH price alerts with a deterministic task worker and dashboard controls.
 - Normalized inbound job envelopes with bounded retries, restart recovery, media limits, and per-chat processing order.
 - Protected application-state snapshots under `DATA_DIR/backups` with configurable interval and retention.
-- Neon PostgreSQL persistence in production through `DATABASE_URL`, with local durable JSON state only when no database URL is configured.
+- Neon PostgreSQL persistence in production through `DATABASE_URL`, with local durable JSON state only when no database URL is configured. Optional embeddings use Gemini and Qdrant; vector writes are persisted through an outbox so restarts and provider outages can be retried safely.
 - Admin dashboard for connection, group authorization, kill switches, provider status, logs, and memory deletion.
 - Landing page with email/password signup and sign-in. The first account becomes the administrator; public signup closes after that.
 - Tests for transport normalization, hard policy gates, action safety, and structured decisions.
@@ -47,6 +47,8 @@ npm run check
 ```
 
 The service defaults to silence when no provider is configured, when a provider fails, when current information cannot be verified, or when a social action is ambiguous. `OUTBOUND_PAUSED=true` is the emergency outbound kill switch; `AI_PROCESSING_PAUSED=true` stops provider calls while observation and audit logging continue.
+
+Memory limits and aging are configurable with `MEMORY_RECENT_MESSAGE_LIMIT`, `MEMORY_GROUP_LIMIT`, `MEMORY_MEMBER_LIMIT`, `MEMORY_SEMANTIC_LIMIT`, `MEMORY_STALE_AFTER_DAYS`, and `MEMORY_ARCHIVE_AFTER_DAYS`. Leave `EMBEDDING_PROVIDER=none` and `QDRANT_URL` blank to use the deterministic database-backed memory path only.
 
 ## Production checklist
 

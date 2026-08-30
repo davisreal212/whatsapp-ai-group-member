@@ -105,6 +105,12 @@ export interface AppConfig {
   embeddingProvider: "none" | "gemini";
   embeddingModel: string;
   embeddingDimensions: number;
+  memoryRecentMessageLimit: number;
+  memoryGroupLimit: number;
+  memoryMemberLimit: number;
+  memorySemanticLimit: number;
+  memoryStaleAfterDays: number;
+  memoryArchiveAfterDays: number;
   providerFailureThreshold: number;
   providerCooldownMs: number;
   personality: Personality;
@@ -195,6 +201,7 @@ export interface MemoryRecord {
 }
 
 export type MemoryUpsertHook = (memory: MemoryRecord) => Promise<void>;
+export type MemoryDeleteHook = (memoryId: string) => Promise<void>;
 
 export interface SemanticMemoryHit {
   memory: MemoryRecord;
@@ -217,6 +224,8 @@ export interface MemoryVectorJobRecord {
   nextAttemptAt?: number;
   lastError?: string;
 }
+
+export type MemoryVectorJobExpectation = Pick<MemoryVectorJobRecord, "operation" | "memoryUpdatedAt" | "status" | "attempts">;
 
 export interface StoredMessage extends CanonicalMessage {
   storedAt: number;

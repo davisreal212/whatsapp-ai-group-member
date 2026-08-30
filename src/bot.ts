@@ -33,6 +33,7 @@ export class BotRuntime {
   readonly memoryVector: MemoryVectorWorker;
   private readonly inboundQueue = new KeyedJobQueue(4);
   private lastDecisionDiagnostics?: Record<string, unknown>;
+  private memoryMaintenanceTimer?: ReturnType<typeof setInterval>;
 
   constructor(
     readonly store: Store,
@@ -42,7 +43,20 @@ export class BotRuntime {
     const embedding = config.embeddingProvider === "gemini" ? new GeminiEmbeddingProvider(config.geminiApiKey, config.embeddingModel, config.embeddingDimensions) : undefined;
     const vector = new QdrantVectorMemoryProvider(config.qdrantUrl, config.qdrantApiKey, config.qdrantCollection, config.embeddingDimensions);
     this.memoryVector = new MemoryVectorWorker(store, embedding, vector);
-    this.memory = new MemoryService(store, (memory) => this.memoryVector.enqueue(memory), (query, scopeId, limit) => this.memoryVector.retrieve(query, scopeId, limit));
+    this.memory = new MemoryService(
+      store,
+      (memory) => this.memoryVector.enqueue(memory),
+      (query, scopeId, limit) => this.memoryVector.retrieve(query, scopeId, limit),
+      {
+        recentMessageLimit: config.memoryRecentMessageLimit,
+        groupMemoryLimit: config.memoryGroupLimit,
+        memberMemoryLimit: config.memoryMemberLimit,
+        semanticMemoryLimit: config.memorySemanticLimit,
+        staleAfterDays: config.memoryStaleAfterDays,
+        archiveAfterDays: config.memoryArchiveAfterDays,
+      },
+      (memoryId) => this.memoryVector.enqueueDeletion(memoryId),
+    );
     this.providers = new ProviderRouter(store, config);
     this.research = new ResearchService(store, [new TavilyProvider(config.tavilyApiKey), new DuckDuckGoProvider()], [new DuckDuckGoImageProvider(), new WikimediaImageProvider()], (memory) => this.memoryVector.enqueue(memory));
     this.decisions = new DecisionEngine(this.providers);
@@ -83,10 +97,16 @@ export class BotRuntime {
   startBackgroundWorkers(): void {
     this.tasks.start();
     this.memoryVector.start();
+    if (!this.memoryMaintenanceTimer) {
+      this.memoryMaintenanceTimer = setInterval(() => void this.memory.maintain().catch((error) => this.log("memory.maintenance_failed", "warn", { error: error instanceof Error ? error.message : "unknown" })), 15 * 60_000);
+      void this.memory.maintain().catch((error) => void this.log("memory.maintenance_failed", "warn", { error: error instanceof Error ? error.message : "unknown" }));
+    }
     void this.drainInboundJobs();
   }
 
   async stopBackgroundWorkers(): Promise<void> {
+    if (this.memoryMaintenanceTimer) clearInterval(this.memoryMaintenanceTimer);
+    this.memoryMaintenanceTimer = undefined;
     this.tasks.stop();
     await this.memoryVector.stop();
     await this.actions.stop();
@@ -205,7 +225,6 @@ export class BotRuntime {
     const stored = await this.store.storeMessage({ ...message, storedAt: Date.now() });
     if (!stored) {
       await this.log("message.duplicate", "info", { reason: "event_id_already_seen" }, message);
-      return;
     }
     await this.memory.observe(message);
     const contextGroup = group ?? directMessageContext(message.chatId);
@@ -409,16 +428,26 @@ export class BotRuntime {
   }
 
   async resetMemory(scopeId: string): Promise<number> {
-    const memoryIds = this.store.memories(scopeId).map((memory) => memory.id);
-    for (const memoryId of memoryIds) await this.memoryVector.enqueueDeletion(memoryId);
     const count = await this.store.deleteMemories(scopeId);
     await this.log("memory.deleted", "info", { scopeId, count });
     return count;
   }
 
+  async deleteMemory(id: string): Promise<boolean> {
+    const deleted = await this.store.deleteMemory(id);
+    if (deleted) await this.log("memory.deleted", "info", { memoryId: id, count: 1 });
+    return deleted;
+  }
+
+  async deleteAllMemories(): Promise<number> {
+    const count = await this.store.deleteAllMemories();
+    await this.log("memory.deleted_all", "info", { count });
+    return count;
+  }
+
   async rebuildMemoryVectors(scopeId?: string): Promise<{ requested: number; enabled: boolean; queue: Record<string, unknown> }> {
     const memories = scopeId ? this.store.memories(scopeId) : this.store.memories();
-    for (const memory of memories) await this.memoryVector.enqueue(memory);
+    for (const memory of memories) await this.memoryVector.enqueue(memory, true);
     return { requested: memories.length, enabled: this.memoryVector.enabled, queue: this.memoryVector.health().queue as Record<string, unknown> };
   }
 
@@ -484,8 +513,8 @@ export class BotRuntime {
         groups: Object.keys(snapshot.groups).length,
         members: Object.keys(snapshot.members).length,
         queue: memoryVector.queue,
-        vectorDatabase: { name: memoryVector.vectorProvider, enabled: memoryVector.enabled, ready: memoryVector.collectionReady },
-        embeddingProvider: { name: memoryVector.embeddingProvider, enabled: memoryVector.enabled },
+        vectorDatabase: { name: memoryVector.vectorProvider, enabled: memoryVector.enabled, ready: memoryVector.collectionReady && memoryVector.providerHealthy, providerHealthy: memoryVector.providerHealthy },
+        embeddingProvider: { name: memoryVector.embeddingProvider, enabled: memoryVector.embeddingAvailable },
       },
       queue: this.transport.queueStats?.() ?? { pending: 0, processing: 0, failed: 0 },
       outboundQueue: this.actions.queueStats(),

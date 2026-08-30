@@ -42,4 +42,46 @@ describe("store retention", () => {
     await store.updateInboundJob(job.id, { status: "PROCESSING", attempts: 1 });
     expect(store.inboundJobs("PROCESSING")[0]?.attempts).toBe(1);
   });
+
+  it("creates vector deletion work when a group is removed", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-group-delete-"));
+    tempDirs.push(dir);
+    const store = new FileStore(dir);
+    await store.init();
+    await store.upsertGroup({ id: "group@g.us", whatsappGroupId: "group@g.us", subject: "Group", participantCount: 1, isAdmin: true, enabled: true, aiPaused: false, lastSeenAt: Date.now() });
+    await store.upsertMemory({ id: "group-memory", scopeType: "group", scopeId: "group@g.us", memoryType: "topic", value: { topic: "btc" }, confidence: 1, importance: 1, status: "ACTIVE", evidenceCount: 1, createdAt: 1, lastConfirmedAt: 1, updatedAt: 1 });
+    await store.upsertMemory({ id: "member-memory", scopeType: "member", scopeId: "group@g.us:member", memoryType: "style", value: { style: "short" }, confidence: 1, importance: 1, status: "ACTIVE", evidenceCount: 1, createdAt: 1, lastConfirmedAt: 1, updatedAt: 1 });
+
+    await store.deleteGroup("group@g.us");
+
+    expect(store.memories()).toHaveLength(0);
+    expect(store.memoryVectorJobs("PENDING").map((job) => job.memoryId).sort()).toEqual(["group-memory", "member-memory"]);
+  });
+
+  it("creates vector deletion work when retention removes a memory", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-memory-retention-vector-"));
+    tempDirs.push(dir);
+    const store = new FileStore(dir);
+    await store.init();
+    await store.upsertMemory({ id: "expired-memory", scopeType: "group", scopeId: "group@g.us", memoryType: "topic", value: { topic: "btc" }, confidence: 1, importance: 1, status: "ACTIVE", evidenceCount: 1, createdAt: 1, lastConfirmedAt: 1, updatedAt: 1 });
+
+    await store.pruneExpired(2, Date.now());
+
+    expect(store.memories()).toHaveLength(0);
+    expect(store.memoryVectorJobs("PENDING").map((job) => job.memoryId)).toEqual(["expired-memory"]);
+  });
+
+  it("writes the memory and vector outbox entry together when vector memory is enabled", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-memory-outbox-"));
+    tempDirs.push(dir);
+    const store = new FileStore(dir, true);
+    await store.init();
+    const now = Date.now();
+    await store.upsertMemory({ id: "outbox-memory", scopeType: "group", scopeId: "group@g.us", memoryType: "topic", value: { topic: "btc" }, confidence: 1, importance: 1, status: "ACTIVE", evidenceCount: 1, createdAt: now, lastConfirmedAt: now, updatedAt: now });
+
+    const reloaded = new FileStore(dir, true);
+    await reloaded.init();
+    expect(reloaded.memories("group@g.us")).toHaveLength(1);
+    expect(reloaded.memoryVectorJobs("PENDING")).toMatchObject([{ memoryId: "outbox-memory", operation: "UPSERT", memoryUpdatedAt: now }]);
+  });
 });

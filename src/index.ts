@@ -8,7 +8,8 @@ import { BaileysWhatsAppAdapter } from "./whatsapp.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const store = config.databaseUrl ? new PostgresStore(config.databaseUrl) : new FileStore(config.dataDir);
+  const vectorJobsEnabled = config.embeddingProvider === "gemini" && Boolean(config.qdrantUrl);
+  const store = config.databaseUrl ? new PostgresStore(config.databaseUrl, vectorJobsEnabled) : new FileStore(config.dataDir, vectorJobsEnabled);
   let runtime: BotRuntime;
   const whatsapp = new BaileysWhatsAppAdapter(config.whatsappAuthDir, store, {
     onRawMessage: async (message, loadMedia) => runtime.handleRawMessage(message, loadMedia),

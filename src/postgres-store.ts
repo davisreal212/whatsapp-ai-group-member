@@ -11,6 +11,7 @@ import type {
   InboundJobStatus,
   MemberRecord,
   MemoryRecord,
+  MemoryVectorJobExpectation,
   MemoryVectorJobRecord,
   MemoryVectorJobStatus,
   PersistedState,
@@ -30,7 +31,7 @@ export class PostgresStore implements Store {
   private initialized = false;
   private readonly sql: Sql;
 
-  constructor(databaseUrl: string) {
+  constructor(databaseUrl: string, private readonly vectorJobsEnabled = false) {
     this.sql = neon(databaseUrl);
   }
 
@@ -134,11 +135,19 @@ export class PostgresStore implements Store {
   }
 
   async deleteGroup(id: string): Promise<void> {
+    const memoryIds = Object.values(this.state.memories)
+      .filter((memory) => memory.scopeId === id || (memory.scopeType === "member" && memory.scopeId.startsWith(`${id}:`)))
+      .map((memory) => memory.id);
+    await this.sql`DELETE FROM memories WHERE scope_id = ${id} OR (scope_type = 'member' AND scope_id LIKE ${`${id}:%`})`;
     await this.sql`DELETE FROM members WHERE group_id = ${id}`;
     await this.sql`DELETE FROM groups WHERE id = ${id}`;
     delete this.state.groups[id];
     for (const [memberId, member] of Object.entries(this.state.members)) {
       if (member.groupId === id) delete this.state.members[memberId];
+    }
+    for (const memoryId of memoryIds) {
+      delete this.state.memories[memoryId];
+      await this.enqueueMemoryVectorDelete(memoryId);
     }
   }
 
@@ -167,23 +176,67 @@ export class PostgresStore implements Store {
   }
 
   async upsertMemory(memory: MemoryRecord): Promise<void> {
-    await this.sql`INSERT INTO memories (id, scope_type, scope_id, memory_type, value_json, confidence, importance, status, evidence_count, created_at, last_confirmed_at, updated_at, source_message_id, source_timestamp, source_member_id, expires_at)
+    const now = Date.now();
+    const currentJob = this.state.memoryVectorJobs[memory.id];
+    const vectorJob: MemoryVectorJobRecord = {
+      id: currentJob?.id ?? memory.id,
+      memoryId: memory.id,
+      operation: "UPSERT",
+      memoryUpdatedAt: memory.updatedAt,
+      status: "PENDING",
+      attempts: 0,
+      createdAt: currentJob?.createdAt ?? now,
+      updatedAt: now,
+    };
+    const memoryQuery = this.sql`INSERT INTO memories (id, scope_type, scope_id, memory_type, value_json, confidence, importance, status, evidence_count, created_at, last_confirmed_at, updated_at, source_message_id, source_timestamp, source_member_id, expires_at)
       VALUES (${memory.id}, ${memory.scopeType}, ${memory.scopeId}, ${memory.memoryType}, ${JSON.stringify(memory.value)}::jsonb, ${memory.confidence}, ${memory.importance}, ${memory.status}, ${memory.evidenceCount}, ${memory.createdAt}, ${memory.lastConfirmedAt}, ${memory.updatedAt}, ${memory.sourceMessageId ?? null}, ${memory.sourceTimestamp ?? null}, ${memory.sourceMemberId ?? null}, ${memory.expiresAt ?? null})
       ON CONFLICT (id) DO UPDATE SET value_json = EXCLUDED.value_json, confidence = EXCLUDED.confidence, importance = EXCLUDED.importance, status = EXCLUDED.status, evidence_count = EXCLUDED.evidence_count, last_confirmed_at = EXCLUDED.last_confirmed_at, updated_at = EXCLUDED.updated_at, source_message_id = EXCLUDED.source_message_id, source_timestamp = EXCLUDED.source_timestamp, source_member_id = EXCLUDED.source_member_id, expires_at = EXCLUDED.expires_at`;
+    if (this.vectorJobsEnabled) {
+      await this.sql.transaction([
+        memoryQuery,
+        this.sql`INSERT INTO memory_vector_jobs (id, memory_id, operation, memory_updated_at, status, attempts, created_at, updated_at, next_attempt_at, last_error)
+          VALUES (${vectorJob.id}, ${vectorJob.memoryId}, ${vectorJob.operation}, ${vectorJob.memoryUpdatedAt}, ${vectorJob.status}, ${vectorJob.attempts}, ${vectorJob.createdAt}, ${vectorJob.updatedAt}, NULL, NULL)
+          ON CONFLICT (memory_id) DO UPDATE SET id = EXCLUDED.id, operation = EXCLUDED.operation, memory_updated_at = EXCLUDED.memory_updated_at, status = EXCLUDED.status, attempts = EXCLUDED.attempts, created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at, next_attempt_at = NULL, last_error = NULL`,
+      ]);
+    } else {
+      await memoryQuery;
+    }
     this.state.memories[memory.id] = memory;
+    if (this.vectorJobsEnabled) this.state.memoryVectorJobs[vectorJob.id] = vectorJob;
+  }
+
+  async deleteMemory(id: string): Promise<boolean> {
+    const rows = await this.sql`DELETE FROM memories WHERE id = ${id} RETURNING id`;
+    if (!(rows as Row[]).length) return false;
+    delete this.state.memories[id];
+    await this.enqueueMemoryVectorDelete(id);
+    return true;
   }
 
   async deleteMemories(scopeId: string): Promise<number> {
     const rows = await this.sql`DELETE FROM memories WHERE scope_id = ${scopeId} RETURNING id`;
     const ids = (rows as Row[]).map((row) => String(row.id));
-    for (const id of ids) delete this.state.memories[id];
+    for (const id of ids) {
+      delete this.state.memories[id];
+      await this.enqueueMemoryVectorDelete(id);
+    }
     return ids.length;
   }
 
-  async enqueueMemoryVectorJob(job: MemoryVectorJobRecord): Promise<boolean> {
+  async deleteAllMemories(): Promise<number> {
+    const rows = await this.sql`DELETE FROM memories RETURNING id`;
+    const ids = (rows as Row[]).map((row) => String(row.id));
+    for (const id of ids) {
+      delete this.state.memories[id];
+      await this.enqueueMemoryVectorDelete(id);
+    }
+    return ids.length;
+  }
+
+  async enqueueMemoryVectorJob(job: MemoryVectorJobRecord, options: { force?: boolean } = {}): Promise<boolean> {
     const current = this.state.memoryVectorJobs[job.id];
-    if (current?.status === "PROCESSING") return false;
-    if (current?.memoryUpdatedAt === job.memoryUpdatedAt && current.operation === job.operation) return false;
+    if (current?.status === "PROCESSING" && current.memoryUpdatedAt === job.memoryUpdatedAt && current.operation === job.operation) return false;
+    if (!options.force && current?.status === "COMPLETED" && current.memoryUpdatedAt === job.memoryUpdatedAt && current.operation === job.operation) return false;
     const rows = await this.sql`INSERT INTO memory_vector_jobs (id, memory_id, operation, memory_updated_at, status, attempts, created_at, updated_at, next_attempt_at, last_error)
       VALUES (${job.id}, ${job.memoryId}, ${job.operation}, ${job.memoryUpdatedAt}, ${job.status}, ${job.attempts}, ${job.createdAt}, ${job.updatedAt}, ${job.nextAttemptAt ?? null}, ${job.lastError ?? null})
       ON CONFLICT (memory_id) DO UPDATE SET id = EXCLUDED.id, operation = EXCLUDED.operation, memory_updated_at = EXCLUDED.memory_updated_at, status = EXCLUDED.status, attempts = EXCLUDED.attempts, created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at, next_attempt_at = EXCLUDED.next_attempt_at, last_error = EXCLUDED.last_error
@@ -193,11 +246,14 @@ export class PostgresStore implements Store {
     return true;
   }
 
-  async updateMemoryVectorJob(id: string, update: Partial<MemoryVectorJobRecord>): Promise<MemoryVectorJobRecord | undefined> {
+  async updateMemoryVectorJob(id: string, update: Partial<MemoryVectorJobRecord>, expected?: MemoryVectorJobExpectation): Promise<MemoryVectorJobRecord | undefined> {
     const current = this.state.memoryVectorJobs[id];
-    if (!current) return undefined;
+    if (!current || (expected && !matchesMemoryVectorJob(current, expected))) return undefined;
     const job = { ...current, ...update, updatedAt: Date.now() };
-    await this.sql`UPDATE memory_vector_jobs SET operation = ${job.operation}, memory_updated_at = ${job.memoryUpdatedAt}, status = ${job.status}, attempts = ${job.attempts}, updated_at = ${job.updatedAt}, next_attempt_at = ${job.nextAttemptAt ?? null}, last_error = ${job.lastError ?? null} WHERE id = ${id}`;
+    const rows = expected
+      ? await this.sql`UPDATE memory_vector_jobs SET operation = ${job.operation}, memory_updated_at = ${job.memoryUpdatedAt}, status = ${job.status}, attempts = ${job.attempts}, updated_at = ${job.updatedAt}, next_attempt_at = ${job.nextAttemptAt ?? null}, last_error = ${job.lastError ?? null} WHERE id = ${id} AND operation = ${expected.operation} AND memory_updated_at = ${expected.memoryUpdatedAt} AND status = ${expected.status} AND attempts = ${expected.attempts} RETURNING id`
+      : await this.sql`UPDATE memory_vector_jobs SET operation = ${job.operation}, memory_updated_at = ${job.memoryUpdatedAt}, status = ${job.status}, attempts = ${job.attempts}, updated_at = ${job.updatedAt}, next_attempt_at = ${job.nextAttemptAt ?? null}, last_error = ${job.lastError ?? null} WHERE id = ${id} RETURNING id`;
+    if (!(rows as Row[]).length) return undefined;
     this.state.memoryVectorJobs[id] = job;
     return job;
   }
@@ -297,6 +353,10 @@ export class PostgresStore implements Store {
     return Object.values(this.state.messages).filter((message) => message.chatId === chatId).sort((a, b) => b.timestamp - a.timestamp).slice(0, limit).reverse();
   }
 
+  countMessages(scopeId: string): number {
+    return Object.values(this.state.messages).filter((message) => message.groupId === scopeId || (!scopeId.endsWith("@g.us") && message.chatId === scopeId)).length;
+  }
+
   message(id: string): StoredMessage | undefined { return this.state.messages[id]; }
   group(id: string): GroupRecord | undefined { return this.state.groups[id]; }
   groups(): GroupRecord[] { return Object.values(this.state.groups).sort((a, b) => a.subject.localeCompare(b.subject)); }
@@ -333,7 +393,7 @@ export class PostgresStore implements Store {
     const cutoff = now - Math.max(1, retentionDays) * 24 * 60 * 60 * 1000;
     const [messages, memories, memoryVectorJobs, actions, logs, providerUsage, sessions, inboundJobs] = await Promise.all([
       this.sql`DELETE FROM messages WHERE stored_at < ${cutoff} RETURNING id`,
-      this.sql`DELETE FROM memories WHERE (expires_at IS NOT NULL AND expires_at <= ${now}) OR last_confirmed_at < ${cutoff} RETURNING id`,
+      this.sql`DELETE FROM memories WHERE (expires_at IS NOT NULL AND expires_at <= ${now}) OR last_confirmed_at < ${cutoff} RETURNING id, updated_at`,
       this.sql`DELETE FROM memory_vector_jobs WHERE status NOT IN ('PENDING', 'PROCESSING') AND updated_at < ${cutoff} RETURNING id`,
       this.sql`DELETE FROM ai_actions WHERE status <> 'PENDING' AND COALESCE(executed_at, scheduled_for) < ${cutoff} RETURNING id`,
       this.sql`DELETE FROM audit_logs WHERE created_at < ${cutoff} RETURNING id`,
@@ -352,7 +412,11 @@ export class PostgresStore implements Store {
       inboundJobs: (inboundJobs as Row[]).length,
     };
     for (const row of messages as Row[]) delete this.state.messages[String(row.id)];
-    for (const row of memories as Row[]) delete this.state.memories[String(row.id)];
+    for (const row of memories as Row[]) {
+      const id = String(row.id);
+      delete this.state.memories[id];
+      await this.enqueueMemoryVectorDelete(id, Number(row.updated_at));
+    }
     for (const row of memoryVectorJobs as Row[]) delete this.state.memoryVectorJobs[String(row.id)];
     for (const row of actions as Row[]) delete this.state.actions[String(row.id)];
     for (const row of sessions as Row[]) delete this.state.sessions[String(row.token_hash)];
@@ -409,6 +473,21 @@ export class PostgresStore implements Store {
     await this.sql`INSERT INTO runtime_state (id, connection_status, pairing_code, last_connected_at, metrics_json)
       VALUES (1, ${this.state.runtime.connectionStatus}, ${this.state.runtime.pairingCode ?? null}, ${this.state.runtime.lastConnectedAt ?? null}, ${JSON.stringify(this.state.runtime.metrics)}::jsonb)
       ON CONFLICT (id) DO UPDATE SET connection_status = EXCLUDED.connection_status, pairing_code = EXCLUDED.pairing_code, last_connected_at = EXCLUDED.last_connected_at, metrics_json = EXCLUDED.metrics_json`;
+  }
+
+  private async enqueueMemoryVectorDelete(memoryId: string, memoryUpdatedAt = Date.now()): Promise<void> {
+    const current = this.state.memoryVectorJobs[memoryId];
+    if (current?.status === "COMPLETED" && current.operation === "DELETE") return;
+    await this.enqueueMemoryVectorJob({
+      id: current?.id ?? memoryId,
+      memoryId,
+      operation: "DELETE",
+      memoryUpdatedAt,
+      status: "PENDING",
+      attempts: 0,
+      createdAt: current?.createdAt ?? Date.now(),
+      updatedAt: Date.now(),
+    });
   }
 }
 
@@ -514,6 +593,10 @@ function userFromRow(row: Row): UserRecord {
 
 function sessionFromRow(row: Row): SessionRecord {
   return { tokenHash: String(row.token_hash), userId: String(row.user_id), createdAt: Number(row.created_at), expiresAt: Number(row.expires_at) };
+}
+
+function matchesMemoryVectorJob(job: MemoryVectorJobRecord, expected: MemoryVectorJobExpectation): boolean {
+  return job.operation === expected.operation && job.memoryUpdatedAt === expected.memoryUpdatedAt && job.status === expected.status && job.attempts === expected.attempts;
 }
 
 function jsonArray(value: unknown): string[] {

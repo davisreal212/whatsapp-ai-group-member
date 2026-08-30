@@ -20,6 +20,7 @@ export class MemoryVectorWorker {
   private lastRunAt?: number;
   private lastError?: string;
   private collectionReady = false;
+  private providerHealthy = false;
   private readonly checkIntervalMs: number;
   private readonly batchSize: number;
   private readonly staleJobMs: number;
@@ -57,8 +58,11 @@ export class MemoryVectorWorker {
       running: Boolean(this.timer),
       enabled: this.enabled,
       embeddingProvider: this.embedding?.name ?? "none",
+      embeddingAvailable: Boolean(this.embedding?.available),
       vectorProvider: this.vector.name,
+      vectorAvailable: this.vector.available,
       collectionReady: this.collectionReady,
+      providerHealthy: this.providerHealthy,
       queue: {
         pending: countJobs(jobs, "PENDING"),
         processing: countJobs(jobs, "PROCESSING"),
@@ -70,7 +74,7 @@ export class MemoryVectorWorker {
     };
   }
 
-  async enqueue(memory: MemoryRecord): Promise<void> {
+  async enqueue(memory: MemoryRecord, force = false): Promise<void> {
     if (!this.enabled) return;
     await this.enqueueJob({
       id: memory.id,
@@ -81,7 +85,7 @@ export class MemoryVectorWorker {
       attempts: 0,
       createdAt: Date.now(),
       updatedAt: Date.now(),
-    });
+    }, force);
   }
 
   async enqueueDeletion(memoryId: string): Promise<void> {
@@ -104,8 +108,12 @@ export class MemoryVectorWorker {
     try {
       await this.ensureCollection();
       const vector = await this.embedding.embed(query.trim().slice(0, 8_000));
-      return await this.vector.search(vector, { scopeId }, Math.max(1, Math.min(20, limit)));
+      const hits = await this.vector.search(vector, { scopeId }, Math.max(1, Math.min(20, limit)));
+      this.providerHealthy = true;
+      return hits;
     } catch (error) {
+      this.collectionReady = false;
+      this.providerHealthy = false;
       const message = error instanceof Error ? error.message : "memory vector search failed";
       this.lastError = message;
       await this.store.addLog({
@@ -156,39 +164,43 @@ export class MemoryVectorWorker {
       attempts: job.attempts + 1,
       nextAttemptAt: undefined,
       lastError: undefined,
-    });
+    }, job);
     if (!claimed) return;
 
     try {
       const memory = this.store.memories().find((item) => item.id === job.memoryId);
       if (job.operation === "DELETE") {
         if (memory) {
-          await this.store.updateMemoryVectorJob(job.id, { operation: "UPSERT", memoryUpdatedAt: memory.updatedAt, status: "PENDING", attempts: 0 });
+          await this.store.updateMemoryVectorJob(job.id, { operation: "UPSERT", memoryUpdatedAt: memory.updatedAt, status: "PENDING", attempts: 0 }, claimed);
           return;
         }
         await this.vector.delete(job.memoryId);
+        this.providerHealthy = true;
       } else {
         if (!memory) {
           await this.vector.delete(job.memoryId);
         } else if (memory.updatedAt !== job.memoryUpdatedAt) {
-          await this.store.updateMemoryVectorJob(job.id, { memoryUpdatedAt: memory.updatedAt, status: "PENDING", attempts: 0 });
+          await this.store.updateMemoryVectorJob(job.id, { memoryUpdatedAt: memory.updatedAt, status: "PENDING", attempts: 0 }, claimed);
           return;
         } else {
           const vector = await this.embedding?.embed(memoryText(memory));
           if (!vector) throw new Error("embedding provider is unavailable");
           await this.vector.upsert(memory, vector);
+          this.providerHealthy = true;
           const latest = this.store.memories().find((item) => item.id === job.memoryId);
           if (latest && latest.updatedAt !== job.memoryUpdatedAt) {
-            await this.store.updateMemoryVectorJob(job.id, { memoryUpdatedAt: latest.updatedAt, status: "PENDING", attempts: 0 });
+            await this.store.updateMemoryVectorJob(job.id, { memoryUpdatedAt: latest.updatedAt, status: "PENDING", attempts: 0 }, claimed);
             return;
           }
         }
       }
-      await this.store.updateMemoryVectorJob(job.id, { status: "COMPLETED", nextAttemptAt: undefined, lastError: undefined });
+      await this.store.updateMemoryVectorJob(job.id, { status: "COMPLETED", nextAttemptAt: undefined, lastError: undefined }, claimed);
     } catch (error) {
+      this.collectionReady = false;
+      this.providerHealthy = false;
       const message = error instanceof Error ? error.message : "memory vector operation failed";
       const nextAttemptAt = now + retryDelay(claimed.attempts);
-      await this.store.updateMemoryVectorJob(job.id, { status: "FAILED", nextAttemptAt, lastError: message });
+      await this.store.updateMemoryVectorJob(job.id, { status: "FAILED", nextAttemptAt, lastError: message }, claimed);
       this.lastError = message;
       await this.store.addLog({
         id: randomUUID(),
@@ -200,9 +212,9 @@ export class MemoryVectorWorker {
     }
   }
 
-  private async enqueueJob(job: MemoryVectorJobRecord): Promise<void> {
+  private async enqueueJob(job: MemoryVectorJobRecord, force = false): Promise<void> {
     try {
-      await this.store.enqueueMemoryVectorJob(job);
+      await this.store.enqueueMemoryVectorJob(job, { force });
     } catch (error) {
       const message = error instanceof Error ? error.message : "memory vector enqueue failed";
       this.lastError = message;
@@ -218,8 +230,14 @@ export class MemoryVectorWorker {
 
   private async ensureCollection(): Promise<void> {
     if (this.collectionReady) return;
-    await this.vector.ensureCollection();
-    this.collectionReady = true;
+    try {
+      await this.vector.ensureCollection();
+      this.collectionReady = true;
+      this.providerHealthy = true;
+    } catch (error) {
+      this.providerHealthy = false;
+      throw error;
+    }
   }
 }
 

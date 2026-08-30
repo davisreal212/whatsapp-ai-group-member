@@ -137,6 +137,7 @@ function memoryPayload(memory: MemoryRecord): Record<string, unknown> {
     id: memory.id,
     scopeType: memory.scopeType,
     scopeId: memory.scopeId,
+    ...(groupIdForMemory(memory) ? { groupId: groupIdForMemory(memory) } : {}),
     memoryType: memory.memoryType,
     value: memory.value,
     confidence: memory.confidence,
@@ -181,7 +182,7 @@ function memoryFromPayload(value: unknown): MemoryRecord | undefined {
 
 function qdrantFilter(filters: MemoryFilters): Record<string, unknown> | undefined {
   const must = [
-    filters.scopeId && !filters.groupId ? { key: "scopeId", match: { value: filters.scopeId } } : undefined,
+    filters.scopeId ? { key: "scopeId", match: { value: filters.scopeId } } : undefined,
     filters.scopeType ? { key: "scopeType", match: { value: filters.scopeType } } : undefined,
     filters.memoryType ? { key: "memoryType", match: { value: filters.memoryType } } : undefined,
     filters.sourceMemberId ? { key: "sourceMemberId", match: { value: filters.sourceMemberId } } : undefined,
@@ -189,6 +190,14 @@ function qdrantFilter(filters: MemoryFilters): Record<string, unknown> | undefin
     filters.groupId ? { key: "scopeId", match: { value: filters.groupId } } : undefined,
   ].filter((item): item is { key: string; match: { value: string } } => item !== undefined);
   return must.length ? { must } : undefined;
+}
+
+function groupIdForMemory(memory: MemoryRecord): string | undefined {
+  if (memory.scopeType === "group") return memory.scopeId;
+  if (memory.scopeType === "member" && memory.scopeId.endsWith("@g.us")) return memory.scopeId;
+  const separator = memory.scopeId.indexOf(":");
+  const groupId = separator > 0 ? memory.scopeId.slice(0, separator) : undefined;
+  return groupId?.endsWith("@g.us") ? groupId : undefined;
 }
 
 function pointId(id: string): string {

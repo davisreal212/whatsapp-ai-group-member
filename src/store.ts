@@ -10,6 +10,7 @@ import type {
   InboundJobStatus,
   MemberRecord,
   MemoryRecord,
+  MemoryVectorJobExpectation,
   MemoryVectorJobRecord,
   MemoryVectorJobStatus,
   PersistedState,
@@ -35,9 +36,11 @@ export interface Store {
   upsertMember(member: MemberRecord): Promise<void>;
   storeMessage(message: StoredMessage): Promise<boolean>;
   upsertMemory(memory: MemoryRecord): Promise<void>;
+  deleteMemory(id: string): Promise<boolean>;
   deleteMemories(scopeId: string): Promise<number>;
-  enqueueMemoryVectorJob(job: MemoryVectorJobRecord): Promise<boolean>;
-  updateMemoryVectorJob(id: string, update: Partial<MemoryVectorJobRecord>): Promise<MemoryVectorJobRecord | undefined>;
+  deleteAllMemories(): Promise<number>;
+  enqueueMemoryVectorJob(job: MemoryVectorJobRecord, options?: { force?: boolean }): Promise<boolean>;
+  updateMemoryVectorJob(id: string, update: Partial<MemoryVectorJobRecord>, expected?: MemoryVectorJobExpectation): Promise<MemoryVectorJobRecord | undefined>;
   memoryVectorJobs(status?: MemoryVectorJobStatus): MemoryVectorJobRecord[];
   createAction(action: ActionRecord): Promise<boolean>;
   updateAction(id: string, update: Partial<ActionRecord>): Promise<ActionRecord | undefined>;
@@ -52,6 +55,7 @@ export interface Store {
   deleteSession(tokenHash: string): Promise<void>;
   recentMessages(groupId: string, limit: number): StoredMessage[];
   recentChatMessages(chatId: string, limit: number): StoredMessage[];
+  countMessages(scopeId: string): number;
   message(id: string): StoredMessage | undefined;
   group(id: string): GroupRecord | undefined;
   groups(): GroupRecord[];
@@ -115,7 +119,7 @@ export class FileStore implements Store {
   private persistQueue: Promise<void> = Promise.resolve();
   private readonly filePath: string;
 
-  constructor(dataDir: string) {
+  constructor(dataDir: string, private readonly vectorJobsEnabled = false) {
     this.filePath = join(dataDir, "state.json");
   }
 
@@ -185,9 +189,16 @@ export class FileStore implements Store {
   }
 
   async deleteGroup(id: string): Promise<void> {
+    const memoryIds = Object.values(this.state.memories)
+      .filter((memory) => memory.scopeId === id || (memory.scopeType === "member" && memory.scopeId.startsWith(`${id}:`)))
+      .map((memory) => memory.id);
     delete this.state.groups[id];
     for (const [memberId, member] of Object.entries(this.state.members)) {
       if (member.groupId === id) delete this.state.members[memberId];
+    }
+    for (const memoryId of memoryIds) {
+      delete this.state.memories[memoryId];
+      this.queueMemoryVectorDelete(memoryId);
     }
     await this.persist();
   }
@@ -213,31 +224,54 @@ export class FileStore implements Store {
   }
 
   async upsertMemory(memory: MemoryRecord): Promise<void> {
-    this.state.memories[memory.id] = normalizeMemory(memory);
+    const normalized = normalizeMemory(memory);
+    this.state.memories[memory.id] = normalized;
+    if (this.vectorJobsEnabled) this.queueMemoryVectorUpsert(normalized);
     await this.persist();
+  }
+
+  async deleteMemory(id: string): Promise<boolean> {
+    if (!this.state.memories[id]) return false;
+    delete this.state.memories[id];
+    this.queueMemoryVectorDelete(id);
+    await this.persist();
+    return true;
   }
 
   async deleteMemories(scopeId: string): Promise<number> {
     const ids = Object.values(this.state.memories)
       .filter((memory) => memory.scopeId === scopeId)
       .map((memory) => memory.id);
-    for (const id of ids) delete this.state.memories[id];
+    for (const id of ids) {
+      delete this.state.memories[id];
+      this.queueMemoryVectorDelete(id);
+    }
     await this.persist();
     return ids.length;
   }
 
-  async enqueueMemoryVectorJob(job: MemoryVectorJobRecord): Promise<boolean> {
+  async deleteAllMemories(): Promise<number> {
+    const ids = Object.keys(this.state.memories);
+    for (const id of ids) {
+      delete this.state.memories[id];
+      this.queueMemoryVectorDelete(id);
+    }
+    if (ids.length) await this.persist();
+    return ids.length;
+  }
+
+  async enqueueMemoryVectorJob(job: MemoryVectorJobRecord, options: { force?: boolean } = {}): Promise<boolean> {
     const current = this.state.memoryVectorJobs[job.id];
-    if (current?.status === "PROCESSING") return false;
-    if (current?.memoryUpdatedAt === job.memoryUpdatedAt && current.operation === job.operation) return false;
+    if (current?.status === "PROCESSING" && current.memoryUpdatedAt === job.memoryUpdatedAt && current.operation === job.operation) return false;
+    if (!options.force && current?.status === "COMPLETED" && current.memoryUpdatedAt === job.memoryUpdatedAt && current.operation === job.operation) return false;
     this.state.memoryVectorJobs[job.id] = job;
     await this.persist();
     return true;
   }
 
-  async updateMemoryVectorJob(id: string, update: Partial<MemoryVectorJobRecord>): Promise<MemoryVectorJobRecord | undefined> {
+  async updateMemoryVectorJob(id: string, update: Partial<MemoryVectorJobRecord>, expected?: MemoryVectorJobExpectation): Promise<MemoryVectorJobRecord | undefined> {
     const job = this.state.memoryVectorJobs[id];
-    if (!job) return undefined;
+    if (!job || (expected && !matchesMemoryVectorJob(job, expected))) return undefined;
     this.state.memoryVectorJobs[id] = { ...job, ...update, updatedAt: Date.now() };
     await this.persist();
     return this.state.memoryVectorJobs[id];
@@ -334,6 +368,10 @@ export class FileStore implements Store {
     return this.recentMessagesBy((message) => message.chatId === chatId, limit);
   }
 
+  countMessages(scopeId: string): number {
+    return Object.values(this.state.messages).filter((message) => message.groupId === scopeId || (!scopeId.endsWith("@g.us") && message.chatId === scopeId)).length;
+  }
+
   private recentMessagesBy(matches: (message: StoredMessage) => boolean, limit: number): StoredMessage[] {
     return Object.values(this.state.messages)
       .filter(matches)
@@ -423,6 +461,7 @@ export class FileStore implements Store {
     for (const [id, memory] of Object.entries(this.state.memories)) {
       if ((memory.expiresAt !== undefined && memory.expiresAt <= now) || memory.lastConfirmedAt < cutoff) {
         delete this.state.memories[id];
+        this.queueMemoryVectorDelete(id, now);
         result.memories += 1;
       }
     }
@@ -470,6 +509,37 @@ export class FileStore implements Store {
     this.persistQueue = operation.catch(() => undefined);
     await operation;
   }
+
+  private queueMemoryVectorDelete(memoryId: string, now = Date.now()): void {
+    const current = this.state.memoryVectorJobs[memoryId];
+    if (current?.status === "COMPLETED" && current.operation === "DELETE") return;
+    this.state.memoryVectorJobs[memoryId] = {
+      id: current?.id ?? memoryId,
+      memoryId,
+      operation: "DELETE",
+      memoryUpdatedAt: now,
+      status: "PENDING",
+      attempts: 0,
+      createdAt: current?.createdAt ?? now,
+      updatedAt: now,
+    };
+  }
+
+  private queueMemoryVectorUpsert(memory: MemoryRecord, now = Date.now()): void {
+    const current = this.state.memoryVectorJobs[memory.id];
+    if (current?.status === "PROCESSING" && current.memoryUpdatedAt === memory.updatedAt && current.operation === "UPSERT") return;
+    if (current?.status === "COMPLETED" && current.memoryUpdatedAt === memory.updatedAt && current.operation === "UPSERT") return;
+    this.state.memoryVectorJobs[memory.id] = {
+      id: current?.id ?? memory.id,
+      memoryId: memory.id,
+      operation: "UPSERT",
+      memoryUpdatedAt: memory.updatedAt,
+      status: "PENDING",
+      attempts: 0,
+      createdAt: current?.createdAt ?? now,
+      updatedAt: now,
+    };
+  }
 }
 
 function normalizeMemory(memory: MemoryRecord): MemoryRecord {
@@ -493,4 +563,8 @@ function normalizeMemoryVectorJob(job: MemoryVectorJobRecord): MemoryVectorJobRe
     status,
     memoryUpdatedAt: Number.isFinite(Number(job.memoryUpdatedAt)) ? Number(job.memoryUpdatedAt) : 0,
   };
+}
+
+function matchesMemoryVectorJob(job: MemoryVectorJobRecord, expected: import("./types.js").MemoryVectorJobExpectation): boolean {
+  return job.operation === expected.operation && job.memoryUpdatedAt === expected.memoryUpdatedAt && job.status === expected.status && job.attempts === expected.attempts;
 }

@@ -270,7 +270,7 @@
         panel.id = 'memoryControlPanel';
         panel.className = 'card large-card';
         panel.style.marginTop = '12px';
-        panel.innerHTML = `<div class="card-head"><h2>Memory telemetry</h2><span id="memoryVectorStatus" class="pill">-</span></div><div class="metric-grid"><div class="metric"><small>Messages</small><strong id="memoryMessages">-</strong></div><div class="metric"><small>Stored memories</small><strong id="memoryStored">-</strong></div><div class="metric"><small>Active memories</small><strong id="memoryActive">-</strong></div><div class="metric"><small>Archived memories</small><strong id="memoryArchived">-</strong></div><div class="metric"><small>Groups</small><strong id="memoryGroups">-</strong></div><div class="metric"><small>Members</small><strong id="memoryMembers">-</strong></div></div><div class="row"><div><strong id="memoryVectorDetail">Vector database</strong><small id="memoryEmbeddingDetail">Embedding provider</small></div><span id="memoryQueueDetail" class="pill">Queue: -</span></div><div class="form" style="margin-top:18px"><button id="memoryRebuild" class="primary" type="button">Rebuild embeddings</button><button id="memoryExport" type="button">Export memory</button></div><div class="card-head" style="margin-top:24px"><h2>Group learning</h2><small>New learning can be disabled without pausing replies.</small></div><div id="memoryLearningList" class="list"></div>`;
+         panel.innerHTML = `<div class="card-head"><h2>Memory telemetry</h2><span id="memoryVectorStatus" class="pill">-</span></div><div class="metric-grid"><div class="metric"><small>Messages</small><strong id="memoryMessages">-</strong></div><div class="metric"><small>Stored memories</small><strong id="memoryStored">-</strong></div><div class="metric"><small>Active memories</small><strong id="memoryActive">-</strong></div><div class="metric"><small>Archived memories</small><strong id="memoryArchived">-</strong></div><div class="metric"><small>Groups</small><strong id="memoryGroups">-</strong></div><div class="metric"><small>Members</small><strong id="memoryMembers">-</strong></div></div><div class="row"><div><strong id="memoryVectorDetail">Vector database</strong><small id="memoryEmbeddingDetail">Embedding provider</small></div><span id="memoryQueueDetail" class="pill">Queue: -</span></div><div class="form" style="margin-top:18px"><button id="memoryRebuild" class="primary" type="button">Rebuild embeddings</button><button id="memoryExport" type="button">Export memory</button><button id="memoryDeleteAll" class="danger" type="button">Clear all memory</button></div><div class="card-head" style="margin-top:24px"><h2>Group learning</h2><small>New learning can be disabled without pausing replies.</small></div><div id="memoryLearningList" class="list"></div>`;
         view.append(panel);
         $('memoryRebuild').onclick = async () => {
           const scopeId = $('memoryScope').value.trim();
@@ -288,6 +288,10 @@
             link.click();
             URL.revokeObjectURL(link.href);
           } catch (error) { message(error.message, 'error'); }
+        };
+        $('memoryDeleteAll').onclick = async () => {
+          if (!confirm('Delete all stored memory? This cannot be undone.')) return;
+          try { const result = await api('/api/memory/all', { method: 'DELETE' }); message(`Deleted ${result.deleted} memory records.`); refresh(); } catch (error) { message(error.message, 'error'); }
         };
         return panel;
       }

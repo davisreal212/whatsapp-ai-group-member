@@ -117,6 +117,29 @@ export function createApp(runtime: BotRuntime, config: AppConfig) {
   });
   app.get("/api/members", (request, response) => response.json(runtime.store.members(typeof request.query.groupId === "string" ? request.query.groupId : undefined)));
   app.get("/api/memory/export", (request, response) => response.json(runtime.memoryExport(typeof request.query.scopeId === "string" ? request.query.scopeId : undefined)));
+  app.delete("/api/memory/all", async (_request, response, next) => {
+    try {
+      response.json({ deleted: await runtime.deleteAllMemories() });
+    } catch (error) {
+      next(error);
+    }
+  });
+  app.delete("/api/memory/item/:id", async (request, response, next) => {
+    try {
+      const deleted = await runtime.deleteMemory(request.params.id);
+      if (!deleted) return response.status(404).json({ error: "Memory not found" });
+      response.json({ deleted: 1 });
+    } catch (error) {
+      next(error);
+    }
+  });
+  app.delete("/api/memory/scope/:scopeId", async (request, response, next) => {
+    try {
+      response.json({ deleted: await runtime.resetMemory(request.params.scopeId) });
+    } catch (error) {
+      next(error);
+    }
+  });
   app.post("/api/memory/rebuild", async (request, response, next) => {
     try {
       const body = z.object({ scopeId: z.string().trim().min(1).max(200).optional() }).parse(request.body);

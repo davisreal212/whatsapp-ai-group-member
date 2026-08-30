@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { CanonicalMessage, GroupRecord, MemberRecord, MemoryRecord, MemoryRetriever, MemoryStatus, MemoryUpsertHook, Personality } from "./types.js";
+import type { CanonicalMessage, GroupRecord, MemberRecord, MemoryDeleteHook, MemoryRecord, MemoryRetriever, MemoryStatus, MemoryUpsertHook, Personality } from "./types.js";
 import type { Store } from "./store.js";
 
 export interface ContextSnapshot {
@@ -11,8 +11,34 @@ export interface ContextSnapshot {
   personality: Personality;
 }
 
+export interface MemoryServiceOptions {
+  recentMessageLimit?: number;
+  groupMemoryLimit?: number;
+  memberMemoryLimit?: number;
+  semanticMemoryLimit?: number;
+  staleAfterDays?: number;
+  archiveAfterDays?: number;
+}
+
 export class MemoryService {
-  constructor(private readonly store: Store, private readonly onMemoryUpsert?: MemoryUpsertHook, private readonly retrieveMemory?: MemoryRetriever) {}
+  private readonly options: Required<MemoryServiceOptions>;
+
+  constructor(
+    private readonly store: Store,
+    private readonly onMemoryUpsert?: MemoryUpsertHook,
+    private readonly retrieveMemory?: MemoryRetriever,
+    options: MemoryServiceOptions = {},
+    private readonly onMemoryDelete?: MemoryDeleteHook,
+  ) {
+    this.options = {
+      recentMessageLimit: clampInt(options.recentMessageLimit ?? 20, 1, 100),
+      groupMemoryLimit: clampInt(options.groupMemoryLimit ?? 10, 0, 50),
+      memberMemoryLimit: clampInt(options.memberMemoryLimit ?? 5, 0, 20),
+      semanticMemoryLimit: clampInt(options.semanticMemoryLimit ?? 5, 0, 20),
+      staleAfterDays: clampInt(options.staleAfterDays ?? 30, 1, 3650),
+      archiveAfterDays: Math.max(clampInt(options.archiveAfterDays ?? 90, 2, 3650), (options.staleAfterDays ?? 30) + 1),
+    };
+  }
 
   async observe(message: CanonicalMessage): Promise<void> {
     if (message.groupId && this.store.group(message.groupId)?.learningEnabled === false) return;
@@ -102,18 +128,19 @@ export class MemoryService {
       }
     }
 
+    const messageCount = this.store.countMessages(conversationId);
     const recent = conversationId.endsWith("@g.us")
-      ? this.store.recentMessages(conversationId, 20)
-      : this.store.recentChatMessages(conversationId, 20);
-    if (recent.length >= 5 && recent.length % 5 === 0) {
+      ? this.store.recentMessages(conversationId, this.options.recentMessageLimit)
+      : this.store.recentChatMessages(conversationId, this.options.recentMessageLimit);
+    const previousSummary = this.store.memories(conversationId).find((item) => item.memoryType === "conversation-summary");
+    if (messageCount >= 5 && messageCount % 5 === 0 && Number(previousSummary?.value.messageCount) !== messageCount) {
       const summary = recent.slice(-8).map((item) => `${item.senderName ?? item.senderId}: ${(item.text ?? `[${item.type}]`).slice(0, 180)}`).join(" | ");
-      const previousSummary = this.store.memories(conversationId).find((item) => item.memoryType === "conversation-summary");
       await this.saveMemory({
         id: createHash("sha256").update(`${conversationId}:conversation-summary`).digest("hex"),
         scopeType: message.groupId ? "group" : "relationship",
         scopeId: conversationId,
         memoryType: "conversation-summary",
-        value: { summary: summary.slice(0, 1800), messageCount: recent.length },
+        value: { summary: summary.slice(0, 1800), messageCount },
         confidence: 0.65,
         importance: 0.5,
         status: "ACTIVE",
@@ -133,6 +160,56 @@ export class MemoryService {
     await this.onMemoryUpsert?.(memory);
   }
 
+  async maintain(now = Date.now()): Promise<{ stale: number; archived: number; merged: number }> {
+    let stale = 0;
+    let archived = 0;
+    let merged = 0;
+    const memories = this.store.memories();
+    const duplicateGroups = new Map<string, MemoryRecord[]>();
+    for (const memory of memories) {
+      if (memory.status !== "DELETED") {
+        const key = `${memory.scopeType}:${memory.scopeId}:${memory.memoryType}:${JSON.stringify(memory.value)}`;
+        const duplicates = duplicateGroups.get(key) ?? [];
+        duplicates.push(memory);
+        duplicateGroups.set(key, duplicates);
+      }
+      if (memory.expiresAt !== undefined && memory.expiresAt <= now) continue;
+      const ageDays = (now - memory.lastConfirmedAt) / (24 * 60 * 60 * 1000);
+      const nextStatus = ageDays >= this.options.archiveAfterDays
+        ? "ARCHIVED"
+        : ageDays >= this.options.staleAfterDays
+          ? "STALE"
+          : memory.status;
+      if (nextStatus !== memory.status && memory.status !== "DELETED") {
+        await this.saveMemory({ ...memory, status: nextStatus, updatedAt: now });
+        if (nextStatus === "STALE") stale += 1;
+        if (nextStatus === "ARCHIVED") archived += 1;
+      }
+    }
+    for (const duplicates of duplicateGroups.values()) {
+      if (duplicates.length < 2) continue;
+      const [primary, ...rest] = duplicates.sort((left, right) => right.updatedAt - left.updatedAt);
+      if (!primary) continue;
+      const currentPrimary = this.store.memories().find((memory) => memory.id === primary.id) ?? primary;
+      const mergedMemory = {
+        ...currentPrimary,
+        evidenceCount: duplicates.reduce((total, memory) => total + memory.evidenceCount, 0),
+        confidence: Math.max(...duplicates.map((memory) => memory.confidence)),
+        importance: Math.max(...duplicates.map((memory) => memory.importance)),
+        lastConfirmedAt: Math.max(...duplicates.map((memory) => memory.lastConfirmedAt)),
+        updatedAt: now,
+      };
+      await this.saveMemory(mergedMemory);
+      for (const duplicate of rest) {
+        if (await this.store.deleteMemory(duplicate.id)) {
+          await this.onMemoryDelete?.(duplicate.id);
+          merged += 1;
+        }
+      }
+    }
+    return { stale, archived, merged };
+  }
+
   context(group: GroupRecord, senderId: string, personality: Personality, query = ""): ContextSnapshot {
     const memberId = `${group.id}:${senderId}`;
     const member = this.store.members(group.id).find((item) => item.id === memberId);
@@ -143,7 +220,7 @@ export class MemoryService {
       .map((action) => ({ type: action.actionType, text: typeof action.payload.text === "string" ? action.payload.text.slice(0, 500) : "", timestamp: action.executedAt ?? action.scheduledFor }));
     return {
       group: { id: group.id, subject: group.subject, participantCount: group.participantCount },
-      recentMessages: (group.id.endsWith("@g.us") ? this.store.recentMessages(group.id, 20) : this.store.recentChatMessages(group.id, 20)).map((message) => ({
+       recentMessages: (group.id.endsWith("@g.us") ? this.store.recentMessages(group.id, this.options.recentMessageLimit) : this.store.recentChatMessages(group.id, this.options.recentMessageLimit)).map((message) => ({
         sender: message.senderName ?? message.senderId,
         text: (message.text ?? `[${message.type}]`).slice(0, 500),
         type: message.type,
@@ -160,49 +237,52 @@ export class MemoryService {
 
   async contextWithSemantic(group: GroupRecord, senderId: string, personality: Personality, query = ""): Promise<ContextSnapshot> {
     const base = this.context(group, senderId, personality, query);
-    if (!this.retrieveMemory || !query.trim()) return base;
+    if (!this.retrieveMemory || !query.trim() || this.options.semanticMemoryLimit === 0) return base;
     const memberId = `${group.id}:${senderId}`;
+    const groupScopeType = group.id.endsWith("@g.us") ? "group" : "relationship";
     const [groupHits, memberHits] = await Promise.all([
-      this.retrieveMemory(query, group.id, 5),
-      this.retrieveMemory(query, memberId, 5),
+      this.retrieveMemory(query, group.id, this.options.semanticMemoryLimit),
+      this.retrieveMemory(query, memberId, this.options.semanticMemoryLimit),
     ]);
-    const existing = new Set(base.memories.map((memory) => memory.id));
     const stored = new Map(this.store.memories().map((memory) => [memory.id, memory]));
-    const semantic = [
-      ...groupHits.map((hit) => ({ hit, scopeId: group.id })),
-      ...memberHits.map((hit) => ({ hit, scopeId: memberId })),
-    ]
-      .flatMap(({ hit, scopeId }) => {
+    const semanticScores = new Map<string, number>();
+    for (const [hits, scopeId, scopeType] of [[groupHits, group.id, groupScopeType], [memberHits, memberId, "member" as const]] as const) {
+      for (const hit of hits) {
         const memory = stored.get(hit.memory.id);
-        return memory && memory.scopeId === scopeId ? [{ memory, score: hit.score }] : [];
-      })
-      .filter((hit) => hit.memory.status !== "ARCHIVED" && hit.memory.status !== "DELETED")
-      .filter((hit) => !hit.memory.expiresAt || hit.memory.expiresAt > Date.now())
-      .sort((left, right) => right.score - left.score)
-      .filter((hit) => !existing.has(hit.memory.id))
-      .slice(0, 5)
-      .map((hit) => ({ id: hit.memory.id, type: hit.memory.memoryType, value: hit.memory.value, confidence: hit.memory.confidence, importance: hit.memory.importance, status: hit.memory.status }));
-    return semantic.length ? { ...base, memories: [...base.memories.slice(0, Math.max(0, 20 - semantic.length)), ...semantic] } : base;
+        if (memory && memory.scopeId === scopeId && memory.scopeType === scopeType) semanticScores.set(memory.id, Math.max(semanticScores.get(memory.id) ?? 0, hit.score));
+      }
+    }
+    if (!semanticScores.size) return base;
+    return { ...base, memories: this.relevantMemories(group.id, memberId, query, semanticScores).map(formatMemory) };
   }
 
-  private relevantMemories(groupId: string, memberId: string, query: string): MemoryRecord[] {
-    const queryWords = new Set(query.toLowerCase().match(/[a-z][a-z0-9-]{3,}/g) ?? []);
-    return this.store.memories(groupId).concat(this.store.memories(memberId))
+  private relevantMemories(groupId: string, memberId: string, query: string, semanticScores = new Map<string, number>()): MemoryRecord[] {
+    const queryWords = new Set(query.toLowerCase().match(/[a-z][a-z0-9-]{1,}/g) ?? []);
+    const groupScopeType = groupId.endsWith("@g.us") ? "group" : "relationship";
+    const eligible = (items: MemoryRecord[]) => items
       .filter((item) => !item.expiresAt || item.expiresAt > Date.now())
       .filter((item) => item.status !== "ARCHIVED" && item.status !== "DELETED")
-      .sort((left, right) => memoryScore(right, queryWords) - memoryScore(left, queryWords))
-      .slice(0, 20);
+      .sort((left, right) => memoryScore(right, queryWords, semanticScores.get(right.id)) - memoryScore(left, queryWords, semanticScores.get(left.id)));
+    return [
+      ...eligible(this.store.memories(groupId).filter((memory) => memory.scopeType === groupScopeType)).slice(0, this.options.groupMemoryLimit),
+      ...eligible(this.store.memories(memberId).filter((memory) => memory.scopeType === "member")).slice(0, this.options.memberMemoryLimit),
+    ];
   }
 }
 
-function memoryScore(memory: MemoryRecord, queryWords: Set<string>): number {
+function formatMemory(memory: MemoryRecord): ContextSnapshot["memories"][number] {
+  return { id: memory.id, type: memory.memoryType, value: memory.value, confidence: memory.confidence, importance: memory.importance, status: memory.status };
+}
+
+function memoryScore(memory: MemoryRecord, queryWords: Set<string>, semanticScore?: number): number {
   const searchable = JSON.stringify(memory.value).toLowerCase();
   const matches = [...queryWords].filter((word) => searchable.includes(word)).length;
-  const semanticRelevance = queryWords.size ? matches / queryWords.size : 0.5;
+  const exactRelevance = queryWords.size ? matches / queryWords.size : 0.5;
+  const semanticRelevance = semanticScore === undefined ? exactRelevance : Math.max(0, Math.min(1, semanticScore));
   const ageDays = Math.max(0, (Date.now() - memory.lastConfirmedAt) / (24 * 60 * 60 * 1000));
   const recency = Math.exp(-ageDays / 30);
   const statusWeight = memory.status === "STALE" ? 0.5 : memory.status === "WEAK" ? 0.75 : 1;
-  return (semanticRelevance * 0.5 + memory.confidence * 0.2 + memory.importance * 0.2 + recency * 0.1) * statusWeight;
+  return (semanticRelevance * 0.5 + exactRelevance * 0.2 + memory.confidence * 0.15 + memory.importance * 0.1 + recency * 0.05) * statusWeight;
 }
 
 function emojiCount(text: string): number {
@@ -219,6 +299,12 @@ function languageStyle(text: string): "english" | "pidgin" | "mixed" | "unknown"
 }
 
 function extractTopic(text: string): string | undefined {
-  const stopWords = new Set(["about", "after", "again", "because", "before", "being", "could", "from", "have", "just", "make", "that", "their", "there", "these", "they", "this", "what", "when", "where", "which", "with", "would", "your"]);
-  return text.toLowerCase().match(/[a-z][a-z0-9-]{3,}/g)?.find((word) => !stopWords.has(word) && !/^(https?|www|message|please)$/.test(word));
+  const stopWords = new Set(["a", "an", "am", "are", "as", "at", "be", "but", "by", "can", "do", "for", "from", "has", "have", "he", "her", "hey", "hi", "how", "i", "if", "in", "is", "it", "just", "me", "my", "of", "on", "or", "our", "please", "that", "the", "their", "there", "they", "this", "to", "was", "we", "what", "when", "where", "which", "who", "with", "would", "you", "your"]);
+  const noise = new Set(["abi", "abeg", "haha", "hehe", "lmao", "lol", "na", "omo", "okay", "ok", "sha", "thanks", "thank", "una"]);
+  if (/^[\p{Extended_Pictographic}\s!?.,😂🤣😭]+$/u.test(text.trim())) return undefined;
+  return text.toLowerCase().match(/[a-z][a-z0-9-]{1,}/g)?.find((word) => !stopWords.has(word) && !noise.has(word) && !/^(https?|www|message)$/.test(word));
+}
+
+function clampInt(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Math.round(value)));
 }
