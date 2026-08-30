@@ -42,7 +42,7 @@ export class BotRuntime {
     const embedding = config.embeddingProvider === "gemini" ? new GeminiEmbeddingProvider(config.geminiApiKey, config.embeddingModel, config.embeddingDimensions) : undefined;
     const vector = new QdrantVectorMemoryProvider(config.qdrantUrl, config.qdrantApiKey, config.qdrantCollection, config.embeddingDimensions);
     this.memoryVector = new MemoryVectorWorker(store, embedding, vector);
-    this.memory = new MemoryService(store, (memory) => this.memoryVector.enqueue(memory));
+    this.memory = new MemoryService(store, (memory) => this.memoryVector.enqueue(memory), (query, scopeId, limit) => this.memoryVector.retrieve(query, scopeId, limit));
     this.providers = new ProviderRouter(store, config);
     this.research = new ResearchService(store, [new TavilyProvider(config.tavilyApiKey), new DuckDuckGoProvider()], [new DuckDuckGoImageProvider(), new WikimediaImageProvider()], (memory) => this.memoryVector.enqueue(memory));
     this.decisions = new DecisionEngine(this.providers);
@@ -209,7 +209,7 @@ export class BotRuntime {
     }
     await this.memory.observe(message);
     const contextGroup = group ?? directMessageContext(message.chatId);
-    const context = this.memory.context(contextGroup, message.senderId, this.personality(contextGroup), message.text ?? message.media?.caption ?? "");
+    const context = await this.memory.contextWithSemantic(contextGroup, message.senderId, this.personality(contextGroup), message.text ?? message.media?.caption ?? "");
     if (!message.isGroup) {
       const task = await this.tasks.handleMessage(message);
       if (task.handled) {

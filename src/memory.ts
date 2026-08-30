@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { CanonicalMessage, GroupRecord, MemberRecord, MemoryRecord, MemoryStatus, MemoryUpsertHook, Personality } from "./types.js";
+import type { CanonicalMessage, GroupRecord, MemberRecord, MemoryRecord, MemoryRetriever, MemoryStatus, MemoryUpsertHook, Personality } from "./types.js";
 import type { Store } from "./store.js";
 
 export interface ContextSnapshot {
@@ -7,12 +7,12 @@ export interface ContextSnapshot {
   recentMessages: Array<{ sender: string; text: string; type: string; timestamp: number }>;
   recentActions?: Array<{ type: string; text: string; timestamp: number }>;
   member?: Pick<MemberRecord, "displayName" | "behaviorProfile" | "confidence">;
-  memories: Array<{ type: string; value: Record<string, unknown>; confidence: number; importance: number; status: MemoryStatus }>;
+  memories: Array<{ id: string; type: string; value: Record<string, unknown>; confidence: number; importance: number; status: MemoryStatus }>;
   personality: Personality;
 }
 
 export class MemoryService {
-  constructor(private readonly store: Store, private readonly onMemoryUpsert?: MemoryUpsertHook) {}
+  constructor(private readonly store: Store, private readonly onMemoryUpsert?: MemoryUpsertHook, private readonly retrieveMemory?: MemoryRetriever) {}
 
   async observe(message: CanonicalMessage): Promise<void> {
     const conversationId = message.groupId ?? message.chatId;
@@ -135,12 +135,7 @@ export class MemoryService {
   context(group: GroupRecord, senderId: string, personality: Personality, query = ""): ContextSnapshot {
     const memberId = `${group.id}:${senderId}`;
     const member = this.store.members(group.id).find((item) => item.id === memberId);
-    const queryWords = new Set(query.toLowerCase().match(/[a-z][a-z0-9-]{3,}/g) ?? []);
-    const memories = this.store.memories(group.id).concat(this.store.memories(memberId))
-      .filter((item) => !item.expiresAt || item.expiresAt > Date.now())
-      .filter((item) => item.status !== "ARCHIVED" && item.status !== "DELETED")
-      .sort((left, right) => memoryScore(right, queryWords) - memoryScore(left, queryWords))
-      .slice(0, 20);
+    const memories = this.relevantMemories(group.id, memberId, query);
     const recentActions = this.store.actions(100)
       .filter((action) => action.groupId === group.id && action.status === "SENT")
       .slice(0, 10)
@@ -156,10 +151,46 @@ export class MemoryService {
       ...(member
         ? { member: { displayName: member.displayName, behaviorProfile: member.behaviorProfile, confidence: member.confidence } }
         : {}),
-      memories: memories.map((item) => ({ type: item.memoryType, value: item.value, confidence: item.confidence, importance: item.importance, status: item.status })),
+      memories: memories.map((item) => ({ id: item.id, type: item.memoryType, value: item.value, confidence: item.confidence, importance: item.importance, status: item.status })),
       ...(recentActions.length ? { recentActions } : {}),
       personality,
     };
+  }
+
+  async contextWithSemantic(group: GroupRecord, senderId: string, personality: Personality, query = ""): Promise<ContextSnapshot> {
+    const base = this.context(group, senderId, personality, query);
+    if (!this.retrieveMemory || !query.trim()) return base;
+    const memberId = `${group.id}:${senderId}`;
+    const [groupHits, memberHits] = await Promise.all([
+      this.retrieveMemory(query, group.id, 5),
+      this.retrieveMemory(query, memberId, 5),
+    ]);
+    const existing = new Set(base.memories.map((memory) => memory.id));
+    const stored = new Map(this.store.memories().map((memory) => [memory.id, memory]));
+    const semantic = [
+      ...groupHits.map((hit) => ({ hit, scopeId: group.id })),
+      ...memberHits.map((hit) => ({ hit, scopeId: memberId })),
+    ]
+      .flatMap(({ hit, scopeId }) => {
+        const memory = stored.get(hit.memory.id);
+        return memory && memory.scopeId === scopeId ? [{ memory, score: hit.score }] : [];
+      })
+      .filter((hit) => hit.memory.status !== "ARCHIVED" && hit.memory.status !== "DELETED")
+      .filter((hit) => !hit.memory.expiresAt || hit.memory.expiresAt > Date.now())
+      .sort((left, right) => right.score - left.score)
+      .filter((hit) => !existing.has(hit.memory.id))
+      .slice(0, 5)
+      .map((hit) => ({ id: hit.memory.id, type: hit.memory.memoryType, value: hit.memory.value, confidence: hit.memory.confidence, importance: hit.memory.importance, status: hit.memory.status }));
+    return semantic.length ? { ...base, memories: [...base.memories.slice(0, Math.max(0, 20 - semantic.length)), ...semantic] } : base;
+  }
+
+  private relevantMemories(groupId: string, memberId: string, query: string): MemoryRecord[] {
+    const queryWords = new Set(query.toLowerCase().match(/[a-z][a-z0-9-]{3,}/g) ?? []);
+    return this.store.memories(groupId).concat(this.store.memories(memberId))
+      .filter((item) => !item.expiresAt || item.expiresAt > Date.now())
+      .filter((item) => item.status !== "ARCHIVED" && item.status !== "DELETED")
+      .sort((left, right) => memoryScore(right, queryWords) - memoryScore(left, queryWords))
+      .slice(0, 20);
   }
 }
 

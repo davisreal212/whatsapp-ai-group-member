@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { EmbeddingProvider, VectorMemoryProvider } from "./vector-memory.js";
-import type { MemoryRecord, MemoryVectorJobRecord, MemoryVectorJobStatus } from "./types.js";
+import type { MemoryRecord, MemoryVectorJobRecord, MemoryVectorJobStatus, SemanticMemoryHit } from "./types.js";
 import type { Store } from "./store.js";
 
 const CHECK_INTERVAL_MS = 15_000;
@@ -99,6 +99,26 @@ export class MemoryVectorWorker {
     });
   }
 
+  async retrieve(query: string, scopeId: string, limit = 5): Promise<SemanticMemoryHit[]> {
+    if (!this.enabled || !this.embedding || !query.trim() || !scopeId) return [];
+    try {
+      await this.ensureCollection();
+      const vector = await this.embedding.embed(query.trim().slice(0, 8_000));
+      return await this.vector.search(vector, { scopeId }, Math.max(1, Math.min(20, limit)));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "memory vector search failed";
+      this.lastError = message;
+      await this.store.addLog({
+        id: randomUUID(),
+        event: "memory_vector.search_failed",
+        level: "warn",
+        details: { scopeId, error: message },
+        createdAt: Date.now(),
+      }).catch(() => undefined);
+      return [];
+    }
+  }
+
   async runOnce(now = Date.now()): Promise<void> {
     if (!this.enabled || this.activeRun) return;
     const run = this.process(now);
@@ -122,10 +142,7 @@ export class MemoryVectorWorker {
     this.lastRunAt = now;
     this.lastError = undefined;
     if (!this.embedding) return;
-    if (!this.collectionReady) {
-      await this.vector.ensureCollection();
-      this.collectionReady = true;
-    }
+    await this.ensureCollection();
 
     const jobs = this.store.memoryVectorJobs()
       .filter((job) => (job.status === "PENDING" || job.status === "FAILED" || (job.status === "PROCESSING" && job.updatedAt + this.staleJobMs <= now)) && (job.nextAttemptAt ?? 0) <= now)
@@ -197,6 +214,12 @@ export class MemoryVectorWorker {
         createdAt: Date.now(),
       }).catch(() => undefined);
     }
+  }
+
+  private async ensureCollection(): Promise<void> {
+    if (this.collectionReady) return;
+    await this.vector.ensureCollection();
+    this.collectionReady = true;
   }
 }
 

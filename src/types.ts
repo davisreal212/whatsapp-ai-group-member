@@ -195,6 +195,13 @@ export interface MemoryRecord {
 
 export type MemoryUpsertHook = (memory: MemoryRecord) => Promise<void>;
 
+export interface SemanticMemoryHit {
+  memory: MemoryRecord;
+  score: number;
+}
+
+export type MemoryRetriever = (query: string, scopeId: string, limit?: number) => Promise<SemanticMemoryHit[]>;
+
 export type MemoryVectorJobStatus = "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
 
 export interface MemoryVectorJobRecord {

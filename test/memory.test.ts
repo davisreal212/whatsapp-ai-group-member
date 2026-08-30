@@ -73,4 +73,26 @@ describe("conversation memory", () => {
     const context = memory.context({ id: "group@g.us", subject: "Group", participantCount: 2, whatsappGroupId: "group@g.us", isAdmin: false, enabled: true, aiPaused: false, lastSeenAt: now }, "member", loadConfig({ NODE_ENV: "test" }).personality, "bitcoin");
     expect(context.memories.map((item) => item.type)).toEqual(["topic"]);
   });
+
+  it("adds scoped semantic hits from the relational source of truth", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-semantic-memory-"));
+    dirs.push(dir);
+    const store = new FileStore(dir);
+    await store.init();
+    const now = Date.now();
+    const semanticMemory = { id: "semantic-group", scopeType: "group" as const, scopeId: "group@g.us", memoryType: "inside-joke", value: { joke: "old bitcoin joke" }, confidence: 0.8, importance: 0.7, status: "ACTIVE" as const, evidenceCount: 3, createdAt: now - 365 * 86_400_000, lastConfirmedAt: now - 365 * 86_400_000, updatedAt: now - 365 * 86_400_000 };
+    await store.upsertMemory(semanticMemory);
+    for (let index = 0; index < 15; index += 1) {
+      await store.upsertMemory({ id: `recent-${index}`, scopeType: "group", scopeId: "group@g.us", memoryType: "topic", value: { topic: `recent-${index}` }, confidence: 0.5, importance: 0.5, status: "ACTIVE", evidenceCount: 1, createdAt: now, lastConfirmedAt: now, updatedAt: now });
+    }
+    const requestedScopes: string[] = [];
+    const memory = new MemoryService(store, undefined, async (_query, scopeId) => {
+      requestedScopes.push(scopeId);
+      return scopeId === "group@g.us" ? [{ memory: semanticMemory, score: 0.99 }] : [];
+    });
+    const context = await memory.contextWithSemantic({ id: "group@g.us", subject: "Group", participantCount: 2, whatsappGroupId: "group@g.us", isAdmin: false, enabled: true, aiPaused: false, lastSeenAt: now }, "member", loadConfig({ NODE_ENV: "test" }).personality, "old joke");
+
+    expect(requestedScopes).toEqual(["group@g.us", "group@g.us:member"]);
+    expect(context.memories.some((item) => item.id === semanticMemory.id)).toBe(true);
+  });
 });

@@ -83,6 +83,20 @@ describe("memory vector worker", () => {
     expect(upsert).toHaveBeenCalledTimes(2);
   });
 
+  it("retrieves vectors within the requested scope", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-vector-search-"));
+    dirs.push(dir);
+    const store = new FileStore(dir);
+    await store.init();
+    const { embedding, vector } = providers();
+    const search = vi.fn<VectorMemoryProvider["search"]>().mockResolvedValue([{ memory, score: 0.88 }]);
+    vector.search = search;
+    const worker = new MemoryVectorWorker(store, embedding, vector);
+
+    await expect(worker.retrieve("bitcoin discussion", memory.scopeId, 2)).resolves.toEqual([{ memory, score: 0.88 }]);
+    expect(search).toHaveBeenCalledWith([0.1, 0.2, 0.3], { scopeId: memory.scopeId }, 2);
+  });
+
   it("deletes the vector after the relational memory is removed", async () => {
     const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-vector-delete-"));
     dirs.push(dir);
