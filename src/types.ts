@@ -166,6 +166,8 @@ export interface MemberRecord {
   lastSeenAt: number;
 }
 
+export type MemoryStatus = "ACTIVE" | "WEAK" | "STALE" | "ARCHIVED" | "DELETED";
+
 export interface MemoryRecord {
   id: string;
   scopeType: "group" | "member" | "relationship" | "source";
@@ -173,9 +175,15 @@ export interface MemoryRecord {
   memoryType: string;
   value: Record<string, unknown>;
   confidence: number;
+  importance: number;
+  status: MemoryStatus;
   evidenceCount: number;
   createdAt: number;
   lastConfirmedAt: number;
+  updatedAt: number;
+  sourceMessageId?: string;
+  sourceTimestamp?: number;
+  sourceMemberId?: string;
   expiresAt?: number;
 }
 

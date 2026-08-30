@@ -204,9 +204,12 @@ export class ResearchService {
           memoryType: "research-source",
           value: { url: source.url, title: source.title ?? "", evidence: source.evidence ?? "" },
           confidence: source.sourceType === "official" ? 0.8 : 0.5,
+          importance: source.sourceType === "official" ? 0.7 : 0.4,
+          status: "ACTIVE",
           evidenceCount: 1,
           createdAt: source.retrievedAt,
           lastConfirmedAt: source.retrievedAt,
+          updatedAt: source.retrievedAt,
           expiresAt: Date.now() + 6 * 60 * 60 * 1000,
         });
       }

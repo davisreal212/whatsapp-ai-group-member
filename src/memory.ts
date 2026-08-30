@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { CanonicalMessage, GroupRecord, MemberRecord, MemoryRecord, Personality } from "./types.js";
+import type { CanonicalMessage, GroupRecord, MemberRecord, MemoryRecord, MemoryStatus, Personality } from "./types.js";
 import type { Store } from "./store.js";
 
 export interface ContextSnapshot {
@@ -7,7 +7,7 @@ export interface ContextSnapshot {
   recentMessages: Array<{ sender: string; text: string; type: string; timestamp: number }>;
   recentActions?: Array<{ type: string; text: string; timestamp: number }>;
   member?: Pick<MemberRecord, "displayName" | "behaviorProfile" | "confidence">;
-  memories: Array<{ type: string; value: Record<string, unknown>; confidence: number }>;
+  memories: Array<{ type: string; value: Record<string, unknown>; confidence: number; importance: number; status: MemoryStatus }>;
   personality: Personality;
 }
 
@@ -63,9 +63,15 @@ export class MemoryService {
         averageMessageLength: Math.round(profile.averageMessageLength),
       },
       confidence: member.confidence.communicationStyle ?? 0,
+      importance: 0.25,
+      status: count >= 3 ? "ACTIVE" : "WEAK",
       evidenceCount: count,
       createdAt: previous?.firstSeenAt ?? now,
       lastConfirmedAt: now,
+      updatedAt: now,
+      sourceMessageId: message.id,
+      sourceTimestamp: message.timestamp,
+      sourceMemberId: message.senderId,
     };
     await this.store.upsertMemory(memory);
 
@@ -81,9 +87,15 @@ export class MemoryService {
           memoryType: "group-topic",
           value: { topic, source: "observed_messages" },
           confidence: Math.min(1, 0.25 + topicCount / 20),
+          importance: 0.4,
+          status: topicCount >= 3 ? "ACTIVE" : "WEAK",
           evidenceCount: topicCount,
           createdAt: previousTopic?.createdAt ?? now,
           lastConfirmedAt: now,
+          updatedAt: now,
+          sourceMessageId: message.id,
+          sourceTimestamp: message.timestamp,
+          sourceMemberId: message.senderId,
           expiresAt: now + 30 * 24 * 60 * 60 * 1000,
         });
       }
@@ -102,9 +114,14 @@ export class MemoryService {
         memoryType: "conversation-summary",
         value: { summary: summary.slice(0, 1800), messageCount: recent.length },
         confidence: 0.65,
+        importance: 0.5,
+        status: "ACTIVE",
         evidenceCount: (previousSummary?.evidenceCount ?? 0) + 1,
         createdAt: previousSummary?.createdAt ?? now,
         lastConfirmedAt: now,
+        updatedAt: now,
+        sourceMessageId: message.id,
+        sourceTimestamp: message.timestamp,
         expiresAt: now + 7 * 24 * 60 * 60 * 1000,
       });
     }
@@ -116,6 +133,7 @@ export class MemoryService {
     const queryWords = new Set(query.toLowerCase().match(/[a-z][a-z0-9-]{3,}/g) ?? []);
     const memories = this.store.memories(group.id).concat(this.store.memories(memberId))
       .filter((item) => !item.expiresAt || item.expiresAt > Date.now())
+      .filter((item) => item.status !== "ARCHIVED" && item.status !== "DELETED")
       .sort((left, right) => memoryScore(right, queryWords) - memoryScore(left, queryWords))
       .slice(0, 20);
     const recentActions = this.store.actions(100)
@@ -133,7 +151,7 @@ export class MemoryService {
       ...(member
         ? { member: { displayName: member.displayName, behaviorProfile: member.behaviorProfile, confidence: member.confidence } }
         : {}),
-      memories: memories.map((item) => ({ type: item.memoryType, value: item.value, confidence: item.confidence })),
+      memories: memories.map((item) => ({ type: item.memoryType, value: item.value, confidence: item.confidence, importance: item.importance, status: item.status })),
       ...(recentActions.length ? { recentActions } : {}),
       personality,
     };
@@ -143,7 +161,11 @@ export class MemoryService {
 function memoryScore(memory: MemoryRecord, queryWords: Set<string>): number {
   const searchable = JSON.stringify(memory.value).toLowerCase();
   const matches = [...queryWords].filter((word) => searchable.includes(word)).length;
-  return matches * 2 + memory.confidence + memory.lastConfirmedAt / 1e15;
+  const semanticRelevance = queryWords.size ? matches / queryWords.size : 0.5;
+  const ageDays = Math.max(0, (Date.now() - memory.lastConfirmedAt) / (24 * 60 * 60 * 1000));
+  const recency = Math.exp(-ageDays / 30);
+  const statusWeight = memory.status === "STALE" ? 0.5 : memory.status === "WEAK" ? 0.75 : 1;
+  return (semanticRelevance * 0.5 + memory.confidence * 0.2 + memory.importance * 0.2 + recency * 0.1) * statusWeight;
 }
 
 function emojiCount(text: string): number {

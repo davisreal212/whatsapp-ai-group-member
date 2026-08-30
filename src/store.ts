@@ -126,6 +126,7 @@ export class FileStore implements Store {
         ...this.state.runtime,
         metrics: { ...emptyMetrics(), ...this.state.runtime?.metrics },
       };
+      this.state.memories = Object.fromEntries(Object.entries(this.state.memories).map(([id, memory]) => [id, normalizeMemory(memory)]));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       await this.persist();
@@ -203,7 +204,7 @@ export class FileStore implements Store {
   }
 
   async upsertMemory(memory: MemoryRecord): Promise<void> {
-    this.state.memories[memory.id] = memory;
+    this.state.memories[memory.id] = normalizeMemory(memory);
     await this.persist();
   }
 
@@ -431,4 +432,16 @@ export class FileStore implements Store {
     this.persistQueue = operation.catch(() => undefined);
     await operation;
   }
+}
+
+function normalizeMemory(memory: MemoryRecord): MemoryRecord {
+  const importance = Number(memory.importance);
+  const updatedAt = Number(memory.updatedAt);
+  const status = ["ACTIVE", "WEAK", "STALE", "ARCHIVED", "DELETED"].includes(memory.status) ? memory.status : "ACTIVE";
+  return {
+    ...memory,
+    importance: Number.isFinite(importance) ? Math.min(1, Math.max(0, importance)) : 0.5,
+    status,
+    updatedAt: Number.isFinite(updatedAt) ? updatedAt : memory.lastConfirmedAt || memory.createdAt,
+  };
 }

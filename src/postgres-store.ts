@@ -40,7 +40,7 @@ export class PostgresStore implements Store {
        this.sql`SELECT id, whatsapp_group_id, subject, participant_count, is_admin, enabled, ai_paused, personality_override_json, participation_override_json, last_seen_at FROM groups`,
       this.sql`SELECT id, group_id, whatsapp_member_id, display_name, behavior_profile_json, confidence_json, first_seen_at, last_seen_at FROM members`,
       this.sql`SELECT id, chat_id, group_id, sender_id, sender_name, timestamp_ms, message_type, text_or_transcript, transcript_confidence, transcript_language, quoted_message_id, quoted_sender_id, mentioned_member_ids_json, media_metadata_json, is_group, is_status, is_from_bot, stored_at FROM messages`,
-      this.sql`SELECT id, scope_type, scope_id, memory_type, value_json, confidence, evidence_count, created_at, last_confirmed_at, expires_at FROM memories`,
+       this.sql`SELECT id, scope_type, scope_id, memory_type, value_json, confidence, importance, status, evidence_count, created_at, last_confirmed_at, updated_at, source_message_id, source_timestamp, source_member_id, expires_at FROM memories`,
       this.sql`SELECT id, idempotency_key, group_id, source_message_id, action_type, target_message_id, payload_json, scheduled_for, status, attempts, next_attempt_at, executed_at, error FROM ai_actions`,
       this.sql`SELECT id, group_id, creator_id, creator_chat_id, type, condition_json, message, status, trigger_at, recurrence, notification_target, notification_chat_id, created_at, last_checked_at, last_successful_check, last_error, retry_count FROM tasks`,
       this.sql`SELECT id, message_id, chat_id, message_json, status, attempts, created_at, updated_at, next_attempt_at, last_error FROM inbound_jobs ORDER BY created_at ASC`,
@@ -163,9 +163,9 @@ export class PostgresStore implements Store {
   }
 
   async upsertMemory(memory: MemoryRecord): Promise<void> {
-    await this.sql`INSERT INTO memories (id, scope_type, scope_id, memory_type, value_json, confidence, evidence_count, created_at, last_confirmed_at, expires_at)
-      VALUES (${memory.id}, ${memory.scopeType}, ${memory.scopeId}, ${memory.memoryType}, ${JSON.stringify(memory.value)}::jsonb, ${memory.confidence}, ${memory.evidenceCount}, ${memory.createdAt}, ${memory.lastConfirmedAt}, ${memory.expiresAt ?? null})
-      ON CONFLICT (id) DO UPDATE SET value_json = EXCLUDED.value_json, confidence = EXCLUDED.confidence, evidence_count = EXCLUDED.evidence_count, last_confirmed_at = EXCLUDED.last_confirmed_at, expires_at = EXCLUDED.expires_at`;
+    await this.sql`INSERT INTO memories (id, scope_type, scope_id, memory_type, value_json, confidence, importance, status, evidence_count, created_at, last_confirmed_at, updated_at, source_message_id, source_timestamp, source_member_id, expires_at)
+      VALUES (${memory.id}, ${memory.scopeType}, ${memory.scopeId}, ${memory.memoryType}, ${JSON.stringify(memory.value)}::jsonb, ${memory.confidence}, ${memory.importance}, ${memory.status}, ${memory.evidenceCount}, ${memory.createdAt}, ${memory.lastConfirmedAt}, ${memory.updatedAt}, ${memory.sourceMessageId ?? null}, ${memory.sourceTimestamp ?? null}, ${memory.sourceMemberId ?? null}, ${memory.expiresAt ?? null})
+      ON CONFLICT (id) DO UPDATE SET value_json = EXCLUDED.value_json, confidence = EXCLUDED.confidence, importance = EXCLUDED.importance, status = EXCLUDED.status, evidence_count = EXCLUDED.evidence_count, last_confirmed_at = EXCLUDED.last_confirmed_at, updated_at = EXCLUDED.updated_at, source_message_id = EXCLUDED.source_message_id, source_timestamp = EXCLUDED.source_timestamp, source_member_id = EXCLUDED.source_member_id, expires_at = EXCLUDED.expires_at`;
     this.state.memories[memory.id] = memory;
   }
 
@@ -336,7 +336,14 @@ export class PostgresStore implements Store {
     await this.sql`ALTER TABLE messages ADD COLUMN IF NOT EXISTS transcript_confidence real`;
     await this.sql`ALTER TABLE messages ADD COLUMN IF NOT EXISTS transcript_language text`;
     await this.sql`CREATE INDEX IF NOT EXISTS messages_group_time_idx ON messages (group_id, timestamp_ms DESC)`;
-    await this.sql`CREATE TABLE IF NOT EXISTS memories (id text PRIMARY KEY, scope_type text NOT NULL, scope_id text NOT NULL, memory_type text NOT NULL, value_json jsonb NOT NULL, confidence real NOT NULL, evidence_count integer NOT NULL, created_at bigint NOT NULL, last_confirmed_at bigint NOT NULL, expires_at bigint)`;
+     await this.sql`CREATE TABLE IF NOT EXISTS memories (id text PRIMARY KEY, scope_type text NOT NULL, scope_id text NOT NULL, memory_type text NOT NULL, value_json jsonb NOT NULL, confidence real NOT NULL, importance real NOT NULL DEFAULT 0.5, status text NOT NULL DEFAULT 'ACTIVE', evidence_count integer NOT NULL, created_at bigint NOT NULL, last_confirmed_at bigint NOT NULL, updated_at bigint NOT NULL DEFAULT 0, source_message_id text, source_timestamp bigint, source_member_id text, expires_at bigint)`;
+     await this.sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS importance real NOT NULL DEFAULT 0.5`;
+     await this.sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'ACTIVE'`;
+     await this.sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS updated_at bigint NOT NULL DEFAULT 0`;
+     await this.sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS source_message_id text`;
+     await this.sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS source_timestamp bigint`;
+     await this.sql`ALTER TABLE memories ADD COLUMN IF NOT EXISTS source_member_id text`;
+     await this.sql`UPDATE memories SET updated_at = last_confirmed_at WHERE updated_at = 0`;
     await this.sql`CREATE INDEX IF NOT EXISTS memories_scope_idx ON memories (scope_id)`;
     await this.sql`CREATE TABLE IF NOT EXISTS ai_actions (id text PRIMARY KEY, idempotency_key text UNIQUE NOT NULL, group_id text NOT NULL, source_message_id text NOT NULL, action_type text NOT NULL, target_message_id text, payload_json jsonb NOT NULL, scheduled_for bigint NOT NULL, status text NOT NULL, attempts integer NOT NULL DEFAULT 0, next_attempt_at bigint, executed_at bigint, error text)`;
     await this.sql`ALTER TABLE ai_actions ADD COLUMN IF NOT EXISTS attempts integer NOT NULL DEFAULT 0`;
@@ -394,7 +401,7 @@ function messageFromRow(row: Row): StoredMessage {
 }
 
 function memoryFromRow(row: Row): MemoryRecord {
-  return { id: String(row.id), scopeType: String(row.scope_type) as MemoryRecord["scopeType"], scopeId: String(row.scope_id), memoryType: String(row.memory_type), value: jsonObject(row.value_json, {}), confidence: Number(row.confidence), evidenceCount: Number(row.evidence_count), createdAt: Number(row.created_at), lastConfirmedAt: Number(row.last_confirmed_at), ...(row.expires_at ? { expiresAt: Number(row.expires_at) } : {}) };
+  return { id: String(row.id), scopeType: String(row.scope_type) as MemoryRecord["scopeType"], scopeId: String(row.scope_id), memoryType: String(row.memory_type), value: jsonObject(row.value_json, {}), confidence: Number(row.confidence), importance: Number(row.importance ?? 0.5), status: String(row.status ?? "ACTIVE") as MemoryRecord["status"], evidenceCount: Number(row.evidence_count), createdAt: Number(row.created_at), lastConfirmedAt: Number(row.last_confirmed_at), updatedAt: Number(row.updated_at ?? row.last_confirmed_at), ...(row.source_message_id ? { sourceMessageId: String(row.source_message_id) } : {}), ...(row.source_timestamp ? { sourceTimestamp: Number(row.source_timestamp) } : {}), ...(row.source_member_id ? { sourceMemberId: String(row.source_member_id) } : {}), ...(row.expires_at ? { expiresAt: Number(row.expires_at) } : {}) };
 }
 
 function actionFromRow(row: Row): ActionRecord {

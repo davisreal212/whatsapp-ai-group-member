@@ -26,6 +26,8 @@ describe("conversation memory", () => {
     expect(context.recentMessages[0]?.text).toBe(message.text);
     expect(context.member?.behaviorProfile.messageCount).toBe(1);
     expect(context.memories[0]?.type).toBe("communication-style");
+    const style = store.memories(`${message.chatId}:${message.senderId}`)[0];
+    expect(style).toMatchObject({ importance: 0.25, status: "WEAK", sourceMessageId: message.id, sourceTimestamp: message.timestamp, sourceMemberId: message.senderId });
   });
 
   it("learns repeated group topics with scoped confidence", async () => {
@@ -57,5 +59,18 @@ describe("conversation memory", () => {
     const summary = store.memories("group@g.us").find((item) => item.memoryType === "conversation-summary");
     expect(summary?.value.summary).toContain("topic 4");
     expect(summary?.expiresAt).toBeGreaterThan(Date.now());
+  });
+
+  it("does not retrieve archived or deleted memories", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-memory-status-"));
+    dirs.push(dir);
+    const store = new FileStore(dir);
+    await store.init();
+    const now = Date.now();
+    await store.upsertMemory({ id: "active", scopeType: "group", scopeId: "group@g.us", memoryType: "topic", value: { topic: "bitcoin" }, confidence: 0.9, importance: 0.9, status: "ACTIVE", evidenceCount: 3, createdAt: now, lastConfirmedAt: now, updatedAt: now });
+    await store.upsertMemory({ id: "archived", scopeType: "group", scopeId: "group@g.us", memoryType: "topic", value: { topic: "bitcoin" }, confidence: 1, importance: 1, status: "ARCHIVED", evidenceCount: 10, createdAt: now, lastConfirmedAt: now, updatedAt: now });
+    const memory = new MemoryService(store);
+    const context = memory.context({ id: "group@g.us", subject: "Group", participantCount: 2, whatsappGroupId: "group@g.us", isAdmin: false, enabled: true, aiPaused: false, lastSeenAt: now }, "member", loadConfig({ NODE_ENV: "test" }).personality, "bitcoin");
+    expect(context.memories.map((item) => item.type)).toEqual(["topic"]);
   });
 });
