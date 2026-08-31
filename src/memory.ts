@@ -47,6 +47,7 @@ export class MemoryService {
     const previous = this.store.members(conversationId).find((item) => item.id === memberId);
     const now = Date.now();
     const text = message.text ?? message.media?.caption ?? "";
+    const candidateText = memoryCandidateText(text);
     const previousCount = previous?.behaviorProfile.messageCount ?? 0;
     const count = previousCount + 1;
     const profile = {
@@ -80,30 +81,32 @@ export class MemoryService {
     };
     await this.store.upsertMember(member);
 
-    const memory: MemoryRecord = {
-      id: createHash("sha256").update(`${memberId}:communication-style`).digest("hex"),
-      scopeType: "member",
-      scopeId: memberId,
-      memoryType: "communication-style",
-      value: {
-        languageStyle: profile.languageStyle ?? "unknown",
-        averageMessageLength: Math.round(profile.averageMessageLength),
-      },
-      confidence: member.confidence.communicationStyle ?? 0,
-      importance: 0.25,
-      status: count >= 3 ? "ACTIVE" : "WEAK",
-      evidenceCount: count,
-      createdAt: previous?.firstSeenAt ?? now,
-      lastConfirmedAt: now,
-      updatedAt: now,
-      sourceMessageId: message.id,
-      sourceTimestamp: message.timestamp,
-      sourceMemberId: message.senderId,
-    };
-    await this.saveMemory(memory);
+    if (candidateText) {
+      const memory: MemoryRecord = {
+        id: createHash("sha256").update(`${memberId}:communication-style`).digest("hex"),
+        scopeType: "member",
+        scopeId: memberId,
+        memoryType: "communication-style",
+        value: {
+          languageStyle: profile.languageStyle ?? "unknown",
+          averageMessageLength: Math.round(profile.averageMessageLength),
+        },
+        confidence: member.confidence.communicationStyle ?? 0,
+        importance: 0.25,
+        status: count >= 3 ? "ACTIVE" : "WEAK",
+        evidenceCount: count,
+        createdAt: previous?.firstSeenAt ?? now,
+        lastConfirmedAt: now,
+        updatedAt: now,
+        sourceMessageId: message.id,
+        sourceTimestamp: message.timestamp,
+        sourceMemberId: message.senderId,
+      };
+      await this.saveMemory(memory);
+    }
 
-    if (message.groupId) {
-      const topic = extractTopic(text);
+    if (message.groupId && candidateText) {
+      const topic = extractTopic(candidateText);
       if (topic) {
         const previousTopic = this.store.memories(message.groupId).find((item) => item.memoryType === "group-topic" && item.value.topic === topic);
         const topicCount = (previousTopic?.evidenceCount ?? 0) + 1;
@@ -133,8 +136,12 @@ export class MemoryService {
       ? this.store.recentMessages(conversationId, this.options.recentMessageLimit)
       : this.store.recentChatMessages(conversationId, this.options.recentMessageLimit);
     const previousSummary = this.store.memories(conversationId).find((item) => item.memoryType === "conversation-summary");
-    if (messageCount >= 5 && messageCount % 5 === 0 && Number(previousSummary?.value.messageCount) !== messageCount) {
-      const summary = recent.slice(-8).map((item) => `${item.senderName ?? item.senderId}: ${(item.text ?? `[${item.type}]`).slice(0, 180)}`).join(" | ");
+    const summaryParts = recent.slice(-8).flatMap((item) => {
+      const summaryText = memoryCandidateText(item.text ?? item.media?.caption ?? "");
+      return summaryText ? [`${item.senderName ?? item.senderId}: ${summaryText.slice(0, 180)}`] : [];
+    });
+    if (messageCount >= 5 && messageCount % 5 === 0 && summaryParts.length && Number(previousSummary?.value.messageCount) !== messageCount) {
+      const summary = summaryParts.join(" | ");
       await this.saveMemory({
         id: createHash("sha256").update(`${conversationId}:conversation-summary`).digest("hex"),
         scopeType: message.groupId ? "group" : "relationship",
@@ -303,6 +310,24 @@ function extractTopic(text: string): string | undefined {
   const noise = new Set(["abi", "abeg", "haha", "hehe", "lmao", "lol", "na", "omo", "okay", "ok", "sha", "thanks", "thank", "una"]);
   if (/^[\p{Extended_Pictographic}\s!?.,😂🤣😭]+$/u.test(text.trim())) return undefined;
   return text.toLowerCase().match(/[a-z][a-z0-9-]{1,}/g)?.find((word) => !stopWords.has(word) && !noise.has(word) && !/^(https?|www|message)$/.test(word));
+}
+
+const LOW_VALUE_TOKENS = new Set([
+  "abi", "abeg", "afternoon", "are", "evening", "everyone", "good", "guys", "haha", "hehe", "hello", "hey", "hi", "lmao", "lol", "morning", "na", "no", "ok", "okay", "omo", "please", "thanks", "thank", "the", "there", "wow", "yeah", "yes", "yo",
+]);
+
+function memoryCandidateText(text: string): string | undefined {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length < 3 || containsSensitiveContent(normalized)) return undefined;
+  const words = normalized.toLowerCase().match(/[a-z]+/g) ?? [];
+  if (words.length === 0 && /^[\p{Extended_Pictographic}\s!?.,]+$/u.test(normalized)) return undefined;
+  if (words.length > 0 && words.length <= 6 && words.every((word) => LOW_VALUE_TOKENS.has(word))) return undefined;
+  return normalized.slice(0, 8_000);
+}
+
+function containsSensitiveContent(text: string): boolean {
+  if (/\b(?:password|passcode|one[- ]time(?: password| code)?|otp|api key|secret key|private key|cvv|credit card|bank account|social security|national id|nin|bvn)\b/i.test(text)) return true;
+  return /\b(?:i(?:'m| am)|my)\s+(?:pregnant|diabetic|depressed|diagnosed|allergic|hiv|aids|cancer|muslim|christian|jewish|hindu|gay|lesbian|bisexual|transgender)\b/i.test(text);
 }
 
 function clampInt(value: number, min: number, max: number): number {

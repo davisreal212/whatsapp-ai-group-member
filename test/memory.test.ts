@@ -108,6 +108,40 @@ describe("conversation memory", () => {
     expect(store.memories("group@g.us")).toHaveLength(0);
   });
 
+  it("skips low-value and sensitive messages as durable memory candidates", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-memory-candidates-"));
+    dirs.push(dir);
+    const store = new FileStore(dir);
+    await store.init();
+    const memory = new MemoryService(store);
+    const message = (id: string, text: string): CanonicalMessage => ({ id, chatId: "candidate@g.us", groupId: "candidate@g.us", senderId: "member", timestamp: Date.now(), type: "text", text, mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false });
+
+    await memory.observe(message("noise", "lol 😂"));
+    await memory.observe(message("secret", "my password is secret"));
+
+    expect(store.members("candidate@g.us")).toHaveLength(1);
+    expect(store.memories("candidate@g.us")).toHaveLength(0);
+  });
+
+  it("keeps sensitive text out of conversation summaries", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-memory-summary-privacy-"));
+    dirs.push(dir);
+    const store = new FileStore(dir);
+    await store.init();
+    const memory = new MemoryService(store);
+    for (let index = 0; index < 5; index += 1) {
+      const text = index === 2 ? "my password is secret" : `useful topic ${index}`;
+      const message: CanonicalMessage = { id: `privacy-summary-${index}`, chatId: "privacy@g.us", groupId: "privacy@g.us", senderId: `member-${index}`, timestamp: Date.now() + index, type: "text", text, mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+      await store.storeMessage({ ...message, storedAt: Date.now() });
+      await memory.observe(message);
+    }
+
+    const summary = store.memories("privacy@g.us").find((item) => item.memoryType === "conversation-summary");
+    expect(summary?.value.summary).toContain("useful topic 4");
+    expect(summary?.value.summary).not.toContain("password");
+    expect(summary?.value.summary).not.toContain("secret");
+  });
+
   it("keeps conversation summaries on five-message boundaries", async () => {
     const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-summary-batches-"));
     dirs.push(dir);
