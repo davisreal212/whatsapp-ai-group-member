@@ -125,6 +125,7 @@ The pinned dependency is `@whiskeysockets/baileys@6.7.24`. That version exports 
 - The dashboard has an outbound kill switch and an AI-processing pause switch.
 - The dashboard's DM allowlist is persisted in the application database and can be edited without rebuilding the service.
 - **Sync DMs** lists recent direct-message contacts seen by the current WhatsApp session; it does not import message content or automatically authorize anyone.
+- Allowlisted DM users can set a saved reply language by sending `language english`, `language pidgin`, or `language mixed`. English is the default and does not switch to Pidgin unless the user changes the preference or explicitly asks for it.
 - The service writes protected application-state snapshots under `DATA_DIR/backups` on startup and on the configured interval. Back up the persistent volume separately; it contains the WhatsApp auth state and local application state.
 - Set `AUDIO_REPLY_MODE=adaptive` with `TTS_API_KEY` or `ELEVENLABS_API_KEY` to reply to voice notes with audio when the provider and adapter support it. ElevenLabs also provides speech-to-text fallback for incoming voice notes. Synthesis failures fall back to text.
 - Set `PHOENIX_API_KEY`, `PHOENIX_API_BASE_URL`, `PHOENIX_PRIMARY_MODEL=deepseek-v4-flash`, and `PHOENIX_SECONDARY_MODEL=glm-5.3` to put the Phoenix FastAPI router ahead of the other AI providers. The two Phoenix models share the same circuit-aware fallback path.

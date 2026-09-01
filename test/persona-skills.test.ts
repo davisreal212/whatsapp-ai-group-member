@@ -1,9 +1,28 @@
 import { describe, expect, it } from "vitest";
 import { localRelevance } from "../src/decision.js";
-import { defaultPersonality, previewPersonality, resolvePersonality, responsePolicy } from "../src/persona.js";
+import { applyLanguagePreference, defaultPersonality, migrateLegacyPersonality, parseLanguageCommand, previewPersonality, resolvePersonality, responsePolicy } from "../src/persona.js";
 import { SkillExecutor, SkillRegistry } from "../src/skills.js";
 
 describe("persona behavior", () => {
+  it("defaults to English and treats it as an output-language lock", () => {
+    const persona = defaultPersonality("Kola");
+    expect(persona).toMatchObject({ languageMix: "english", languages: ["english"] });
+    expect(resolvePersonality({ ...persona, languageMix: "mixed", languages: ["english", "nigerian pidgin"] }, { languageMix: "english", languages: ["english", "nigerian pidgin"] })).toMatchObject({ languageMix: "english", languages: ["english"] });
+    expect(previewPersonality("What are you doing?", applyLanguagePreference({ ...persona, languageMix: "mixed", languages: ["english", "nigerian pidgin"] }, "english"))).not.toContain("dey");
+  });
+
+  it("migrates the previous mixed default without changing an intentional preset", () => {
+    expect(migrateLegacyPersonality({ displayName: "Kola", languageMix: "mixed", languages: ["english", "nigerian pidgin"], personalityPresets: [] })).toMatchObject({ languageMix: "english", languages: ["english"] });
+    expect(migrateLegacyPersonality({ displayName: "Kola", languageMix: "mixed", languages: ["english", "nigerian pidgin"], personalityPresets: ["Street"] })).toMatchObject({ languageMix: "mixed" });
+  });
+
+  it("parses explicit language commands", () => {
+    expect(parseLanguageCommand("language english")).toBe("english");
+    expect(parseLanguageCommand("set my language to pidgin")).toBe("pidgin");
+    expect(parseLanguageCommand("/language")).toBe("help");
+    expect(parseLanguageCommand("I speak English")).toBeUndefined();
+  });
+
   it("resolves preset expression without changing safety controls", () => {
     const resolved = resolvePersonality(defaultPersonality("Kola"), {
       displayName: "Sarah",

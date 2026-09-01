@@ -9,6 +9,7 @@ import type {
   GroupRecord,
   InboundJobRecord,
   InboundJobStatus,
+  LanguagePreference,
   MemberRecord,
   MemoryRecord,
   MemoryVectorJobExpectation,
@@ -51,7 +52,7 @@ export class PostgresStore implements Store {
       this.sql`SELECT id, event, level, message_id, group_id, details_json, created_at FROM audit_logs ORDER BY created_at DESC LIMIT 500`,
       this.sql`SELECT provider, operation, group_id, units, success, latency_ms, created_at FROM provider_usage ORDER BY created_at DESC LIMIT 1000`,
       this.sql`SELECT connection_status, pairing_code, last_connected_at, metrics_json FROM runtime_state WHERE id = 1`,
-        this.sql`SELECT outbound_paused, ai_processing_paused, direct_message_allowlist_json, personality_json, participation_json, skill_overrides_json FROM app_settings WHERE id = 1`,
+        this.sql`SELECT outbound_paused, ai_processing_paused, direct_message_allowlist_json, personality_json, participation_json, skill_overrides_json, dm_language_preferences_json FROM app_settings WHERE id = 1`,
       this.sql`SELECT id, email, password_hash, role, created_at FROM users`,
       this.sql`SELECT token_hash, user_id, created_at, expires_at FROM sessions WHERE expires_at > ${Date.now()}`,
     ]);
@@ -83,6 +84,7 @@ export class PostgresStore implements Store {
         personality: jsonObject(settingsRow.personality_json, {}),
         participation: jsonObject(settingsRow.participation_json, {}),
         skillOverrides: jsonObject(settingsRow.skill_overrides_json, {}) as Record<string, boolean>,
+        dmLanguagePreferences: jsonObject(settingsRow.dm_language_preferences_json, {}) as Record<string, LanguagePreference>,
       };
     }
     for (const row of users as Row[]) this.state.users[String(row.id)] = userFromRow(row);
@@ -113,9 +115,9 @@ export class PostgresStore implements Store {
       ...(update.personality ? { personality: { ...this.state.settings?.personality, ...update.personality } } : {}),
       ...(update.participation ? { participation: { ...this.state.settings?.participation, ...update.participation } } : {}),
     };
-    await this.sql`INSERT INTO app_settings (id, outbound_paused, ai_processing_paused, direct_message_allowlist_json, personality_json, participation_json, skill_overrides_json)
-      VALUES (1, ${this.state.settings.outboundPaused ?? false}, ${this.state.settings.aiProcessingPaused ?? false}, ${JSON.stringify(this.state.settings.directMessageAllowlist ?? [])}::jsonb, ${JSON.stringify(this.state.settings.personality ?? {})}::jsonb, ${JSON.stringify(this.state.settings.participation ?? {})}::jsonb, ${JSON.stringify(this.state.settings.skillOverrides ?? {})}::jsonb)
-      ON CONFLICT (id) DO UPDATE SET outbound_paused = EXCLUDED.outbound_paused, ai_processing_paused = EXCLUDED.ai_processing_paused, direct_message_allowlist_json = EXCLUDED.direct_message_allowlist_json, personality_json = EXCLUDED.personality_json, participation_json = EXCLUDED.participation_json, skill_overrides_json = EXCLUDED.skill_overrides_json`;
+    await this.sql`INSERT INTO app_settings (id, outbound_paused, ai_processing_paused, direct_message_allowlist_json, personality_json, participation_json, skill_overrides_json, dm_language_preferences_json)
+      VALUES (1, ${this.state.settings.outboundPaused ?? false}, ${this.state.settings.aiProcessingPaused ?? false}, ${JSON.stringify(this.state.settings.directMessageAllowlist ?? [])}::jsonb, ${JSON.stringify(this.state.settings.personality ?? {})}::jsonb, ${JSON.stringify(this.state.settings.participation ?? {})}::jsonb, ${JSON.stringify(this.state.settings.skillOverrides ?? {})}::jsonb, ${JSON.stringify(this.state.settings.dmLanguagePreferences ?? {})}::jsonb)
+      ON CONFLICT (id) DO UPDATE SET outbound_paused = EXCLUDED.outbound_paused, ai_processing_paused = EXCLUDED.ai_processing_paused, direct_message_allowlist_json = EXCLUDED.direct_message_allowlist_json, personality_json = EXCLUDED.personality_json, participation_json = EXCLUDED.participation_json, skill_overrides_json = EXCLUDED.skill_overrides_json, dm_language_preferences_json = EXCLUDED.dm_language_preferences_json`;
   }
 
   async updateMetrics(update: Partial<AppMetrics>): Promise<void> {
@@ -463,10 +465,11 @@ export class PostgresStore implements Store {
     await this.sql`CREATE TABLE IF NOT EXISTS users (id text PRIMARY KEY, email text UNIQUE NOT NULL, password_hash text NOT NULL, role text NOT NULL, created_at bigint NOT NULL)`;
     await this.sql`CREATE TABLE IF NOT EXISTS sessions (token_hash text PRIMARY KEY, user_id text NOT NULL, created_at bigint NOT NULL, expires_at bigint NOT NULL)`;
     await this.sql`CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions (expires_at)`;
-      await this.sql`CREATE TABLE IF NOT EXISTS app_settings (id integer PRIMARY KEY CHECK (id = 1), outbound_paused boolean NOT NULL DEFAULT false, ai_processing_paused boolean NOT NULL DEFAULT false, direct_message_allowlist_json jsonb NOT NULL DEFAULT '[]'::jsonb, personality_json jsonb NOT NULL DEFAULT '{}'::jsonb, participation_json jsonb NOT NULL DEFAULT '{}'::jsonb, skill_overrides_json jsonb NOT NULL DEFAULT '{}'::jsonb)`;
+      await this.sql`CREATE TABLE IF NOT EXISTS app_settings (id integer PRIMARY KEY CHECK (id = 1), outbound_paused boolean NOT NULL DEFAULT false, ai_processing_paused boolean NOT NULL DEFAULT false, direct_message_allowlist_json jsonb NOT NULL DEFAULT '[]'::jsonb, personality_json jsonb NOT NULL DEFAULT '{}'::jsonb, participation_json jsonb NOT NULL DEFAULT '{}'::jsonb, skill_overrides_json jsonb NOT NULL DEFAULT '{}'::jsonb, dm_language_preferences_json jsonb NOT NULL DEFAULT '{}'::jsonb)`;
       await this.sql`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS direct_message_allowlist_json jsonb NOT NULL DEFAULT '[]'::jsonb`;
       await this.sql`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS participation_json jsonb NOT NULL DEFAULT '{}'::jsonb`;
       await this.sql`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS skill_overrides_json jsonb NOT NULL DEFAULT '{}'::jsonb`;
+      await this.sql`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS dm_language_preferences_json jsonb NOT NULL DEFAULT '{}'::jsonb`;
     await this.sql`CREATE TABLE IF NOT EXISTS runtime_state (id integer PRIMARY KEY CHECK (id = 1), connection_status text NOT NULL, pairing_code text, last_connected_at bigint, metrics_json jsonb NOT NULL)`;
     await this.sql`INSERT INTO schema_migrations (version, applied_at) VALUES (1, ${Date.now()}) ON CONFLICT (version) DO NOTHING`;
   }

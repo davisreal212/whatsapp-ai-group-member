@@ -6,6 +6,8 @@ export type ConnectionStatus =
   | "RECONNECTING"
   | "REQUIRES_REPAIR";
 
+export type LanguagePreference = "english" | "pidgin" | "mixed";
+
 export type MessageType =
   | "text"
   | "image"
@@ -32,7 +34,7 @@ export interface Personality {
   talkativeness: number;
   confidence: number;
   formality: number;
-  languageMix: "english" | "pidgin" | "mixed";
+  languageMix: LanguagePreference;
   emojiFrequency: number;
   initiative: number;
   responseLength: "short" | "medium" | "long";
@@ -412,6 +414,7 @@ export interface PersistedState {
     personality?: Partial<Personality>;
     participation?: Partial<ParticipationSettings>;
     skillOverrides?: Record<string, boolean>;
+    dmLanguagePreferences?: Record<string, LanguagePreference>;
   };
   runtime: {
     connectionStatus: ConnectionStatus;

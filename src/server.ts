@@ -5,7 +5,7 @@ import { z } from "zod";
 import { AuthService, sessionCookieName } from "./auth.js";
 import type { AppConfig } from "./types.js";
 import type { BotRuntime } from "./bot.js";
-import { personalityPatchSchema } from "./persona.js";
+import { languagePreferenceSchema, personalityPatchSchema } from "./persona.js";
 
 export function createApp(runtime: BotRuntime, config: AppConfig) {
   const app = express();
@@ -113,6 +113,20 @@ export function createApp(runtime: BotRuntime, config: AppConfig) {
     try {
       await runtime.setPersonality(personalityPatchSchema.partial().parse(request.body));
       response.json(runtime.config.personality);
+    } catch (error) {
+      next(error);
+    }
+  });
+  app.get("/api/dm-preferences/:chatId/language", (request, response) => {
+    const chatId = z.string().trim().min(1).max(200).parse(request.params.chatId);
+    response.json({ chatId, language: runtime.dmLanguagePreference(chatId), personality: runtime.personalityForDm(chatId) });
+  });
+  app.post("/api/dm-preferences/:chatId/language", async (request, response, next) => {
+    try {
+      const chatId = z.string().trim().min(1).max(200).parse(request.params.chatId);
+      const body = z.object({ language: languagePreferenceSchema }).parse(request.body);
+      const message = await runtime.saveDmLanguagePreference(chatId, body.language);
+      response.json({ chatId, language: body.language, message, personality: runtime.personalityForDm(chatId) });
     } catch (error) {
       next(error);
     }

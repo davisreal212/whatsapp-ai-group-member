@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { WAMessage } from "@whiskeysockets/baileys";
 import { ActionService, type OutboundTransport } from "./actions.js";
 import { DecisionEngine } from "./decision.js";
-import type { AppConfig, CanonicalMessage, GroupRecord, InboundJobRecord, Personality, TaskRecord } from "./types.js";
+import type { AppConfig, CanonicalMessage, GroupRecord, InboundJobRecord, LanguagePreference, Personality, TaskRecord } from "./types.js";
 import { MemoryService } from "./memory.js";
 import { isCurrentInformationQuestion, evaluateInboundPolicy } from "./policy.js";
 import { ProviderRouter, type ProviderInput } from "./providers.js";
@@ -20,7 +20,7 @@ import type { ParticipationSettings } from "./types.js";
 import { isSafeHttpsUrl } from "./network.js";
 import { GeminiEmbeddingProvider, QdrantVectorMemoryProvider } from "./vector-memory.js";
 import { MemoryVectorWorker } from "./memory-vector-worker.js";
-import { previewPersonality, resolvePersonality } from "./persona.js";
+import { applyLanguagePreference, migrateLegacyPersonality, parseLanguageCommand, previewPersonality, resolvePersonality } from "./persona.js";
 import { createCoreSkillRegistry, SkillRegistry } from "./skills.js";
 
 export class BotRuntime {
@@ -76,7 +76,11 @@ export class BotRuntime {
     const pruned = await this.store.pruneExpired(this.config.messageRetentionDays);
     if (Object.values(pruned).some((count) => count > 0)) await this.log("retention.pruned", "info", { ...pruned });
     const settings = this.store.settings();
-    if (settings?.personality) this.config.personality = resolvePersonality(this.config.personality, settings.personality);
+    const storedPersonality = migrateLegacyPersonality(settings?.personality);
+    if (storedPersonality) {
+      this.config.personality = resolvePersonality(this.config.personality, storedPersonality);
+      if (storedPersonality !== settings?.personality) await this.store.updateSettings({ personality: storedPersonality });
+    }
     if (settings?.outboundPaused !== undefined) this.config.outboundPaused = settings.outboundPaused;
     if (settings?.aiProcessingPaused !== undefined) this.config.aiProcessingPaused = settings.aiProcessingPaused;
     if (settings?.directMessageAllowlist !== undefined) this.config.directMessageAllowlist = [...settings.directMessageAllowlist];
@@ -236,8 +240,19 @@ export class BotRuntime {
       await this.log("message.duplicate", "info", { reason: "event_id_already_seen" }, message);
       return;
     }
+    if (!message.isGroup) {
+      const languageCommand = parseLanguageCommand(message.text ?? "");
+      if (languageCommand) {
+        const current = this.dmLanguagePreference(message.chatId);
+        const reply = languageCommand === "help"
+          ? `Your saved reply language is ${current}. Use "language english", "language pidgin", or "language mixed" to change it.`
+          : await this.saveDmLanguagePreference(message.chatId, languageCommand);
+        await this.executeTaskResult({ reply }, message, group);
+        return;
+      }
+    }
     const contextGroup = group ?? directMessageContext(message.chatId);
-    const personality = this.personality(contextGroup);
+    const personality = this.personality(contextGroup, message.isGroup ? undefined : this.dmLanguagePreference(message.chatId));
     if (personality.memoryEnabled) await this.memory.observe(message);
     const context = personality.memoryEnabled
       ? await this.memory.contextWithSemantic(contextGroup, message.senderId, personality, message.text ?? message.media?.caption ?? "")
@@ -450,6 +465,10 @@ export class BotRuntime {
     return this.personality(this.store.group(groupId) ?? directMessageContext(groupId));
   }
 
+  personalityForDm(chatId: string): Personality {
+    return this.personality(directMessageContext(chatId), this.dmLanguagePreference(chatId));
+  }
+
   previewPersona(message: string, groupId?: string): string {
     return previewPersonality(message, this.personalityForGroup(groupId));
   }
@@ -458,6 +477,21 @@ export class BotRuntime {
     this.skills.setEnabled(skillId, enabled);
     await this.store.updateSettings({ skillOverrides: { ...(this.store.settings()?.skillOverrides ?? {}), [skillId]: enabled } });
     await this.log("skill.configuration_changed", "info", { skillId, enabled });
+  }
+
+  dmLanguagePreference(chatId: string): LanguagePreference {
+    const preference = this.store.settings()?.dmLanguagePreferences?.[chatId];
+    return preference === "pidgin" || preference === "mixed" ? preference : "english";
+  }
+
+  async saveDmLanguagePreference(chatId: string, preference: LanguagePreference): Promise<string> {
+    const preferences = { ...(this.store.settings()?.dmLanguagePreferences ?? {}), [chatId]: preference };
+    await this.store.updateSettings({ dmLanguagePreferences: preferences });
+    this.personaCache.delete(chatId);
+    await this.log("dm.language_changed", "info", { chatId, preference });
+    if (preference === "english") return "English is now your saved reply language. I will use standard English and avoid Nigerian Pidgin unless you ask for it.";
+    if (preference === "pidgin") return "Nigerian Pidgin is now your saved reply language.";
+    return "Mixed English and Nigerian Pidgin is now your saved reply language.";
   }
 
   async resetMemory(scopeId: string): Promise<number> {
@@ -573,12 +607,13 @@ export class BotRuntime {
     return { status: connection === "CONNECTED" ? "ok" : "degraded", connection, ready: connection === "CONNECTED", workers: dashboard.workers as Record<string, unknown> };
   }
 
-  private personality(group: GroupRecord) {
+  private personality(group: GroupRecord, languagePreference?: LanguagePreference) {
     const cached = this.personaCache.get(group.id);
-    if (cached) return cached;
+    if (cached && (!languagePreference || cached.languageMix === languagePreference)) return cached;
     const resolved = resolvePersonality(this.config.personality, group.personalityOverride);
-    this.personaCache.set(group.id, resolved);
-    return resolved;
+    const personalized = languagePreference ? applyLanguagePreference(resolved, languagePreference) : resolved;
+    this.personaCache.set(group.id, personalized);
+    return personalized;
   }
 
   private async drainInboundJobs(): Promise<void> {

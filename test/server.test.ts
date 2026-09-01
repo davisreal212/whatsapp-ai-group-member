@@ -48,6 +48,16 @@ describe("admin HTTP surface", () => {
       body: JSON.stringify({ displayName: "Sarah", humorLevel: 80, personalityPresets: ["Funny"] }),
     });
     expect(await savedPersona.json()).toMatchObject({ displayName: "Sarah", humorLevel: 0.8, personalityPresets: ["Funny"] });
+    const dmLanguage = await fetch(`${base}/api/dm-preferences/234%40s.whatsapp.net/language`, { headers: { authorization: "Bearer test-token-that-is-long-enough" } });
+    expect((await dmLanguage.json()).language).toBe("english");
+    const savedDmLanguage = await fetch(`${base}/api/dm-preferences/234%40s.whatsapp.net/language`, {
+      method: "POST",
+      headers: { authorization: "Bearer test-token-that-is-long-enough", "content-type": "application/json" },
+      body: JSON.stringify({ language: "pidgin" }),
+    });
+    expect(await savedDmLanguage.json()).toMatchObject({ chatId: "234@s.whatsapp.net", language: "pidgin" });
+    const rememberedDmLanguage = await fetch(`${base}/api/dm-preferences/234%40s.whatsapp.net/language`, { headers: { authorization: "Bearer test-token-that-is-long-enough" } });
+    expect((await rememberedDmLanguage.json()).personality.languageMix).toBe("pidgin");
 
     const allowlist = await fetch(`${base}/api/dm-allowlist`, {
       method: "POST",
