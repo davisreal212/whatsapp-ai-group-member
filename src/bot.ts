@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { WAMessage } from "@whiskeysockets/baileys";
 import { ActionService, type OutboundTransport } from "./actions.js";
 import { DecisionEngine } from "./decision.js";
-import type { AppConfig, CanonicalMessage, GroupRecord, InboundJobRecord, TaskRecord } from "./types.js";
+import type { AppConfig, CanonicalMessage, GroupRecord, InboundJobRecord, Personality, TaskRecord } from "./types.js";
 import { MemoryService } from "./memory.js";
 import { isCurrentInformationQuestion, evaluateInboundPolicy } from "./policy.js";
 import { ProviderRouter, type ProviderInput } from "./providers.js";
@@ -20,6 +20,8 @@ import type { ParticipationSettings } from "./types.js";
 import { isSafeHttpsUrl } from "./network.js";
 import { GeminiEmbeddingProvider, QdrantVectorMemoryProvider } from "./vector-memory.js";
 import { MemoryVectorWorker } from "./memory-vector-worker.js";
+import { previewPersonality, resolvePersonality } from "./persona.js";
+import { createCoreSkillRegistry, SkillRegistry } from "./skills.js";
 
 export class BotRuntime {
   readonly memory: MemoryService;
@@ -31,7 +33,9 @@ export class BotRuntime {
   readonly media: MediaProcessor;
   readonly backups: BackupService;
   readonly memoryVector: MemoryVectorWorker;
+  readonly skills: SkillRegistry;
   private readonly inboundQueue = new KeyedJobQueue(4);
+  private readonly personaCache = new Map<string, Personality>();
   private lastDecisionDiagnostics?: Record<string, unknown>;
   private memoryMaintenanceTimer?: ReturnType<typeof setInterval>;
 
@@ -60,6 +64,7 @@ export class BotRuntime {
     this.providers = new ProviderRouter(store, config);
     this.research = new ResearchService(store, [new TavilyProvider(config.tavilyApiKey), new DuckDuckGoProvider()], [new DuckDuckGoImageProvider(), new WikimediaImageProvider()], (memory) => this.memoryVector.enqueue(memory));
     this.decisions = new DecisionEngine(this.providers);
+    this.skills = createCoreSkillRegistry();
     this.actions = new ActionService(store, config, transport);
     this.tasks = new TaskService(store, config, transport);
     this.media = new MediaProcessor(new FallbackSpeechToTextProvider([new GroqSpeechToTextProvider(config.groqApiKey), new ElevenLabsSpeechToTextProvider(config.elevenLabsApiKey)]), new GeminiVisionProvider(config.geminiApiKey, config.geminiModel), new FallbackTextToSpeechProvider([new OpenAITextToSpeechProvider(config.ttsApiKey, config.ttsBaseUrl, config.ttsModel, config.ttsVoice), new ElevenLabsTextToSpeechProvider(config.elevenLabsApiKey, config.elevenLabsVoiceId)]), config.mediaDownloadsPerHour);
@@ -71,11 +76,15 @@ export class BotRuntime {
     const pruned = await this.store.pruneExpired(this.config.messageRetentionDays);
     if (Object.values(pruned).some((count) => count > 0)) await this.log("retention.pruned", "info", { ...pruned });
     const settings = this.store.settings();
-    if (settings?.personality) this.config.personality = { ...this.config.personality, ...settings.personality };
+    if (settings?.personality) this.config.personality = resolvePersonality(this.config.personality, settings.personality);
     if (settings?.outboundPaused !== undefined) this.config.outboundPaused = settings.outboundPaused;
     if (settings?.aiProcessingPaused !== undefined) this.config.aiProcessingPaused = settings.aiProcessingPaused;
     if (settings?.directMessageAllowlist !== undefined) this.config.directMessageAllowlist = [...settings.directMessageAllowlist];
     if (settings?.participation) this.config.participation = { ...this.config.participation, ...settings.participation };
+    for (const [skillId, enabled] of Object.entries(settings?.skillOverrides ?? {})) {
+      if (this.skills.get(skillId)) this.skills.setEnabled(skillId, enabled);
+    }
+    this.personaCache.clear();
     this.config.groupCooldownMs = this.config.participation.groupCooldownMs;
     if (!settings) {
       await this.store.updateSettings({ outboundPaused: this.config.outboundPaused, aiProcessingPaused: this.config.aiProcessingPaused, directMessageAllowlist: this.config.directMessageAllowlist, personality: this.config.personality, participation: this.config.participation });
@@ -225,10 +234,14 @@ export class BotRuntime {
     const stored = await this.store.storeMessage({ ...message, storedAt: Date.now() });
     if (!stored) {
       await this.log("message.duplicate", "info", { reason: "event_id_already_seen" }, message);
+      return;
     }
-    await this.memory.observe(message);
     const contextGroup = group ?? directMessageContext(message.chatId);
-    const context = await this.memory.contextWithSemantic(contextGroup, message.senderId, this.personality(contextGroup), message.text ?? message.media?.caption ?? "");
+    const personality = this.personality(contextGroup);
+    if (personality.memoryEnabled) await this.memory.observe(message);
+    const context = personality.memoryEnabled
+      ? await this.memory.contextWithSemantic(contextGroup, message.senderId, personality, message.text ?? message.media?.caption ?? "")
+      : { ...this.memory.context(contextGroup, message.senderId, personality, ""), memories: [], member: undefined };
     if (!message.isGroup) {
       const task = await this.tasks.handleMessage(message);
       if (task.handled) {
@@ -246,7 +259,7 @@ export class BotRuntime {
       await this.executeTaskResult({ reply: dateTimeReply }, message, group);
       return;
     }
-    const result = await this.decisions.decide(message, contextGroup, context, { ...this.config, alwaysReplyToAllowedDm: !message.isGroup });
+    const result = await this.decisions.decide(message, contextGroup, context, { ...this.config, botName: personality.displayName, alwaysReplyToAllowedDm: !message.isGroup });
     this.lastDecisionDiagnostics = {
       messageId: message.id,
       ...(message.groupId ? { groupId: message.groupId } : { chatId: message.chatId }),
@@ -280,7 +293,7 @@ export class BotRuntime {
     }
     const currentQuestion = isCurrentInformationQuestion(message.text ?? "");
     this.lastDecisionDiagnostics = { ...this.lastDecisionDiagnostics, searchRequired: Boolean(plan.needsWeb || currentQuestion), mediaSearchRequired: plan.decision === "SEND_IMAGE" };
-    const evidence = plan.decision !== "IGNORE" && (plan.needsWeb || currentQuestion)
+    const evidence = plan.decision !== "IGNORE" && personality.webSearchEnabled && (plan.needsWeb || currentQuestion)
       ? await this.research.research(message.text ?? "", this.config.tavilyMaxResults)
       : undefined;
     if (plan.needsWeb || currentQuestion) {
@@ -319,7 +332,7 @@ export class BotRuntime {
       const response = await this.providers.generateResponse(input, message.groupId);
       if (response) plan = { ...plan, text: response };
     }
-    if ((plan.decision === "SEND_AUDIO" || this.shouldUseAudioReply(message)) && plan.text && plan.decision !== "REACT" && plan.decision !== "IGNORE") {
+    if ((plan.decision === "SEND_AUDIO" || this.shouldUseAudioReply(message, personality)) && plan.text && plan.decision !== "REACT" && plan.decision !== "IGNORE") {
       try {
         const audio = await this.media.synthesizeSpeech(plan.text);
         const audioPlan = { ...plan, decision: "SEND_AUDIO" as const, text: undefined, mediaUrl: undefined, mediaMimeType: audio.mimeType };
@@ -402,7 +415,11 @@ export class BotRuntime {
   }
 
   async setGroupPersonality(id: string, personality: Partial<AppConfig["personality"]>): Promise<GroupRecord | undefined> {
-    const group = await this.store.updateGroup(id, { personalityOverride: personality });
+    const current = this.store.group(id);
+    if (!current) return undefined;
+    const merged = { ...(current.personalityOverride ?? {}), ...personality };
+    const group = await this.store.updateGroup(id, { personalityOverride: merged });
+    this.personaCache.delete(id);
     if (group) await this.log("group.personality_changed", "info", { fields: Object.keys(personality) }, undefined, id);
     return group;
   }
@@ -422,9 +439,25 @@ export class BotRuntime {
   }
 
   async setPersonality(personality: Partial<AppConfig["personality"]>): Promise<void> {
-    this.config.personality = { ...this.config.personality, ...personality };
-    await this.store.updateSettings({ personality });
+    this.config.personality = resolvePersonality(this.config.personality, personality);
+    this.personaCache.clear();
+    await this.store.updateSettings({ personality: this.config.personality });
     await this.log("personality.changed", "info", { fields: Object.keys(personality) });
+  }
+
+  personalityForGroup(groupId?: string): Personality {
+    if (!groupId) return this.config.personality;
+    return this.personality(this.store.group(groupId) ?? directMessageContext(groupId));
+  }
+
+  previewPersona(message: string, groupId?: string): string {
+    return previewPersonality(message, this.personalityForGroup(groupId));
+  }
+
+  async setSkillEnabled(skillId: string, enabled: boolean): Promise<void> {
+    this.skills.setEnabled(skillId, enabled);
+    await this.store.updateSettings({ skillOverrides: { ...(this.store.settings()?.skillOverrides ?? {}), [skillId]: enabled } });
+    await this.log("skill.configuration_changed", "info", { skillId, enabled });
   }
 
   async resetMemory(scopeId: string): Promise<number> {
@@ -498,6 +531,8 @@ export class BotRuntime {
         mediaDownloadsPerHour: this.config.mediaDownloadsPerHour,
       },
       participation: this.config.participation,
+      personality: this.config.personality,
+      skills: this.skills.list(),
       diagnostics: this.lastDecisionDiagnostics,
       groups: this.store.groups(),
       groupActivity: Object.fromEntries(this.store.groups().map((group) => [group.id, groupActivityState(this.store, group.id, groupParticipation(group, this.config.participation))])),
@@ -539,7 +574,11 @@ export class BotRuntime {
   }
 
   private personality(group: GroupRecord) {
-    return { ...this.config.personality, ...(group.personalityOverride ?? {}) };
+    const cached = this.personaCache.get(group.id);
+    if (cached) return cached;
+    const resolved = resolvePersonality(this.config.personality, group.personalityOverride);
+    this.personaCache.set(group.id, resolved);
+    return resolved;
   }
 
   private async drainInboundJobs(): Promise<void> {
@@ -549,8 +588,8 @@ export class BotRuntime {
     }
   }
 
-  private shouldUseAudioReply(message: CanonicalMessage): boolean {
-    return this.config.audioReplyMode === "always" || (this.config.audioReplyMode === "adaptive" && message.type === "audio");
+  private shouldUseAudioReply(message: CanonicalMessage, personality = this.config.personality): boolean {
+    return personality.voiceSkillsEnabled && (this.config.audioReplyMode === "always" || (this.config.audioReplyMode === "adaptive" && message.type === "audio"));
   }
 
   private async executeTaskResult(result: { reply?: string }, message: CanonicalMessage, group?: GroupRecord): Promise<void> {

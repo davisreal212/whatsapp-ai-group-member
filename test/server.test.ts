@@ -36,6 +36,16 @@ describe("admin HTTP surface", () => {
     expect(status.status).toBe(200);
     expect((await status.json()).safety.groupOnlyMode).toBe(false);
 
+    const persona = await fetch(`${base}/api/personality`, { headers: { authorization: "Bearer test-token-that-is-long-enough" } });
+    expect(persona.status).toBe(200);
+    expect((await persona.json()).displayName).toBe("Kola");
+    const savedPersona = await fetch(`${base}/api/personality`, {
+      method: "POST",
+      headers: { authorization: "Bearer test-token-that-is-long-enough", "content-type": "application/json" },
+      body: JSON.stringify({ displayName: "Sarah", humorLevel: 80, personalityPresets: ["Funny"] }),
+    });
+    expect(await savedPersona.json()).toMatchObject({ displayName: "Sarah", humorLevel: 0.8, personalityPresets: ["Funny"] });
+
     const allowlist = await fetch(`${base}/api/dm-allowlist`, {
       method: "POST",
       headers: { authorization: "Bearer test-token-that-is-long-enough", "content-type": "application/json" },
@@ -51,6 +61,26 @@ describe("admin HTTP surface", () => {
 
     await runtime.syncGroups([{ id: "old@g.us", subject: "Old group", participantCount: 1, isAdmin: true }]);
     expect(runtime.store.groups()).toHaveLength(1);
+    const firstGroupPersona = await fetch(`${base}/api/groups/old@g.us/personality`, {
+      method: "POST",
+      headers: { authorization: "Bearer test-token-that-is-long-enough", "content-type": "application/json" },
+      body: JSON.stringify({ tone: "formal" }),
+    });
+    expect((await firstGroupPersona.json()).personalityOverride).toMatchObject({ tone: "formal" });
+    const secondGroupPersona = await fetch(`${base}/api/groups/old@g.us/personality`, {
+      method: "POST",
+      headers: { authorization: "Bearer test-token-that-is-long-enough", "content-type": "application/json" },
+      body: JSON.stringify({ humorLevel: 90 }),
+    });
+    expect((await secondGroupPersona.json()).personalityOverride).toMatchObject({ tone: "formal", humorLevel: 0.9 });
+    const preview = await fetch(`${base}/api/personality/preview`, {
+      method: "POST",
+      headers: { authorization: "Bearer test-token-that-is-long-enough", "content-type": "application/json" },
+      body: JSON.stringify({ message: "What are you doing?", groupId: "old@g.us" }),
+    });
+    expect((await preview.json()).response).toContain("I");
+    const skills = await fetch(`${base}/api/skills`, { headers: { authorization: "Bearer test-token-that-is-long-enough" } });
+    expect((await skills.json()).length).toBeGreaterThan(20);
     await runtime.store.upsertMemory({ id: "memory", scopeType: "group", scopeId: "old@g.us", memoryType: "topic", value: { topic: "bitcoin" }, confidence: 0.8, importance: 0.5, status: "ACTIVE", evidenceCount: 1, createdAt: Date.now(), lastConfirmedAt: Date.now(), updatedAt: Date.now() });
     const memoryStatus = await fetch(`${base}/api/status`, { headers: { authorization: "Bearer test-token-that-is-long-enough" } });
     expect((await memoryStatus.json()).memory).toMatchObject({ storedMemories: 1, activeMemories: 1, groups: 1 });

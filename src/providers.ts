@@ -3,6 +3,7 @@ import type { ContextSnapshot } from "./memory.js";
 import type { Store } from "./store.js";
 import { parseDecisionPlan } from "./decision.js";
 import { formatNigeriaDateTime, NIGERIA_TIME_ZONE } from "./time.js";
+import { personaInstructions } from "./persona.js";
 
 export interface ProviderInput {
   messageText: string;
@@ -70,6 +71,7 @@ abstract class BaseProvider implements AIProvider {
       ...(input.transcriptConfidence !== undefined ? [`Transcript confidence: ${input.transcriptConfidence}`] : []),
       ...(input.transcriptLanguage ? [`Transcript language: ${input.transcriptLanguage}`] : []),
       `Sender: ${input.senderName ?? "unknown"}`,
+      ...personaInstructions(input.context.personality).map((instruction) => `Persona policy: ${instruction}`),
       `Current local time: ${formatNigeriaDateTime()} (${NIGERIA_TIME_ZONE}). Interpret today, tomorrow, morning, and evening using Nigeria time.`,
       `Message DATA: ${input.messageText || "[no text]"}`,
       ...(input.transcriptConfidence !== undefined ? [`Transcript confidence: ${input.transcriptConfidence}`] : []),
@@ -82,6 +84,7 @@ abstract class BaseProvider implements AIProvider {
     return [
       "Write one natural, concise WhatsApp group reply to the incoming message.",
       "Sound like a real person in this chat, not a support bot or an assistant. Never say 'as an AI', 'I understand', or add a canned preamble.",
+      ...personaInstructions(input.context.personality).map((instruction) => `Persona policy: ${instruction}`),
       "Reply in the same language as the incoming message or transcript. Preserve Nigerian English, Pidgin, Yoruba, Igbo, Hausa, and code-switching when the sender uses them; do not translate unless asked.",
       "For an audio message, treat the transcript as the sender's actual words. If a reply is needed, keep it natural and easy to speak aloud.",
       "Respond to the actual message DATA, not to the group in general. For a greeting, mirror its meaning and time of day; do not turn good morning into good night or invent an unrelated announcement.",

@@ -5,6 +5,7 @@ import { z } from "zod";
 import { AuthService, sessionCookieName } from "./auth.js";
 import type { AppConfig } from "./types.js";
 import type { BotRuntime } from "./bot.js";
+import { personalityPatchSchema } from "./persona.js";
 
 export function createApp(runtime: BotRuntime, config: AppConfig) {
   const app = express();
@@ -56,6 +57,7 @@ export function createApp(runtime: BotRuntime, config: AppConfig) {
 
   app.use("/api", requireAdmin(config, auth));
   app.get("/api/status", (_request, response) => response.json(runtime.dashboardState()));
+  app.get("/api/personality", (_request, response) => response.json(runtime.personalityForGroup()));
   app.get("/api/groups", (_request, response) => response.json(runtime.store.groups()));
   app.post("/api/groups/sync", async (_request, response, next) => {
     try {
@@ -99,7 +101,7 @@ export function createApp(runtime: BotRuntime, config: AppConfig) {
   });
   app.post("/api/groups/:id/personality", async (request, response, next) => {
     try {
-      const body = personalitySchema.partial().parse(request.body);
+      const body = personalityPatchSchema.partial().parse(request.body);
       const group = await runtime.setGroupPersonality(request.params.id, body);
       if (!group) return response.status(404).json({ error: "Group not found" });
       response.json(group);
@@ -109,8 +111,31 @@ export function createApp(runtime: BotRuntime, config: AppConfig) {
   });
   app.post("/api/personality", async (request, response, next) => {
     try {
-      await runtime.setPersonality(personalitySchema.partial().parse(request.body));
+      await runtime.setPersonality(personalityPatchSchema.partial().parse(request.body));
       response.json(runtime.config.personality);
+    } catch (error) {
+      next(error);
+    }
+  });
+  app.get("/api/groups/:id/personality", (request, response) => {
+    const group = runtime.store.group(request.params.id);
+    if (!group) return response.status(404).json({ error: "Group not found" });
+    response.json({ groupId: group.id, personality: runtime.personalityForGroup(group.id), override: group.personalityOverride ?? {} });
+  });
+  app.post("/api/personality/preview", (request, response, next) => {
+    try {
+      const body = z.object({ message: z.string().trim().min(1).max(2_000), groupId: z.string().trim().min(1).max(200).optional() }).parse(request.body);
+      response.json({ response: runtime.previewPersona(body.message, body.groupId) });
+    } catch (error) {
+      next(error);
+    }
+  });
+  app.get("/api/skills", (_request, response) => response.json(runtime.skills.list()));
+  app.post("/api/skills/:id/enabled", async (request, response, next) => {
+    try {
+      const body = z.object({ enabled: z.boolean() }).parse(request.body);
+      await runtime.setSkillEnabled(request.params.id, body.enabled);
+      response.json(runtime.skills.list().find((skill) => skill.skillId === request.params.id));
     } catch (error) {
       next(error);
     }
@@ -269,19 +294,6 @@ export function createApp(runtime: BotRuntime, config: AppConfig) {
   });
   return app;
 }
-
-const personalitySchema = z.object({
-  displayName: z.string().min(1).max(40),
-  genderPresentation: z.enum(["neutral", "masculine", "feminine"]),
-  tone: z.enum(["casual", "playful", "warm", "formal"]),
-  talkativeness: z.number().min(0).max(1),
-  confidence: z.number().min(0).max(1),
-  formality: z.number().min(0).max(1),
-  languageMix: z.enum(["english", "pidgin", "mixed"]),
-  emojiFrequency: z.number().min(0).max(1),
-  initiative: z.number().min(0).max(1),
-  responseLength: z.enum(["short", "medium", "long"]),
-});
 
 const participationFieldsSchema = z.object({
   groupCooldownMs: z.coerce.number().int().min(0).max(86_400_000),

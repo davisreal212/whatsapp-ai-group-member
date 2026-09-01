@@ -3,6 +3,7 @@ import { isAbsolute } from "node:path";
 import { z } from "zod";
 import type { AppConfig, Personality } from "./types.js";
 import { DEFAULT_PARTICIPATION } from "./participation.js";
+import { defaultPersonality } from "./persona.js";
 
 const optionalString = z.preprocess(
   (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
@@ -103,18 +104,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     throw new Error("DATA_DIR and WHATSAPP_AUTH_DIR must be absolute persistent paths in production");
   }
 
-  const personality: Personality = {
-    displayName: values.BOT_NAME,
-    genderPresentation: "neutral",
-    tone: "casual",
-    talkativeness: 0.35,
-    confidence: 0.7,
-    formality: 0.25,
-    languageMix: "mixed",
-    emojiFrequency: 0.15,
-    initiative: 0.3,
-    responseLength: "short",
-  };
+  const personality: Personality = defaultPersonality(values.BOT_NAME);
 
   return {
     nodeEnv: values.NODE_ENV,

@@ -27,7 +27,7 @@ export type Decision =
 
 export interface Personality {
   displayName: string;
-  genderPresentation: "neutral" | "masculine" | "feminine";
+  genderPresentation: "neutral" | "masculine" | "feminine" | "custom";
   tone: "casual" | "playful" | "warm" | "formal";
   talkativeness: number;
   confidence: number;
@@ -36,6 +36,20 @@ export interface Personality {
   emojiFrequency: number;
   initiative: number;
   responseLength: "short" | "medium" | "long";
+  customDescription?: string;
+  personalityPresets: string[];
+  humorLevel: number;
+  languages: string[];
+  respondToMentions: boolean;
+  respondToReplies: boolean;
+  joinRelevantConversations: boolean;
+  initiateConversations: boolean;
+  initiationIntervalMs: number;
+  maxDailyInitiations: number;
+  memoryEnabled: boolean;
+  webSearchEnabled: boolean;
+  mediaSkillsEnabled: boolean;
+  voiceSkillsEnabled: boolean;
 }
 
 export interface ParticipationSettings {
@@ -397,6 +411,7 @@ export interface PersistedState {
     directMessageAllowlist?: string[];
     personality?: Partial<Personality>;
     participation?: Partial<ParticipationSettings>;
+    skillOverrides?: Record<string, boolean>;
   };
   runtime: {
     connectionStatus: ConnectionStatus;

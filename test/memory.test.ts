@@ -25,6 +25,7 @@ describe("conversation memory", () => {
     const context = memory.context({ id: message.chatId, subject: "Direct message", participantCount: 1, whatsappGroupId: message.chatId, isAdmin: false, enabled: true, aiPaused: false, lastSeenAt: Date.now() }, message.senderId, loadConfig({ NODE_ENV: "test" }).personality);
     expect(context.recentMessages[0]?.text).toBe(message.text);
     expect(context.member?.behaviorProfile.messageCount).toBe(1);
+    expect(context.member?.behaviorProfile.initiates).toBe(1);
     expect(context.memories[0]?.type).toBe("communication-style");
     const style = store.memories(`${message.chatId}:${message.senderId}`)[0];
     expect(style).toMatchObject({ importance: 0.25, status: "WEAK", sourceMessageId: message.id, sourceTimestamp: message.timestamp, sourceMemberId: message.senderId });

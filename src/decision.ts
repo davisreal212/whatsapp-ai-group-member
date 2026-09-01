@@ -1,8 +1,9 @@
 import { z } from "zod";
-import type { AppConfig, CanonicalMessage, DecisionPlan, GroupRecord } from "./types.js";
+import type { AppConfig, CanonicalMessage, DecisionPlan, GroupRecord, Personality } from "./types.js";
 import type { ContextSnapshot } from "./memory.js";
 import type { ProviderRouter, ProviderInput } from "./providers.js";
 import { DEFAULT_PARTICIPATION, naturalDelay, participationSignals, shouldBypassCooldown, type ActionPriority } from "./participation.js";
+import { responsePolicy } from "./persona.js";
 
 const decisionSchema = z.object({
   decision: z.enum(["IGNORE", "REACT", "REPLY", "REPLY_QUOTED", "MENTION_REPLY", "SEND_IMAGE", "SEND_AUDIO"]),
@@ -71,10 +72,13 @@ export interface LocalRelevance {
   priority?: ActionPriority;
 }
 
-export function localRelevance(message: CanonicalMessage, botName: string, botJid?: string, talkativeness = 0.35, botJids: string[] = [], alwaysReplyToAllowedDm = false): LocalRelevance {
+export function localRelevance(message: CanonicalMessage, botName: string, botJid?: string, talkativeness = 0.35, botJids: string[] = [], alwaysReplyToAllowedDm = false, personality?: Pick<Personality, "respondToMentions" | "respondToReplies" | "joinRelevantConversations">): LocalRelevance {
   const text = message.text ?? "";
   if (!message.isGroup && alwaysReplyToAllowedDm) return { relevant: true, reason: "allowlisted_dm", directed: true };
   const signals = participationSignals(message, botName, botJid, botJids);
+  if (signals.directMention && !signals.directReply && personality?.respondToMentions === false) return { relevant: false, reason: "mentions_disabled", ...signals };
+  if (signals.directReply && personality?.respondToReplies === false) return { relevant: false, reason: "replies_disabled", ...signals };
+  if (message.isGroup && !signals.directed && personality?.joinRelevantConversations === false) return { relevant: false, reason: "conversation_joining_disabled", ...signals };
   if (isMediaRequestText(text)) return { relevant: true, reason: "media_request", ...signals, directed: true, priority: "HIGH" };
   if (signals.directed) return { relevant: true, reason: "directed_to_bot", ...signals };
   if (message.quotedMessageId) return { relevant: true, reason: "reply_or_quote", ...signals };
@@ -105,10 +109,18 @@ export class DecisionEngine {
     context: ContextSnapshot,
     config: Pick<AppConfig, "botName" | "botJid"> & Partial<Pick<AppConfig, "botJids" | "participation">> & { alwaysReplyToAllowedDm?: boolean },
   ): Promise<{ plan: DecisionPlan; local: LocalRelevance; usedAi: boolean }> {
-    const local = localRelevance(message, config.botName, config.botJid, context.personality.talkativeness, config.botJids ?? [], config.alwaysReplyToAllowedDm ?? false);
+    const local = localRelevance(message, config.botName, config.botJid, context.personality.talkativeness, config.botJids ?? [], config.alwaysReplyToAllowedDm ?? false, context.personality);
     if (!local.relevant) {
       return { plan: ignorePlan("Local relevance gate chose silence."), local, usedAi: false };
     }
+    const policy = responsePolicy(context.personality, message, {
+      directed: local.directed,
+      directReply: local.directReply === true,
+      directMention: local.directMention === true,
+      mentionAll: local.mentionAll === true,
+      priority: local.priority ?? "NORMAL",
+    }, local.relevant);
+    if (!policy.shouldReply) return { plan: ignorePlan("Persona response policy chose silence."), local, usedAi: false };
     if (message.transcriptConfidence !== undefined && message.transcriptConfidence < 0.45) {
       return {
         plan: {
@@ -150,7 +162,13 @@ export class DecisionEngine {
         usedAi: false,
       };
     }
-    const safeResponsePlan = mediaRequest && responsePlan.decision === "IGNORE" ? mediaRequestPlan() : responsePlan;
+    let safeResponsePlan = mediaRequest && responsePlan.decision === "IGNORE" ? mediaRequestPlan() : responsePlan;
+    if (safeResponsePlan.decision === "SEND_IMAGE" && !context.personality.mediaSkillsEnabled) {
+      safeResponsePlan = { ...safeResponsePlan, decision: "REPLY", reason: "media_skills_disabled", needsMedia: false, text: "I can't send media in this group right now." };
+    }
+    if (safeResponsePlan.decision === "SEND_AUDIO" && !context.personality.voiceSkillsEnabled) {
+      safeResponsePlan = { ...safeResponsePlan, decision: "REPLY", reason: "voice_skills_disabled", needsMedia: false, text: "I can't send a voice note right now, so I'll reply in text." };
+    }
     const participation = config.participation ?? { ...DEFAULT_PARTICIPATION };
     const directReply = local.directReply === true;
     const directMention = local.directMention === true;

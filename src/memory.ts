@@ -50,6 +50,10 @@ export class MemoryService {
     const candidateText = memoryCandidateText(text);
     const previousCount = previous?.behaviorProfile.messageCount ?? 0;
     const count = previousCount + 1;
+    const recentBefore = conversationId.endsWith("@g.us")
+      ? this.store.recentMessages(conversationId, 20).filter((item) => item.id !== message.id)
+      : this.store.recentChatMessages(conversationId, 20).filter((item) => item.id !== message.id);
+    const initiates = !message.quotedMessageId && !recentBefore.some((item) => item.senderId !== message.senderId && now - item.timestamp <= 5 * 60_000);
     const profile = {
       averageMessageLength: previous
         ? (previous.behaviorProfile.averageMessageLength * previousCount + text.length) / count
@@ -63,7 +67,7 @@ export class MemoryService {
           ? { languageStyle: previous.behaviorProfile.languageStyle }
           : {}),
       messageCount: count,
-      initiates: previous?.behaviorProfile.initiates ?? 0,
+      initiates: (previous?.behaviorProfile.initiates ?? 0) + (initiates ? 1 : 0),
       replies: (previous?.behaviorProfile.replies ?? 0) + (message.quotedMessageId ? 1 : 0),
     } as MemberRecord["behaviorProfile"];
     const member: MemberRecord = {
