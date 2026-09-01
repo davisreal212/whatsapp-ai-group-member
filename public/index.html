@@ -378,5 +378,23 @@
       render = (data) => { previousRender(data); renderPersona(data); };
     })();
   </script>
+  <script>
+    (() => {
+      const previousRender = render;
+      render = (data) => {
+        previousRender(data);
+        const runtime = data.connection || {};
+        const pairing = $('pairing');
+        pairing.textContent = runtime.pairingCode
+          ? `Enter this code in WhatsApp: ${runtime.pairingCode}`
+          : runtime.connectionStatus === 'PAIRING'
+            ? 'Pairing code is being generated...'
+            : runtime.connectionStatus === 'CONNECTED'
+              ? 'Connected and receiving events.'
+              : 'No active WhatsApp session.';
+        pairing.style.fontWeight = runtime.pairingCode ? '800' : '';
+      };
+    })();
+  </script>
 </body>
 </html>

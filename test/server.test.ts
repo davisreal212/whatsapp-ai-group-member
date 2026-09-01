@@ -35,6 +35,9 @@ describe("admin HTTP surface", () => {
     const status = await fetch(`${base}/api/status`, { headers: { authorization: "Bearer test-token-that-is-long-enough" } });
     expect(status.status).toBe(200);
     expect((await status.json()).safety.groupOnlyMode).toBe(false);
+    await runtime.store.setConnection("PAIRING", "ABCD-EFGH");
+    const pairingStatus = await fetch(`${base}/api/status`, { headers: { authorization: "Bearer test-token-that-is-long-enough" } });
+    expect((await pairingStatus.json()).connection).toMatchObject({ connectionStatus: "PAIRING", pairingCode: "ABCD-EFGH" });
 
     const persona = await fetch(`${base}/api/personality`, { headers: { authorization: "Bearer test-token-that-is-long-enough" } });
     expect(persona.status).toBe(200);
