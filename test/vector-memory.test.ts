@@ -43,8 +43,8 @@ describe("vector memory adapters", () => {
     const result = await provider.search([0.1, 0.2, 0.3], { groupId: memory.scopeId, memoryType: "topic" });
     await provider.delete(memory.id);
     expect(result[0]).toMatchObject({ score: 0.91, memory: { id: memory.id, scopeId: memory.scopeId } });
-    expect(requests).toHaveLength(4);
-    const searchBody = JSON.parse(String(requests[2]?.init?.body)) as { filter?: { must?: Array<Record<string, unknown>> } };
+    expect(requests).toHaveLength(8);
+    const searchBody = JSON.parse(String(requests[6]?.init?.body)) as { filter?: { must?: Array<Record<string, unknown>> } };
     expect(searchBody.filter?.must).toEqual(expect.arrayContaining([{ key: "memoryType", match: { value: "topic" } }, { key: "scopeType", match: { value: "group" } }, { key: "scopeId", match: { value: memory.scopeId } }]));
     expect(requests[0]?.init?.headers).toMatchObject({ "api-key": "secret" });
   });

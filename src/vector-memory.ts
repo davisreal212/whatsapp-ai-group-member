@@ -71,14 +71,18 @@ export class QdrantVectorMemoryProvider implements VectorMemoryProvider {
       method: "PUT",
       body: JSON.stringify({ vectors: { size: this.dimensions, distance: "Cosine" } }),
     });
-    if (response.ok) return;
-    if (response.status !== 409) throw await qdrantError(response, "Qdrant collection setup");
-    const existing = await this.request(`/collections/${encodeURIComponent(this.collection)}`, { method: "GET" });
-    if (!existing.ok) throw await qdrantError(existing, "Qdrant collection inspection");
-    const body = await existing.json() as unknown;
-    const size = collectionVectorSize(body);
-    if (size !== undefined && size !== this.dimensions) {
-      throw new Error(`Qdrant collection ${this.collection} uses ${size}-dimensional vectors; configured embedding dimension is ${this.dimensions}`);
+    if (!response.ok && response.status !== 409) throw await qdrantError(response, "Qdrant collection setup");
+    if (!response.ok) {
+      const existing = await this.request(`/collections/${encodeURIComponent(this.collection)}`, { method: "GET" });
+      if (!existing.ok) throw await qdrantError(existing, "Qdrant collection inspection");
+      const body = await existing.json() as unknown;
+      const size = collectionVectorSize(body);
+      if (size !== undefined && size !== this.dimensions) {
+        throw new Error(`Qdrant collection ${this.collection} uses ${size}-dimensional vectors; configured embedding dimension is ${this.dimensions}`);
+      }
+    }
+    for (const fieldName of ["scopeId", "scopeType", "memoryType", "sourceMemberId"]) {
+      await this.ensurePayloadIndex(fieldName);
     }
   }
 
@@ -140,6 +144,14 @@ export class QdrantVectorMemoryProvider implements VectorMemoryProvider {
       headers: { "content-type": "application/json", ...(this.apiKey ? { "api-key": this.apiKey } : {}), ...init.headers },
       signal: init.signal ?? AbortSignal.timeout(30_000),
     });
+  }
+
+  private async ensurePayloadIndex(fieldName: string): Promise<void> {
+    const response = await this.request(`/collections/${encodeURIComponent(this.collection)}/index`, {
+      method: "PUT",
+      body: JSON.stringify({ field_name: fieldName, field_schema: "keyword" }),
+    });
+    if (!response.ok && response.status !== 409) throw await qdrantError(response, `Qdrant ${fieldName} index setup`);
   }
 }
 
