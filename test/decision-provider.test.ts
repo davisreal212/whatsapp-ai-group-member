@@ -21,6 +21,11 @@ describe("decision safety helpers", () => {
     expect(() => parseDecisionPlan({ decision: "DELETE_GROUP", confidence: 1, reason: "bad", delayMs: 0, needsWeb: false, needsMedia: false, responseStyle: "short_casual" })).toThrow();
   });
 
+  it("bounds oversized classifier text instead of failing the whole decision", () => {
+    const plan = parseDecisionPlan({ decision: "REPLY", confidence: 1, reason: "answer", text: "x".repeat(2_500), delayMs: 0, needsWeb: false, needsMedia: false, responseStyle: "short_casual" });
+    expect(plan.text).toHaveLength(2_000);
+  });
+
   it("normalizes equivalent response style names returned by providers", () => {
     const plan = parseDecisionPlan({ decision: "REPLY", confidence: 0.9, reason: "answer", text: "Hi", delayMs: 0, needsWeb: false, needsMedia: false, responseStyle: "short-casual" });
     expect(plan.responseStyle).toBe("short_casual");
@@ -140,6 +145,23 @@ describe("decision safety helpers", () => {
     await router.classify(input);
     expect(calls).toBe(2);
     expect(router.statuses()[0]).toMatchObject({ healthy: false, consecutiveFailures: 2, lastError: "quota exceeded" });
+  });
+
+  it("opens a provider circuit immediately after a timeout", async () => {
+    let calls = 0;
+    const failing: AIProvider = {
+      name: "phoenix-deepseek",
+      model: "test",
+      available: true,
+      classify: async () => { calls += 1; throw new Error("The operation was aborted due to timeout"); },
+      generateResponse: async () => undefined,
+    };
+    const router = new ProviderRouter(new FileStore(`/tmp/provider-timeout-${Date.now()}`), loadConfig({ NODE_ENV: "test", PROVIDER_FAILURE_THRESHOLD: "3", PROVIDER_COOLDOWN_MS: "60000" }), [failing]);
+    const input = { messageText: "hello", messageType: "text", directed: true, context: {} as ContextSnapshot };
+    await router.classify(input);
+    await router.classify(input);
+    expect(calls).toBe(1);
+    expect(router.statuses()[0]?.healthy).toBe(false);
   });
 
   it("asks for a resend when a voice transcript is unreliable", async () => {

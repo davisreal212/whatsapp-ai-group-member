@@ -7,6 +7,7 @@ const CHECK_INTERVAL_MS = 15_000;
 const BATCH_SIZE = 4;
 const STALE_JOB_MS = 10 * 60_000;
 const MAX_RETRY_DELAY_MS = 60 * 60_000;
+const SEARCH_RETRY_COOLDOWN_MS = 5 * 60_000;
 
 export interface MemoryVectorWorkerOptions {
   checkIntervalMs?: number;
@@ -21,6 +22,7 @@ export class MemoryVectorWorker {
   private lastError?: string;
   private collectionReady = false;
   private providerHealthy = false;
+  private searchDisabledUntil = 0;
   private readonly checkIntervalMs: number;
   private readonly batchSize: number;
   private readonly staleJobMs: number;
@@ -105,15 +107,18 @@ export class MemoryVectorWorker {
 
   async retrieve(query: string, scopeId: string, limit = 5): Promise<SemanticMemoryHit[]> {
     if (!this.enabled || !this.embedding || !query.trim() || !scopeId) return [];
+    if (this.searchDisabledUntil > Date.now()) return [];
     try {
       await this.ensureCollection();
       const vector = await this.embedding.embed(query.trim().slice(0, 8_000));
       const hits = await this.vector.search(vector, { scopeId }, Math.max(1, Math.min(20, limit)));
       this.providerHealthy = true;
+      this.searchDisabledUntil = 0;
       return hits;
     } catch (error) {
       this.collectionReady = false;
       this.providerHealthy = false;
+      this.searchDisabledUntil = Date.now() + SEARCH_RETRY_COOLDOWN_MS;
       const message = error instanceof Error ? error.message : "memory vector search failed";
       this.lastError = message;
       await this.store.addLog({

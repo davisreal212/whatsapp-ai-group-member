@@ -71,7 +71,15 @@ export class QdrantVectorMemoryProvider implements VectorMemoryProvider {
       method: "PUT",
       body: JSON.stringify({ vectors: { size: this.dimensions, distance: "Cosine" } }),
     });
-    if (!response.ok && response.status !== 409) throw new Error(`Qdrant collection setup returned HTTP ${response.status}`);
+    if (response.ok) return;
+    if (response.status !== 409) throw await qdrantError(response, "Qdrant collection setup");
+    const existing = await this.request(`/collections/${encodeURIComponent(this.collection)}`, { method: "GET" });
+    if (!existing.ok) throw await qdrantError(existing, "Qdrant collection inspection");
+    const body = await existing.json() as unknown;
+    const size = collectionVectorSize(body);
+    if (size !== undefined && size !== this.dimensions) {
+      throw new Error(`Qdrant collection ${this.collection} uses ${size}-dimensional vectors; configured embedding dimension is ${this.dimensions}`);
+    }
   }
 
   async upsert(memory: MemoryRecord, vector: number[]): Promise<void> {
@@ -80,16 +88,23 @@ export class QdrantVectorMemoryProvider implements VectorMemoryProvider {
       method: "PUT",
       body: JSON.stringify({ points: [{ id: pointId(memory.id), vector, payload: memoryPayload(memory) }] }),
     });
-    if (!response.ok) throw new Error(`Qdrant upsert returned HTTP ${response.status}`);
+    if (!response.ok) throw await qdrantError(response, "Qdrant upsert");
   }
 
   async search(vector: number[], filters: MemoryFilters = {}, limit = 10): Promise<VectorMemoryHit[]> {
     validateVector(vector, this.dimensions);
-    const response = await this.request(`/collections/${encodeURIComponent(this.collection)}/points/search`, {
+    const filter = qdrantFilter(filters);
+    let response = await this.request(`/collections/${encodeURIComponent(this.collection)}/points/query`, {
       method: "POST",
-      body: JSON.stringify({ vector, limit: Math.max(1, Math.min(100, limit)), with_payload: true, ...(qdrantFilter(filters) ? { filter: qdrantFilter(filters) } : {}) }),
+      body: JSON.stringify({ query: vector, limit: Math.max(1, Math.min(100, limit)), with_payload: true, ...(filter ? { filter } : {}) }),
     });
-    if (!response.ok) throw new Error(`Qdrant search returned HTTP ${response.status}`);
+    if (response.status === 404) {
+      response = await this.request(`/collections/${encodeURIComponent(this.collection)}/points/search`, {
+        method: "POST",
+        body: JSON.stringify({ vector, limit: Math.max(1, Math.min(100, limit)), with_payload: true, ...(filter ? { filter } : {}) }),
+      });
+    }
+    if (!response.ok) throw await qdrantError(response, "Qdrant search");
     const body = await response.json() as { result?: unknown };
     if (!Array.isArray(body.result)) return [];
     return body.result.flatMap((item) => {
@@ -105,7 +120,7 @@ export class QdrantVectorMemoryProvider implements VectorMemoryProvider {
       method: "POST",
       body: JSON.stringify({ points: [pointId(memoryId)] }),
     });
-    if (!response.ok) throw new Error(`Qdrant delete returned HTTP ${response.status}`);
+    if (!response.ok) throw await qdrantError(response, "Qdrant delete");
   }
 
   async health(): Promise<boolean> {
@@ -130,6 +145,25 @@ export class QdrantVectorMemoryProvider implements VectorMemoryProvider {
 
 function validateVector(vector: number[], dimensions: number): void {
   if (vector.length !== dimensions || !vector.every((value) => Number.isFinite(value))) throw new Error(`Embedding vector must contain ${dimensions} finite values`);
+}
+
+async function qdrantError(response: Response, operation: string): Promise<Error> {
+  const detail = (await response.text().catch(() => "")).replace(/\s+/g, " ").trim().slice(0, 300);
+  return new Error(`${operation} returned HTTP ${response.status}${detail ? `: ${detail}` : ""}`);
+}
+
+function collectionVectorSize(value: unknown): number | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const result = (value as { result?: unknown }).result;
+  if (!result || typeof result !== "object") return undefined;
+  const config = (result as { config?: unknown }).config;
+  if (!config || typeof config !== "object") return undefined;
+  const params = (config as { params?: unknown }).params;
+  if (!params || typeof params !== "object") return undefined;
+  const vectors = (params as { vectors?: unknown }).vectors;
+  if (!vectors || typeof vectors !== "object") return undefined;
+  const size = (vectors as { size?: unknown }).size;
+  return typeof size === "number" ? size : undefined;
 }
 
 function memoryPayload(memory: MemoryRecord): Record<string, unknown> {

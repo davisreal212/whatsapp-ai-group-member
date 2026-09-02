@@ -11,7 +11,7 @@ const decisionSchema = z.object({
   reason: z.string().min(1).max(500),
   targetMessageId: z.string().min(1).max(200).optional(),
   reaction: z.string().min(1).max(8).optional(),
-  text: z.string().max(2000).optional(),
+  text: z.preprocess((value) => typeof value === "string" ? value.trim().slice(0, 2_000) : value, z.string().max(2000).optional()),
   mediaQuery: z.string().trim().min(1).max(300).optional(),
   mediaUrl: z.string().url().optional(),
   mediaMimeType: z.string().max(100).optional(),

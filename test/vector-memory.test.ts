@@ -34,7 +34,7 @@ describe("vector memory adapters", () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       requests.push({ url, init });
-      if (url.endsWith("/points/search")) return new Response(JSON.stringify({ result: [{ score: 0.91, payload: { ...memory } }] }), { status: 200 });
+      if (url.endsWith("/points/query")) return new Response(JSON.stringify({ result: [{ score: 0.91, payload: { ...memory } }] }), { status: 200 });
       return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
     }));
     const provider = new QdrantVectorMemoryProvider("https://qdrant.example", "secret", "memories", 3);
@@ -47,6 +47,34 @@ describe("vector memory adapters", () => {
     const searchBody = JSON.parse(String(requests[2]?.init?.body)) as { filter?: { must?: Array<Record<string, unknown>> } };
     expect(searchBody.filter?.must).toEqual(expect.arrayContaining([{ key: "memoryType", match: { value: "topic" } }, { key: "scopeType", match: { value: "group" } }, { key: "scopeId", match: { value: memory.scopeId } }]));
     expect(requests[0]?.init?.headers).toMatchObject({ "api-key": "secret" });
+  });
+
+  it("falls back to the legacy search endpoint when query is unavailable", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.endsWith("/points/query")) return new Response("not found", { status: 404 });
+      return new Response(JSON.stringify({ result: [{ score: 0.8, payload: { ...memory } }] }), { status: 200 });
+    }));
+    const provider = new QdrantVectorMemoryProvider("https://qdrant.example", undefined, "memories", 3);
+    await expect(provider.search([0.1, 0.2, 0.3], { scopeId: memory.scopeId })).resolves.toHaveLength(1);
+    expect(urls.map((url) => url.split("/collections/")[1])).toEqual(["memories/points/query", "memories/points/search"]);
+  });
+
+  it("reports an incompatible existing collection instead of repeatedly searching it", async () => {
+    let collectionCalls = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/collections/memories")) {
+        collectionCalls += 1;
+        if (collectionCalls === 1) return new Response(null, { status: 409 });
+        return new Response(JSON.stringify({ result: { config: { params: { vectors: { size: 4 } } } } }), { status: 200 });
+      }
+      return new Response(null, { status: 409 });
+    }));
+    const provider = new QdrantVectorMemoryProvider("https://qdrant.example", undefined, "memories", 3);
+    await expect(provider.ensureCollection()).rejects.toThrow("uses 4-dimensional vectors");
   });
 
   it("validates Gemini embedding dimensions", async () => {

@@ -336,7 +336,7 @@ export class ProviderRouter {
     health.consecutiveFailures += 1;
     health.lastFailureAt = Date.now();
     health.lastError = (error instanceof Error ? error.message : "unknown error").slice(0, 300);
-    if (health.consecutiveFailures >= this.failureThreshold) health.circuitOpenUntil = Date.now() + this.cooldownMs;
+    if (health.consecutiveFailures >= this.failureThreshold || isTimeoutError(error)) health.circuitOpenUntil = Date.now() + this.cooldownMs;
     this.health.set(provider.name, health);
   }
 
@@ -348,4 +348,8 @@ export class ProviderRouter {
 
 function shouldTryNextModel(status: number): boolean {
   return [400, 402, 404, 408, 429, 500, 502, 503, 504].includes(status);
+}
+
+function isTimeoutError(error: unknown): boolean {
+  return /timeout|timed out|aborted/i.test(error instanceof Error ? error.message : String(error));
 }
