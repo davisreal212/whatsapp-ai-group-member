@@ -4,6 +4,7 @@ COPY package*.json ./
 RUN npm ci
 COPY tsconfig.json README.md .env.example .env.production.example ./
 COPY src ./src
+COPY skills ./skills
 COPY public ./public
 RUN npm run build && npm prune --omit=dev
 
@@ -17,6 +18,7 @@ RUN groupadd --system --gid 10001 app && useradd --system --uid 10001 --gid app 
 COPY --from=build --chown=app:app /app/package*.json ./
 COPY --from=build --chown=app:app /app/node_modules ./node_modules
 COPY --from=build --chown=app:app /app/dist ./dist
+COPY --from=build --chown=app:app /app/skills ./skills
 COPY --from=build --chown=app:app /app/public ./public
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN mkdir -p /var/lib/whatsapp-ai/data /var/lib/whatsapp-ai/whatsapp-auth && chown -R app:app /var/lib/whatsapp-ai

@@ -272,8 +272,9 @@ export class BotRuntime {
     const personality = this.personality(contextGroup, message.isGroup ? undefined : this.dmLanguagePreference(message.chatId));
     if (personality.memoryEnabled) await this.memory.observe(message);
     const context = personality.memoryEnabled
-      ? await this.memory.contextWithSemantic(contextGroup, message.senderId, personality, message.text ?? message.media?.caption ?? "")
-      : { ...this.memory.context(contextGroup, message.senderId, personality, ""), memories: [], member: undefined };
+      ? await this.memory.contextWithSemantic(contextGroup, message.senderId, personality, message.text ?? message.media?.caption ?? "", message.id)
+      : { ...this.memory.context(contextGroup, message.senderId, personality, "", message.id), memories: [], member: undefined };
+    context.skillHints = this.skills.discover(message.text ?? "").slice(0, 8).map(({ skillId, name, description, category, scope, skillFile }) => ({ skillId, name, description, category, scope, ...(skillFile ? { skillFile } : {}) }));
     const languageTask = parseLanguageTask(message.text ?? "");
     if (languageTask && (!message.isGroup || message.text?.toLowerCase().includes(this.config.botName.toLowerCase()))) {
       const taskText = languageTask.text || message.text || "";

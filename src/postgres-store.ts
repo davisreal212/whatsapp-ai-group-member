@@ -350,11 +350,11 @@ export class PostgresStore implements Store {
   }
 
   recentMessages(groupId: string, limit: number): StoredMessage[] {
-    return Object.values(this.state.messages).filter((message) => message.groupId === groupId).sort((a, b) => b.timestamp - a.timestamp).slice(0, limit).reverse();
+    return Object.values(this.state.messages).filter((message) => message.groupId === groupId).sort(compareStoredMessagesDesc).slice(0, limit).reverse();
   }
 
   recentChatMessages(chatId: string, limit: number): StoredMessage[] {
-    return Object.values(this.state.messages).filter((message) => message.chatId === chatId).sort((a, b) => b.timestamp - a.timestamp).slice(0, limit).reverse();
+    return Object.values(this.state.messages).filter((message) => message.chatId === chatId).sort(compareStoredMessagesDesc).slice(0, limit).reverse();
   }
 
   countMessages(scopeId: string): number {
@@ -496,6 +496,10 @@ export class PostgresStore implements Store {
       updatedAt: Date.now(),
     });
   }
+}
+
+function compareStoredMessagesDesc(left: StoredMessage, right: StoredMessage): number {
+  return right.timestamp - left.timestamp || right.storedAt - left.storedAt || right.id.localeCompare(left.id);
 }
 
 function jsonObject(value: unknown, fallback: Record<string, unknown>): Record<string, unknown> {

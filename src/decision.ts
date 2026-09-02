@@ -72,7 +72,7 @@ export interface LocalRelevance {
   priority?: ActionPriority;
 }
 
-export function localRelevance(message: CanonicalMessage, botName: string, botJid?: string, talkativeness = 0.35, botJids: string[] = [], alwaysReplyToAllowedDm = false, personality?: Pick<Personality, "respondToMentions" | "respondToReplies" | "joinRelevantConversations">): LocalRelevance {
+export function localRelevance(message: CanonicalMessage, botName: string, botJid?: string, talkativeness = 0.35, botJids: string[] = [], alwaysReplyToAllowedDm = false, personality?: Pick<Personality, "respondToMentions" | "respondToReplies" | "joinRelevantConversations">, recentBotActions: ContextSnapshot["recentActions"] = []): LocalRelevance {
   const text = message.text ?? "";
   if (!message.isGroup && alwaysReplyToAllowedDm) return { relevant: true, reason: "allowlisted_dm", directed: true };
   const signals = participationSignals(message, botName, botJid, botJids);
@@ -82,6 +82,7 @@ export function localRelevance(message: CanonicalMessage, botName: string, botJi
   if (isMediaRequestText(text)) return { relevant: true, reason: "media_request", ...signals, directed: true, priority: "HIGH" };
   if (signals.directed) return { relevant: true, reason: "directed_to_bot", ...signals };
   if (message.quotedMessageId) return { relevant: true, reason: "reply_or_quote", ...signals };
+  if (message.isGroup && recentBotFollowUp(text, recentBotActions)) return { relevant: true, reason: "recent_bot_reply", ...signals };
   if (/[?؟]\s*$/.test(text) || /\b(can|could|should|would|what|when|where|why|how|is|are|do|does)\b/i.test(text)) {
     return { relevant: true, reason: "explicit_question", ...signals };
   }
@@ -109,7 +110,7 @@ export class DecisionEngine {
     context: ContextSnapshot,
     config: Pick<AppConfig, "botName" | "botJid"> & Partial<Pick<AppConfig, "botJids" | "participation">> & { alwaysReplyToAllowedDm?: boolean },
   ): Promise<{ plan: DecisionPlan; local: LocalRelevance; usedAi: boolean }> {
-    const local = localRelevance(message, config.botName, config.botJid, context.personality.talkativeness, config.botJids ?? [], config.alwaysReplyToAllowedDm ?? false, context.personality);
+    const local = localRelevance(message, config.botName, config.botJid, context.personality.talkativeness, config.botJids ?? [], config.alwaysReplyToAllowedDm ?? false, context.personality, context.recentActions);
     if (!local.relevant) {
       return { plan: ignorePlan("Local relevance gate chose silence."), local, usedAi: false };
     }
@@ -230,4 +231,18 @@ function normalizeResponseStyle(value: unknown): unknown {
   if (["playful", "fun", "humorous"].includes(normalized)) return "playful";
   if (["uncertain", "unsure", "cautious"].includes(normalized)) return "uncertain";
   return "short_casual";
+}
+
+function recentBotFollowUp(text: string, actions: ContextSnapshot["recentActions"]): boolean {
+  const recentReply = actions?.find((action) => action.role === "bot" && action.text.trim() && Date.now() - action.timestamp <= 10 * 60_000);
+  if (!recentReply) return false;
+  const normalized = text.trim();
+  if (/^(?:lol|lmao|haha|exactly|true|same|nice|thanks|thank you|yes|no|okay|ok)\b/i.test(normalized)) return true;
+  if (/^[\p{Extended_Pictographic}\s!?.,😂🤣😭]+$/u.test(normalized)) return true;
+  const queryWords = new Set(normalized.toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}-]{2,}/gu) ?? []);
+  const replyWords = new Set(recentReply.text.toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}-]{2,}/gu) ?? []);
+  if (!queryWords.size || !replyWords.size) return false;
+  let matches = 0;
+  for (const word of queryWords) if (replyWords.has(word)) matches += 1;
+  return matches / queryWords.size >= 0.25;
 }

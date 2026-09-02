@@ -72,6 +72,11 @@ describe("decision safety helpers", () => {
     expect(isCurrentInformationQuestion(message.text)).toBe(true);
   });
 
+  it("treats an unquoted short follow-up as relevant after a recent bot reply", () => {
+    const message = { id: "bot-follow-up", chatId: "g@g.us", groupId: "g@g.us", senderId: "member", timestamp: Date.now(), type: "text" as const, text: "lol", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+    expect(localRelevance(message, "Kola", undefined, 0.1, [], false, undefined, [{ id: "action", type: "REPLY", text: "That was funny", timestamp: Date.now() - 1_000, sourceMessageId: "prior", role: "bot" }])).toMatchObject({ relevant: true, reason: "recent_bot_reply" });
+  });
+
   it("keeps explicit image requests relevant and high priority", () => {
     const message = { id: "image-request", chatId: "g@g.us", groupId: "g@g.us", senderId: "u", timestamp: Date.now(), type: "text" as const, text: "Send me us president picture", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
     expect(localRelevance(message, "Kola")).toMatchObject({ relevant: true, reason: "media_request", directed: true, priority: "HIGH" });

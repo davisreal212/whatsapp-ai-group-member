@@ -375,7 +375,7 @@ export class FileStore implements Store {
   private recentMessagesBy(matches: (message: StoredMessage) => boolean, limit: number): StoredMessage[] {
     return Object.values(this.state.messages)
       .filter(matches)
-      .sort((a, b) => b.timestamp - a.timestamp)
+      .sort(compareStoredMessagesDesc)
       .slice(0, limit)
       .reverse();
   }
@@ -540,6 +540,10 @@ export class FileStore implements Store {
       updatedAt: now,
     };
   }
+}
+
+function compareStoredMessagesDesc(left: StoredMessage, right: StoredMessage): number {
+  return right.timestamp - left.timestamp || right.storedAt - left.storedAt || right.id.localeCompare(left.id);
 }
 
 function normalizeMemory(memory: MemoryRecord): MemoryRecord {

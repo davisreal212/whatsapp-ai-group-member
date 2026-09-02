@@ -72,6 +72,7 @@ describe("skill registry and executor", () => {
     expect(skills.length).toBeGreaterThanOrEqual(178);
     expect(skills.some((skill) => skill.skillId === "whatsapp_voice_call")).toBe(true);
     expect(skills.some((skill) => skill.skillId === "pending_conversation_recall")).toBe(true);
+    expect(skills.every((skill) => skill.skillFile === `skills/${skill.skillId}/SKILL.md`)).toBe(true);
   });
 
   it("discovers skills and enforces permissions before execution", async () => {

@@ -38,6 +38,7 @@ export interface SkillDefinition {
   dependencies: string[];
   failureBehavior: "fallback" | "retry" | "silence";
   learningEnabled: boolean;
+  skillFile?: string;
   handler?: SkillHandler;
 }
 
@@ -122,7 +123,7 @@ export function createCoreSkillRegistry(): SkillRegistry {
 
 function skill(skillId: string, name: string, description: string, category: string, scope: SkillScope, requiresPermission: boolean): Omit<SkillDefinition, "handler"> {
   const inputs = SKILL_INPUTS[skillId] ?? { required: [], optional: [] };
-  return { skillId, name, description, category, version: "1.0.0", scope, enabled: true, requiresPermission, supportsChaining: true, triggers: [], requiredInputs: inputs.required, optionalInputs: inputs.optional, timeoutMs: 15_000, dependencies: [], failureBehavior: "fallback", learningEnabled: true };
+  return { skillId, name, description, category, version: "1.0.0", scope, enabled: true, requiresPermission, supportsChaining: true, triggers: [], requiredInputs: inputs.required, optionalInputs: inputs.optional, timeoutMs: 15_000, dependencies: [], failureBehavior: "fallback", learningEnabled: true, skillFile: `skills/${skillId}/SKILL.md` };
 }
 
 const SKILL_INPUTS: Record<string, { required: string[]; optional: string[] }> = {

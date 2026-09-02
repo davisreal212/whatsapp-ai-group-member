@@ -1,0 +1,1466 @@
+[
+  {
+    "skillId": "academic_research",
+    "name": "Academic research",
+    "description": "Search academic sources when appropriate.",
+    "category": "research",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "action_item_extraction",
+    "name": "Action item extraction",
+    "description": "Identify who must do what and by when.",
+    "category": "productivity",
+    "scope": "GROUP",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "ai_provider_configuration",
+    "name": "AI provider configuration",
+    "description": "Configure providers and fallback order.",
+    "category": "administration",
+    "scope": "GLOBAL",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "api_explanation",
+    "name": "API explanation",
+    "description": "Explain APIs.",
+    "category": "developer",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "architecture_analysis",
+    "name": "Architecture analysis",
+    "description": "Analyze software architecture.",
+    "category": "developer",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "audio_download",
+    "name": "Audio download",
+    "description": "Retrieve audio for processing.",
+    "category": "audio",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "audio_fallback",
+    "name": "Audio fallback",
+    "description": "Retry voice notes as regular audio before falling back to text.",
+    "category": "voice",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "audio_response",
+    "name": "Audio response",
+    "description": "Send generated audio when supported.",
+    "category": "voice",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "audio_understanding",
+    "name": "Audio understanding",
+    "description": "Understand the meaning of a voice transcription.",
+    "category": "audio",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "behavior_observation",
+    "name": "Behavior observation",
+    "description": "Observe recurring communication patterns.",
+    "category": "learning",
+    "scope": "MEMBER",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "behavior_optimization",
+    "name": "Behavior optimization",
+    "description": "Adjust non-security behavior from accumulated evidence.",
+    "category": "learning",
+    "scope": "GLOBAL",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "calculator",
+    "name": "Calculator",
+    "description": "Perform mathematical calculations.",
+    "category": "utility",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "checklist_generation",
+    "name": "Checklist generation",
+    "description": "Create checklists.",
+    "category": "productivity",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "code_explanation",
+    "name": "Code explanation",
+    "description": "Explain code.",
+    "category": "developer",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "code_generation",
+    "name": "Code generation",
+    "description": "Generate code.",
+    "category": "developer",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "company_research",
+    "name": "Company research",
+    "description": "Research companies.",
+    "category": "research",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "conditional_action",
+    "name": "Conditional action",
+    "description": "Execute an action only when conditions are satisfied.",
+    "category": "automation",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "confidence_updating",
+    "name": "Confidence updating",
+    "description": "Increase or decrease confidence from evidence.",
+    "category": "learning",
+    "scope": "MEMBER",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "context_compression",
+    "name": "Context compression",
+    "description": "Reduce large tool outputs into useful context.",
+    "category": "orchestration",
+    "scope": "GLOBAL",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "conversation_continuation",
+    "name": "Conversation continuation",
+    "description": "Continue a pending interaction after a tool result.",
+    "category": "conversation",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "conversation_outcome_analysis",
+    "name": "Conversation outcome analysis",
+    "description": "Determine whether a response helped.",
+    "category": "learning",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "conversation_priority",
+    "name": "Conversation priority",
+    "description": "Determine which conversation deserves attention.",
+    "category": "conversation",
+    "scope": "GROUP",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "conversational_memory_recall",
+    "name": "Conversational memory recall",
+    "description": "Recall relevant previous discussions.",
+    "category": "memory",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "cooldown_control",
+    "name": "Cooldown control",
+    "description": "Configure response cooldowns.",
+    "category": "administration",
+    "scope": "GLOBAL",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "correction_learning",
+    "name": "Correction learning",
+    "description": "Learn from reliable corrections.",
+    "category": "learning",
+    "scope": "MEMBER",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "currency_conversion",
+    "name": "Currency conversion",
+    "description": "Retrieve current exchange rates when required.",
+    "category": "finance",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "current_information_search",
+    "name": "Current information search",
+    "description": "Search claims that may have changed.",
+    "category": "research",
+    "scope": "GROUP",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "database_status",
+    "name": "Database status",
+    "description": "Monitor the relational database.",
+    "category": "monitoring",
+    "scope": "GLOBAL",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "date_calculation",
+    "name": "Date calculation",
+    "description": "Calculate dates and durations.",
+    "category": "utility",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "deadline_tracking",
+    "name": "Deadline tracking",
+    "description": "Track deadlines when configured.",
+    "category": "productivity",
+    "scope": "GROUP",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "debugging",
+    "name": "Debugging",
+    "description": "Analyze errors and likely causes.",
+    "category": "developer",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "decision_tracking",
+    "name": "Decision tracking",
+    "description": "Remember important group decisions.",
+    "category": "productivity",
+    "scope": "GROUP",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "delete_bot_message",
+    "name": "Delete bot message",
+    "description": "Delete a bot message where authorized and supported.",
+    "category": "communication",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "detail_preference",
+    "name": "Detail preference",
+    "description": "Learn whether a member prefers short or detailed answers.",
+    "category": "personalization",
+    "scope": "MEMBER",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "detect_conversation_end",
+    "name": "Detect conversation end",
+    "description": "Recognize when a conversation has naturally ended.",
+    "category": "conversation",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "detect_conversation_start",
+    "name": "Detect conversation start",
+    "description": "Recognize when a new topic or interaction begins.",
+    "category": "conversation",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "detect_message_burst",
+    "name": "Detect message burst",
+    "description": "Group rapid messages into one conversational unit.",
+    "category": "conversation",
+    "scope": "GROUP",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "documentation_search",
+    "name": "Documentation search",
+    "description": "Find official documentation.",
+    "category": "research",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "edit_bot_message",
+    "name": "Edit bot message",
+    "description": "Update a bot message where WhatsApp supports it.",
+    "category": "communication",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "emoji_adaptation",
+    "name": "Emoji adaptation",
+    "description": "Adapt emoji frequency to conversational context.",
+    "category": "human_behavior",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "emotion_tone_detection",
+    "name": "Emotion and tone detection",
+    "description": "Identify conversational tone without diagnosing the user.",
+    "category": "conversation",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "error_diagnosis",
+    "name": "Error diagnosis",
+    "description": "Identify likely causes of errors.",
+    "category": "developer",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "error_tracking",
+    "name": "Error tracking",
+    "description": "Record failures without unnecessary message content.",
+    "category": "monitoring",
+    "scope": "GLOBAL",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "event_memory",
+    "name": "Event memory",
+    "description": "Remember important group events.",
+    "category": "memory",
+    "scope": "GROUP",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "event_trigger",
+    "name": "Event trigger",
+    "description": "Trigger a skill when a configured event occurs.",
+    "category": "automation",
+    "scope": "GROUP",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "expand",
+    "name": "Expand",
+    "description": "Expand a short idea.",
+    "category": "writing",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "fact_verification",
+    "name": "Fact verification",
+    "description": "Verify claims before presenting them as facts.",
+    "category": "research",
+    "scope": "GROUP",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "feedback_processing",
+    "name": "Feedback processing",
+    "description": "Learn from conversational outcomes.",
+    "category": "learning",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "financial_math",
+    "name": "Financial math",
+    "description": "Calculate profit, loss, ROI, and percentage change.",
+    "category": "finance",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "follow_up_action",
+    "name": "Follow-up action",
+    "description": "Perform and report an action promised in a prior response.",
+    "category": "conversation",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "gender_style",
+    "name": "Gender style",
+    "description": "Apply dashboard-controlled persona presentation style.",
+    "category": "personalization",
+    "scope": "GLOBAL",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "generate_captions",
+    "name": "Generate captions",
+    "description": "Create social captions.",
+    "category": "writing",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "generate_replies",
+    "name": "Generate replies",
+    "description": "Suggest natural replies.",
+    "category": "writing",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "gif_search",
+    "name": "GIF search",
+    "description": "Find appropriate GIFs where supported.",
+    "category": "media",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "group_adaptation",
+    "name": "Group adaptation",
+    "description": "Adapt to group communication patterns.",
+    "category": "learning",
+    "scope": "GROUP",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "group_culture_adaptation",
+    "name": "Group culture adaptation",
+    "description": "Adapt to the group's communication culture.",
+    "category": "group",
+    "scope": "GROUP",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "group_memory",
+    "name": "Group memory",
+    "description": "Maintain group-level knowledge.",
+    "category": "memory",
+    "scope": "GROUP",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "group_skill_permissions",
+    "name": "Group skill permissions",
+    "description": "Configure skills per group.",
+    "category": "administration",
+    "scope": "GROUP",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "health_check",
+    "name": "Health check",
+    "description": "Check whether services are functioning.",
+    "category": "monitoring",
+    "scope": "GLOBAL",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "humor_detection",
+    "name": "Humor detection",
+    "description": "Recognize jokes and conversational banter.",
+    "category": "conversation",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "humor_preference",
+    "name": "Humor preference",
+    "description": "Learn whether a member responds well to humor.",
+    "category": "personalization",
+    "scope": "MEMBER",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "image_search",
+    "name": "Image search",
+    "description": "Search for relevant images.",
+    "category": "media",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "image_send",
+    "name": "Image send",
+    "description": "Send an approved image to WhatsApp.",
+    "category": "media",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "intent_detection",
+    "name": "Intent detection",
+    "description": "Determine what the user is trying to accomplish.",
+    "category": "conversation",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "json_processing",
+    "name": "JSON processing",
+    "description": "Read and construct JSON.",
+    "category": "developer",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "language_detection",
+    "name": "Language detection",
+    "description": "Detect the language used in a message.",
+    "category": "language",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "language_preference",
+    "name": "Language preference",
+    "description": "Remember preferred language where appropriate.",
+    "category": "personalization",
+    "scope": "DM",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "latency_tracking",
+    "name": "Latency tracking",
+    "description": "Measure response and skill latency.",
+    "category": "monitoring",
+    "scope": "GLOBAL",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "log_analysis",
+    "name": "Log analysis",
+    "description": "Analyze application logs.",
+    "category": "developer",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "meaning_explanation",
+    "name": "Meaning explanation",
+    "description": "Explain slang, phrases, and expressions.",
+    "category": "language",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "media_captioning",
+    "name": "Media captioning",
+    "description": "Generate a natural caption for media.",
+    "category": "media",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "media_download",
+    "name": "Media download",
+    "description": "Download permitted media from an approved source.",
+    "category": "media",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "meeting_summary",
+    "name": "Meeting summary",
+    "description": "Summarize meetings and group discussions.",
+    "category": "productivity",
+    "scope": "GROUP",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "member_adaptation",
+    "name": "Member adaptation",
+    "description": "Adapt to member communication patterns.",
+    "category": "learning",
+    "scope": "MEMBER",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "member_memory",
+    "name": "Member memory",
+    "description": "Maintain group-specific member observations.",
+    "category": "memory",
+    "scope": "MEMBER",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "member_permissions",
+    "name": "Member permissions",
+    "description": "Restrict selected skills to authorized members.",
+    "category": "administration",
+    "scope": "MEMBER",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "member_preference_detection",
+    "name": "Member preference detection",
+    "description": "Learn communication preferences.",
+    "category": "personalization",
+    "scope": "MEMBER",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "meme_search",
+    "name": "Meme search",
+    "description": "Search for memes relevant to the conversation.",
+    "category": "media",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "meme_selection",
+    "name": "Meme selection",
+    "description": "Choose the most contextually appropriate media result.",
+    "category": "media",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "memory_archiving",
+    "name": "Memory archiving",
+    "description": "Archive stale memories.",
+    "category": "memory",
+    "scope": "GROUP",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "memory_confidence_scoring",
+    "name": "Memory confidence scoring",
+    "description": "Estimate memory confidence from evidence.",
+    "category": "memory",
+    "scope": "GROUP",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "memory_conflict_detection",
+    "name": "Memory conflict detection",
+    "description": "Detect contradictory information.",
+    "category": "memory",
+    "scope": "GROUP",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "memory_consolidation",
+    "name": "Memory consolidation",
+    "description": "Merge related observations without losing evidence.",
+    "category": "memory",
+    "scope": "GROUP",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "memory_control",
+    "name": "Memory control",
+    "description": "Enable or disable memory learning.",
+    "category": "administration",
+    "scope": "GLOBAL",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "memory_deduplication",
+    "name": "Memory deduplication",
+    "description": "Prevent duplicate memories.",
+    "category": "memory",
+    "scope": "GROUP",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "memory_forgetting",
+    "name": "Memory forgetting",
+    "description": "Remove or compress low-value information by retention rules.",
+    "category": "memory",
+    "scope": "GROUP",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "memory_importance_scoring",
+    "name": "Memory importance scoring",
+    "description": "Rank memories by importance.",
+    "category": "memory",
+    "scope": "GROUP",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "memory_privacy_isolation",
+    "name": "Memory privacy isolation",
+    "description": "Prevent memory leakage between groups and DMs.",
+    "category": "security",
+    "scope": "GLOBAL",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "memory_provenance",
+    "name": "Memory provenance",
+    "description": "Track the original source message for a memory.",
+    "category": "memory",
+    "scope": "GROUP",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "memory_recency_scoring",
+    "name": "Memory recency scoring",
+    "description": "Prioritize recent information when appropriate.",
+    "category": "memory",
+    "scope": "GROUP",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "memory_reset",
+    "name": "Memory reset",
+    "description": "Clear selected memory scopes.",
+    "category": "administration",
+    "scope": "GLOBAL",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "memory_updating",
+    "name": "Memory updating",
+    "description": "Update memories when reliable evidence changes.",
+    "category": "memory",
+    "scope": "GROUP",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "mention_entire_group",
+    "name": "Mention entire group",
+    "description": "Send a controlled group-wide mention where authorized.",
+    "category": "communication",
+    "scope": "GROUP",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "mention_multiple_users",
+    "name": "Mention multiple users",
+    "description": "Mention several relevant verified members.",
+    "category": "communication",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "mention_user",
+    "name": "Mention user",
+    "description": "Mention a verified group member.",
+    "category": "communication",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "model_selection",
+    "name": "Model selection",
+    "description": "Choose an appropriate configured AI provider.",
+    "category": "orchestration",
+    "scope": "GLOBAL",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "monitoring_trigger",
+    "name": "Monitoring trigger",
+    "description": "Notify when a monitored condition changes.",
+    "category": "automation",
+    "scope": "GLOBAL",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "multi_tool_planning",
+    "name": "Multi-tool planning",
+    "description": "Plan several approved skills in sequence.",
+    "category": "orchestration",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "multilingual_response",
+    "name": "Multilingual response",
+    "description": "Respond in the language appropriate to the conversation.",
+    "category": "language",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "natural_response_length",
+    "name": "Natural response length",
+    "description": "Adapt output length to persona and context.",
+    "category": "human_behavior",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "natural_timing",
+    "name": "Natural timing",
+    "description": "Avoid robotic response timing.",
+    "category": "human_behavior",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "news_search",
+    "name": "News search",
+    "description": "Search recent news.",
+    "category": "research",
+    "scope": "GROUP",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "pattern_detection",
+    "name": "Pattern detection",
+    "description": "Identify repeated behavior.",
+    "category": "learning",
+    "scope": "MEMBER",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "pending_conversation_recall",
+    "name": "Pending conversation recall",
+    "description": "Resume unfinished interactions.",
+    "category": "conversation",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "percentage_calculation",
+    "name": "Percentage calculation",
+    "description": "Calculate percentages.",
+    "category": "utility",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "personality_control",
+    "name": "Personality control",
+    "description": "Change personality configuration.",
+    "category": "administration",
+    "scope": "GLOBAL",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "personality_expression",
+    "name": "Personality expression",
+    "description": "Apply the configured personality to responses.",
+    "category": "personalization",
+    "scope": "GLOBAL",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "pidgin_adaptation",
+    "name": "Pidgin adaptation",
+    "description": "Adapt naturally to Nigerian Pidgin when appropriate.",
+    "category": "language",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "pidgin_translation",
+    "name": "Pidgin translation",
+    "description": "Translate Nigerian Pidgin to English and back.",
+    "category": "language",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "product_research",
+    "name": "Product research",
+    "description": "Research products and compare specifications.",
+    "category": "research",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "pronunciation_assistance",
+    "name": "Pronunciation assistance",
+    "description": "Help with pronunciation.",
+    "category": "language",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "proofread",
+    "name": "Proofread",
+    "description": "Correct grammar and spelling.",
+    "category": "writing",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "provider_fallback",
+    "name": "Provider fallback",
+    "description": "Use the next healthy AI provider after failure.",
+    "category": "orchestration",
+    "scope": "GLOBAL",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "provider_status",
+    "name": "Provider status",
+    "description": "Monitor AI provider availability.",
+    "category": "monitoring",
+    "scope": "GLOBAL",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "question_detection",
+    "name": "Question detection",
+    "description": "Detect whether a message asks a question.",
+    "category": "conversation",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "queue_monitoring",
+    "name": "Queue monitoring",
+    "description": "Monitor background jobs.",
+    "category": "monitoring",
+    "scope": "GLOBAL",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "quote_context",
+    "name": "Quote context",
+    "description": "Load the message relationship behind a reply.",
+    "category": "conversation",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "rate_limit_control",
+    "name": "Rate-limit control",
+    "description": "Control skill usage.",
+    "category": "administration",
+    "scope": "GLOBAL",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "react_to_message",
+    "name": "React to message",
+    "description": "Send a controlled reaction.",
+    "category": "communication",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "recurring_task",
+    "name": "Recurring task",
+    "description": "Repeat a task according to configuration.",
+    "category": "automation",
+    "scope": "DM",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "regex_assistance",
+    "name": "Regex assistance",
+    "description": "Create and explain regular expressions.",
+    "category": "developer",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "relationship_awareness",
+    "name": "Relationship awareness",
+    "description": "Recognize recurring interaction patterns.",
+    "category": "member",
+    "scope": "MEMBER",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "relationship_memory",
+    "name": "Relationship memory",
+    "description": "Maintain interaction patterns between people.",
+    "category": "memory",
+    "scope": "MEMBER",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "reminder_extraction",
+    "name": "Reminder extraction",
+    "description": "Detect reminder requests.",
+    "category": "productivity",
+    "scope": "DM",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "reply_to_message",
+    "name": "Reply to message",
+    "description": "Send a response quoted to the triggering message.",
+    "category": "communication",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "response_style_adaptation",
+    "name": "Response style adaptation",
+    "description": "Adapt response style per member.",
+    "category": "personalization",
+    "scope": "MEMBER",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "result_synthesis",
+    "name": "Result synthesis",
+    "description": "Combine outputs from multiple tools.",
+    "category": "orchestration",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "retrieve_memory",
+    "name": "Retrieve memory",
+    "description": "Retrieve relevant scoped long-term context.",
+    "category": "memory",
+    "scope": "GROUP",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "rewrite",
+    "name": "Rewrite",
+    "description": "Rewrite messages naturally.",
+    "category": "writing",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "sarcasm_detection",
+    "name": "Sarcasm detection",
+    "description": "Estimate sarcasm from context, language, and emoji.",
+    "category": "conversation",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "schedule_understanding",
+    "name": "Schedule understanding",
+    "description": "Interpret dates and times.",
+    "category": "productivity",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "scheduled_task",
+    "name": "Scheduled task",
+    "description": "Run a configured task at a scheduled time.",
+    "category": "automation",
+    "scope": "DM",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "search_failure_handling",
+    "name": "Search failure handling",
+    "description": "Explain when reliable information cannot be confirmed.",
+    "category": "research",
+    "scope": "GROUP",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "search_follow_up",
+    "name": "Search follow-up",
+    "description": "Perform another search when the first is insufficient.",
+    "category": "research",
+    "scope": "GROUP",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "search_provider_configuration",
+    "name": "Search provider configuration",
+    "description": "Configure web-search providers.",
+    "category": "administration",
+    "scope": "GLOBAL",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "search_raw_history",
+    "name": "Search raw history",
+    "description": "Search stored source messages in the relational store.",
+    "category": "memory",
+    "scope": "GROUP",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "search_result_summarization",
+    "name": "Search result summarization",
+    "description": "Turn multiple results into a concise answer.",
+    "category": "research",
+    "scope": "GROUP",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "search_semantic_memory",
+    "name": "Search semantic memory",
+    "description": "Search vector memory using embeddings.",
+    "category": "memory",
+    "scope": "GROUP",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "self_correction",
+    "name": "Self-correction",
+    "description": "Recognize and correct the bot's own mistakes.",
+    "category": "human_behavior",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "self_reference",
+    "name": "Self-reference",
+    "description": "Use first-person language when referring to the bot.",
+    "category": "human_behavior",
+    "scope": "GLOBAL",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "send_media",
+    "name": "Send media",
+    "description": "Send approved image, video, audio, or document media.",
+    "category": "media",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "send_text",
+    "name": "Send text",
+    "description": "Send a validated text message.",
+    "category": "communication",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "shorten",
+    "name": "Shorten",
+    "description": "Create a concise version.",
+    "category": "writing",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "silence_decision",
+    "name": "Silence decision",
+    "description": "Explicitly choose no response for low-value conversation.",
+    "category": "conversation",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "skill_enable_disable",
+    "name": "Skill enable and disable",
+    "description": "Enable or disable individual skills.",
+    "category": "administration",
+    "scope": "GLOBAL",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "skill_observability",
+    "name": "Skill observability",
+    "description": "Record skill status and latency without logging message contents.",
+    "category": "monitoring",
+    "scope": "GLOBAL",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "skill_permission_check",
+    "name": "Skill permission check",
+    "description": "Keep permissions outside model-generated instructions.",
+    "category": "administration",
+    "scope": "GLOBAL",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "slang_adaptation",
+    "name": "Slang adaptation",
+    "description": "Recognize and use common group slang appropriately.",
+    "category": "language",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "social_awareness",
+    "name": "Social awareness",
+    "description": "Understand who is interacting with whom.",
+    "category": "group",
+    "scope": "GROUP",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "software_research",
+    "name": "Software research",
+    "description": "Research software and APIs.",
+    "category": "research",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "source_citation",
+    "name": "Source citation",
+    "description": "Retain sources behind important information.",
+    "category": "research",
+    "scope": "GROUP",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "source_comparison",
+    "name": "Source comparison",
+    "description": "Compare competing claims.",
+    "category": "research",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "source_cross_checking",
+    "name": "Source cross-checking",
+    "description": "Compare multiple sources before answering.",
+    "category": "research",
+    "scope": "GROUP",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "source_ranking",
+    "name": "Source ranking",
+    "description": "Rank sources by authority, relevance, recency, and credibility.",
+    "category": "research",
+    "scope": "GROUP",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "speech_to_text",
+    "name": "Speech to text",
+    "description": "Transcribe an incoming voice note.",
+    "category": "audio",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "sql_assistance",
+    "name": "SQL assistance",
+    "description": "Create and analyze SQL.",
+    "category": "developer",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "sticker_handling",
+    "name": "Sticker handling",
+    "description": "Process or send stickers where supported.",
+    "category": "media",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "store_memory",
+    "name": "Store memory",
+    "description": "Store useful long-term information with provenance.",
+    "category": "memory",
+    "scope": "GROUP",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "summarize",
+    "name": "Summarize",
+    "description": "Summarize long text.",
+    "category": "writing",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "task_classification",
+    "name": "Task classification",
+    "description": "Classify conversation, research, coding, media, and audio tasks.",
+    "category": "orchestration",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "text_to_speech",
+    "name": "Text to speech",
+    "description": "Generate audio with an approved provider.",
+    "category": "voice",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "time_zone_conversion",
+    "name": "Time zone conversion",
+    "description": "Convert times between locations.",
+    "category": "utility",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "todo_extraction",
+    "name": "To-do extraction",
+    "description": "Detect tasks from conversation.",
+    "category": "productivity",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "token_budget_management",
+    "name": "Token budget management",
+    "description": "Prevent unnecessarily large AI prompts.",
+    "category": "orchestration",
+    "scope": "GLOBAL",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "tool_selection",
+    "name": "Tool selection",
+    "description": "Choose which approved skill is needed.",
+    "category": "orchestration",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "topic_detection",
+    "name": "Topic detection",
+    "description": "Identify the main subject of a message.",
+    "category": "conversation",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "topic_familiarity",
+    "name": "Topic familiarity",
+    "description": "Build familiarity with recurring topics.",
+    "category": "learning",
+    "scope": "GROUP",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "topic_memory",
+    "name": "Topic memory",
+    "description": "Maintain important recurring topics.",
+    "category": "memory",
+    "scope": "GROUP",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "topic_switching",
+    "name": "Topic switching",
+    "description": "Recognize when a conversation changes subject.",
+    "category": "conversation",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "topic_tracking",
+    "name": "Topic tracking",
+    "description": "Maintain the active topic for a conversation.",
+    "category": "conversation",
+    "scope": "GROUP",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "translation",
+    "name": "Translation",
+    "description": "Translate messages between supported languages.",
+    "category": "language",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "uncertainty_expression",
+    "name": "Uncertainty expression",
+    "description": "Express uncertainty instead of inventing information.",
+    "category": "human_behavior",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "unit_conversion",
+    "name": "Unit conversion",
+    "description": "Convert common measurement units.",
+    "category": "utility",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "usage_tracking",
+    "name": "Usage tracking",
+    "description": "Track AI, search, audio, media, and memory usage.",
+    "category": "monitoring",
+    "scope": "GLOBAL",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "vector_database_status",
+    "name": "Vector database status",
+    "description": "Monitor Qdrant and vector memory.",
+    "category": "monitoring",
+    "scope": "GLOBAL",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "video_search",
+    "name": "Video search",
+    "description": "Search for relevant videos.",
+    "category": "media",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "video_send",
+    "name": "Video send",
+    "description": "Send supported video media.",
+    "category": "media",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "voice_call_permission",
+    "name": "Voice call permission",
+    "description": "Request the WhatsApp call permission required before calling.",
+    "category": "voice",
+    "scope": "DM",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "voice_call_status",
+    "name": "Voice call status",
+    "description": "Report whether voice calling is configured and available.",
+    "category": "voice",
+    "scope": "DM",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "voice_note_detection",
+    "name": "Voice note detection",
+    "description": "Recognize incoming audio messages.",
+    "category": "audio",
+    "scope": "MESSAGE",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "web_search",
+    "name": "Web search",
+    "description": "Search the internet through a configured provider.",
+    "category": "research",
+    "scope": "GROUP",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "whatsapp_voice_call",
+    "name": "WhatsApp voice call",
+    "description": "Start an approved outbound WhatsApp voice call through ElevenLabs.",
+    "category": "voice",
+    "scope": "DM",
+    "requiresPermission": true
+  },
+  {
+    "skillId": "wikipedia_lookup",
+    "name": "Wikipedia and knowledge lookup",
+    "description": "Retrieve general background information.",
+    "category": "research",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  }
+]

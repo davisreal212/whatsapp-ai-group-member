@@ -73,6 +73,42 @@ describe("conversation memory", () => {
     expect(context.recentMessages.map((item) => item.text)).toEqual([root.text, reply.text]);
   });
 
+  it("keeps the newest ingested message current when WhatsApp timestamps are identical", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-same-second-thread-"));
+    dirs.push(dir);
+    const store = new FileStore(dir);
+    await store.init();
+    const group = { id: "same-second@g.us", subject: "Same second group", participantCount: 2, whatsappGroupId: "same-second@g.us", isAdmin: false, enabled: true, aiPaused: false, lastSeenAt: Date.now() };
+    const timestamp = Date.now();
+    const first: CanonicalMessage = { id: "first", chatId: group.id, groupId: group.id, senderId: "member-1", timestamp, type: "text", text: "The first message", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+    const current: CanonicalMessage = { id: "current-same-second", chatId: group.id, groupId: group.id, senderId: "member-2", timestamp, type: "text", text: "A separate question", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+    await store.storeMessage({ ...first, storedAt: timestamp });
+    await store.storeMessage({ ...current, storedAt: timestamp + 1 });
+
+    const context = new MemoryService(store).context(group, current.senderId, loadConfig({ NODE_ENV: "test" }).personality, current.text);
+    expect(context.thread?.state).toBe("new_topic");
+    expect(context.recentMessages.map((item) => item.text)).toEqual([current.text]);
+  });
+
+  it("includes a recent bot reply when a member sends an unquoted short follow-up", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-bot-follow-up-"));
+    dirs.push(dir);
+    const store = new FileStore(dir);
+    await store.init();
+    const group = { id: "bot-follow-up@g.us", subject: "Bot follow-up group", participantCount: 2, whatsappGroupId: "bot-follow-up@g.us", isAdmin: false, enabled: true, aiPaused: false, lastSeenAt: Date.now() };
+    const now = Date.now();
+    const source: CanonicalMessage = { id: "source", chatId: group.id, groupId: group.id, senderId: "member-1", timestamp: now - 2_000, type: "text", text: "Tell us a joke", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+    const current: CanonicalMessage = { id: "follow-up", chatId: group.id, groupId: group.id, senderId: "member-2", timestamp: now, type: "text", text: "lol", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+    await store.storeMessage({ ...source, storedAt: now - 2_000 });
+    await store.storeMessage({ ...current, storedAt: now });
+    await store.createAction({ id: "bot-action", idempotencyKey: "bot-action", groupId: group.id, sourceMessageId: source.id, actionType: "REPLY", payload: { text: "Why did the chicken cross the road?" }, scheduledFor: now - 1_000, status: "SENT", executedAt: now - 1_000 });
+
+    const context = new MemoryService(store).context(group, current.senderId, loadConfig({ NODE_ENV: "test" }).personality, current.text, current.id);
+    expect(context.thread?.state).toBe("continuation");
+    expect(context.thread?.messages.map((item) => item.role)).toContain("bot");
+    expect(context.thread?.messages.map((item) => item.text)).toContain("Why did the chicken cross the road?");
+  });
+
   it("learns repeated group topics with scoped confidence", async () => {
     const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-topic-"));
     dirs.push(dir);

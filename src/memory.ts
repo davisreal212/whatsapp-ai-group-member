@@ -1,22 +1,38 @@
 import { createHash } from "node:crypto";
-import type { CanonicalMessage, GroupRecord, MemberRecord, MemoryDeleteHook, MemoryRecord, MemoryRetriever, MemoryStatus, MemoryUpsertHook, Personality, StoredMessage } from "./types.js";
+import type { ActionRecord, CanonicalMessage, GroupRecord, MemberRecord, MemoryDeleteHook, MemoryRecord, MemoryRetriever, MemoryStatus, MemoryUpsertHook, Personality, StoredMessage } from "./types.js";
 import type { Store } from "./store.js";
 
 export interface ContextSnapshot {
   group: Pick<GroupRecord, "id" | "subject" | "participantCount">;
   recentMessages: ContextMessage[];
-  recentActions?: Array<{ type: string; text: string; timestamp: number }>;
+  recentActions?: RecentActionContext[];
   member?: Pick<MemberRecord, "displayName" | "behaviorProfile" | "confidence">;
   memories: Array<{ id: string; type: string; value: Record<string, unknown>; confidence: number; importance: number; status: MemoryStatus }>;
   personality: Personality;
+  skillHints?: Array<{ skillId: string; name: string; description: string; category: string; scope: string; skillFile?: string }>;
   thread?: ThreadContext;
 }
 
 export interface ContextMessage {
+  id: string;
+  senderId: string;
   sender: string;
   text: string;
   type: string;
   timestamp: number;
+  replyToId?: string;
+  replyToSenderId?: string;
+  role?: "member" | "bot";
+}
+
+export interface RecentActionContext {
+  id: string;
+  type: string;
+  text: string;
+  timestamp: number;
+  sourceMessageId: string;
+  targetMessageId?: string;
+  role: "bot";
 }
 
 export interface ThreadContext {
@@ -236,18 +252,18 @@ export class MemoryService {
     return { stale, archived, merged };
   }
 
-  context(group: GroupRecord, senderId: string, personality: Personality, query = ""): ContextSnapshot {
+  context(group: GroupRecord, senderId: string, personality: Personality, query = "", currentMessageId?: string): ContextSnapshot {
     const memberId = `${group.id}:${senderId}`;
     const member = this.store.members(group.id).find((item) => item.id === memberId);
     const memories = this.relevantMemories(group.id, memberId, query);
     const history = group.id.endsWith("@g.us")
       ? this.store.recentMessages(group.id, Math.max(this.options.recentMessageLimit * 4, 40))
       : this.store.recentChatMessages(group.id, Math.max(this.options.recentMessageLimit * 4, 40));
-    const thread = buildThreadContext(history, query, this.options.recentMessageLimit, this.store);
     const recentActions = this.store.actions(100)
       .filter((action) => action.groupId === group.id && action.status === "SENT")
-      .slice(0, 10)
-      .map((action) => ({ type: action.actionType, text: typeof action.payload.text === "string" ? action.payload.text.slice(0, 500) : "", timestamp: action.executedAt ?? action.scheduledFor }));
+      .map(formatRecentAction)
+      .filter((action) => action.text.length > 0);
+    const thread = buildThreadContext(history, query, this.options.recentMessageLimit, this.store, recentActions, currentMessageId);
     return {
       group: { id: group.id, subject: group.subject, participantCount: group.participantCount },
        recentMessages: thread.messages,
@@ -261,8 +277,8 @@ export class MemoryService {
      };
   }
 
-  async contextWithSemantic(group: GroupRecord, senderId: string, personality: Personality, query = ""): Promise<ContextSnapshot> {
-    const base = this.context(group, senderId, personality, query);
+  async contextWithSemantic(group: GroupRecord, senderId: string, personality: Personality, query = "", currentMessageId?: string): Promise<ContextSnapshot> {
+    const base = this.context(group, senderId, personality, query, currentMessageId);
     if (!this.retrieveMemory || !query.trim() || this.options.semanticMemoryLimit === 0) return base;
     const memberId = `${group.id}:${senderId}`;
     const groupScopeType = group.id.endsWith("@g.us") ? "group" : "relationship";
@@ -301,11 +317,12 @@ function formatMemory(memory: MemoryRecord): ContextSnapshot["memories"][number]
   return { id: memory.id, type: memory.memoryType, value: memory.value, confidence: memory.confidence, importance: memory.importance, status: memory.status };
 }
 
-function buildThreadContext(history: StoredMessage[], query: string, limit: number, store: Store): ThreadContext {
-  const current = history.at(-1);
+function buildThreadContext(history: StoredMessage[], query: string, limit: number, store: Store, recentActions: RecentActionContext[] = [], currentMessageId?: string): ThreadContext {
+  const current = (currentMessageId ? history.find((message) => message.id === currentMessageId) : undefined) ?? history.at(-1);
   if (!current) return { state: "new_topic", confidence: 1, messages: [] };
+  const recentBotActions = recentActions.filter((action) => action.timestamp <= current.storedAt + 5_000 && current.storedAt - action.timestamp <= BOT_FOLLOW_UP_WINDOW_MS);
   if (!query.trim()) {
-    return { state: "continuation", confidence: 0.35, messages: history.slice(-limit).map(formatContextMessage) };
+    return { state: "continuation", confidence: 0.35, messages: withBotActions(history.slice(-limit).map(formatContextMessage), recentBotActions, limit) };
   }
 
   const linked = new Set<string>([current.id]);
@@ -334,11 +351,12 @@ function buildThreadContext(history: StoredMessage[], query: string, limit: numb
     const related = new Map<string, StoredMessage>();
     for (const message of history.filter((message) => linked.has(message.id))) related.set(message.id, message);
     for (const message of chainMessages) related.set(message.id, message);
+    const messages = [...related.values()].sort(compareStoredMessagesAsc);
     return {
       state: "reply_chain",
       confidence: 1,
       anchorMessageId,
-      messages: [...related.values()].sort((left, right) => left.timestamp - right.timestamp).slice(-limit).map(formatContextMessage),
+      messages: withBotActions(messages.slice(-limit).map(formatContextMessage), actionsForMessages(messages, recentBotActions), limit),
     };
   }
 
@@ -348,24 +366,74 @@ function buildThreadContext(history: StoredMessage[], query: string, limit: numb
   const activeMatches = scored.filter(({ message, score }) => message.id !== current.id && score >= 0.25 && now - message.timestamp <= THREAD_WINDOW_MS);
   if (activeMatches.length) {
     const anchor = activeMatches.at(-1)?.message;
-    const selected = scored.filter(({ message, score }) => message.id === current.id || (score >= 0.25 && now - message.timestamp <= THREAD_WINDOW_MS)).slice(-limit).map(({ message }) => formatContextMessage(message));
-    return { state: "continuation", confidence: Math.min(0.95, 0.55 + Math.max(...activeMatches.map(({ score }) => score)) * 0.4), ...(anchor ? { anchorMessageId: anchor.id } : {}), messages: selected };
+    const selected = scored.filter(({ message, score }) => message.id === current.id || (score >= 0.25 && now - message.timestamp <= THREAD_WINDOW_MS)).slice(-limit).map(({ message }) => message);
+    const selectedMessages = selected.map((message) => formatContextMessage(message));
+    return { state: "continuation", confidence: Math.min(0.95, 0.55 + Math.max(...activeMatches.map(({ score }) => score)) * 0.4), ...(anchor ? { anchorMessageId: anchor.id } : {}), messages: withBotActions(selectedMessages, actionsForMessages(selected, recentBotActions), limit) };
   }
 
-  if (isFollowUp(query)) {
+  if (isFollowUp(query) || hasBotTopicOverlap(query, recentBotActions)) {
     const recent = history.filter((message) => now - message.timestamp <= FOLLOW_UP_WINDOW_MS).slice(-limit).map(formatContextMessage);
-    if (recent.length > 1) return { state: "continuation", confidence: 0.55, messages: recent };
+    if (recent.length > 1 || recentBotActions.length) return { state: "continuation", confidence: recentBotActions.length ? 0.7 : 0.55, messages: withBotActions(recent, recentBotActions, limit) };
   }
   return { state: "new_topic", confidence: 0.9, messages: [formatContextMessage(current)] };
 }
 
 function formatContextMessage(message: StoredMessage): ContextMessage {
   return {
+    id: message.id,
+    senderId: message.senderId,
     sender: message.senderName ?? message.senderId,
     text: (message.text ?? `[${message.type}]`).slice(0, 500),
     type: message.type,
     timestamp: message.timestamp,
+    ...(message.quotedMessageId ? { replyToId: message.quotedMessageId } : {}),
+    ...(message.quotedSenderId ? { replyToSenderId: message.quotedSenderId } : {}),
+    role: "member",
   };
+}
+
+function formatRecentAction(action: ActionRecord): RecentActionContext {
+  return {
+    id: action.id,
+    type: action.actionType,
+    text: typeof action.payload.text === "string" ? action.payload.text.slice(0, 500) : "",
+    timestamp: action.executedAt ?? action.scheduledFor,
+    sourceMessageId: action.sourceMessageId,
+    ...(action.targetMessageId ? { targetMessageId: action.targetMessageId } : {}),
+    role: "bot",
+  };
+}
+
+function withBotActions(messages: ContextMessage[], actions: RecentActionContext[], limit: number): ContextMessage[] {
+  const botMessages: ContextMessage[] = actions.map((action) => ({
+    id: `bot:${action.id}`,
+    senderId: "bot",
+    sender: "the bot",
+    text: action.text,
+    type: `bot_${action.type.toLowerCase()}`,
+    timestamp: action.timestamp,
+    replyToId: action.targetMessageId ?? action.sourceMessageId,
+    role: "bot",
+  }));
+  return [...messages, ...botMessages].sort(compareContextMessagesAsc).slice(-limit);
+}
+
+function actionsForMessages(messages: StoredMessage[], actions: RecentActionContext[]): RecentActionContext[] {
+  const ids = new Set(messages.map((message) => message.id));
+  return actions.filter((action) => ids.has(action.sourceMessageId) || (action.targetMessageId ? ids.has(action.targetMessageId) : false));
+}
+
+function hasBotTopicOverlap(query: string, actions: RecentActionContext[]): boolean {
+  const queryWords = threadWords(query);
+  return queryWords.size > 0 && actions.some((action) => tokenOverlap(queryWords, threadWords(action.text)) >= 0.25);
+}
+
+function compareStoredMessagesAsc(left: StoredMessage, right: StoredMessage): number {
+  return left.timestamp - right.timestamp || left.storedAt - right.storedAt || left.id.localeCompare(right.id);
+}
+
+function compareContextMessagesAsc(left: ContextMessage, right: ContextMessage): number {
+  return left.timestamp - right.timestamp || (left.role === "bot" ? -1 : right.role === "bot" ? 1 : left.id.localeCompare(right.id));
 }
 
 function threadWords(text: string): Set<string> {
@@ -380,11 +448,13 @@ function tokenOverlap(queryWords: Set<string>, messageWords: Set<string>): numbe
 }
 
 function isFollowUp(text: string): boolean {
-  return text.trim().split(/\s+/).length <= 14 && /^(?:yes|no|okay|ok|and|also|then|so|but|what about|how about|why|how|that|this|it|he|she|they|more|explain)\b/i.test(text.trim());
+  const normalized = text.trim();
+  return normalized.split(/\s+/).length <= 14 && (/^(?:yes|no|okay|ok|and|also|then|so|but|what about|how about|why|how|that|this|it|he|she|they|more|explain|lol|lmao|haha|exactly|true|same|nice|thanks|thank you)\b/i.test(normalized) || /^[\p{Extended_Pictographic}\s!?.,😂🤣😭]+$/u.test(normalized));
 }
 
 const THREAD_WINDOW_MS = 30 * 60_000;
 const FOLLOW_UP_WINDOW_MS = 15 * 60_000;
+const BOT_FOLLOW_UP_WINDOW_MS = 10 * 60_000;
 const THREAD_STOP_WORDS = new Set(["about", "after", "again", "also", "and", "are", "can", "could", "from", "have", "how", "into", "just", "like", "more", "not", "now", "please", "should", "that", "the", "their", "then", "this", "what", "when", "where", "which", "who", "why", "with", "would", "you", "your"]);
 
 function memoryScore(memory: MemoryRecord, queryWords: Set<string>, semanticScore?: number): number {
