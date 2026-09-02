@@ -50,7 +50,7 @@ The service defaults to silence when no provider is configured, when a provider 
 
 Memory limits and aging are configurable with `MEMORY_RECENT_MESSAGE_LIMIT`, `MEMORY_GROUP_LIMIT`, `MEMORY_MEMBER_LIMIT`, `MEMORY_SEMANTIC_LIMIT`, `MEMORY_STALE_AFTER_DAYS`, and `MEMORY_ARCHIVE_AFTER_DAYS`. Leave `EMBEDDING_PROVIDER=none` and `QDRANT_URL` blank to use the deterministic database-backed memory path only.
 
-The curated skill library lives in `skills/`, with one `SKILL.md` contract per catalog entry and 183 skills currently included. Run `npm run skills:sync` after changing `src/skill-catalog.ts`; the bot supplies only the best matching skill hints to the model for each message.
+The curated skill library lives in `skills/`, with one `SKILL.md` contract per catalog entry and 189 skills currently included. Run `npm run skills:sync` after changing `src/skill-catalog.ts`; the bot supplies only the best matching skill hints to the model for each message. Skill hints are guidance, not proof that a tool, permission, integration, or completed action exists; runtime results and SENT action records are the source of truth.
 
 ## Production checklist
 
