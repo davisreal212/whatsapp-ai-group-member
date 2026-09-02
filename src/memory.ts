@@ -494,7 +494,7 @@ const LOW_VALUE_TOKENS = new Set([
 
 function memoryCandidateText(text: string): string | undefined {
   const normalized = text.replace(/\s+/g, " ").trim();
-  if (normalized.length < 3 || containsSensitiveContent(normalized)) return undefined;
+  if (normalized.length < 3 || containsSensitiveContent(normalized) || containsUnverifiedCapabilityClaim(normalized)) return undefined;
   const words = normalized.toLowerCase().match(/[a-z]+/g) ?? [];
   if (words.length === 0 && /^[\p{Extended_Pictographic}\s!?.,]+$/u.test(normalized)) return undefined;
   if (words.length > 0 && words.length <= 6 && words.every((word) => LOW_VALUE_TOKENS.has(word))) return undefined;
@@ -504,6 +504,11 @@ function memoryCandidateText(text: string): string | undefined {
 function containsSensitiveContent(text: string): boolean {
   if (/\b(?:password|passcode|one[- ]time(?: password| code)?|otp|api key|secret key|private key|cvv|credit card|bank account|social security|national id|nin|bvn)\b/i.test(text)) return true;
   return /\b(?:i(?:'m| am)|my)\s+(?:pregnant|diabetic|depressed|diagnosed|allergic|hiv|aids|cancer|muslim|christian|jewish|hindu|gay|lesbian|bisexual|transgender)\b/i.test(text);
+}
+
+function containsUnverifiedCapabilityClaim(text: string): boolean {
+  if (/\b(?:skill|permission|tool|integration|authorization)\b[\s\S]{0,80}\b(?:invent|create|grant|approve|enable|disable|complete|finish|run|use|exist|available)\b/i.test(text)) return true;
+  return /\b(?:i|we|you|the bot|it)\s+(?:can|could|have|has|already|just|successfully)\s+(?:use|used|run|ran|send|sent|call|called|complete|completed|perform|performed|finish|finished)\b/i.test(text);
 }
 
 function clampInt(value: number, min: number, max: number): number {

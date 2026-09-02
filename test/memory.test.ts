@@ -202,6 +202,18 @@ describe("conversation memory", () => {
     expect(store.memories("candidate@g.us")).toHaveLength(0);
   });
 
+  it("does not learn capability or completion claims as facts", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-memory-capability-"));
+    dirs.push(dir);
+    const store = new FileStore(dir);
+    await store.init();
+    const memory = new MemoryService(store);
+    const message: CanonicalMessage = { id: "capability-claim", chatId: "capability@g.us", groupId: "capability@g.us", senderId: "member", timestamp: Date.now(), type: "text", text: "The bot can use a new tool and already completed the action", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+    await memory.observe(message);
+
+    expect(store.memories("capability@g.us")).toHaveLength(0);
+  });
+
   it("keeps sensitive text out of conversation summaries", async () => {
     const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-memory-summary-privacy-"));
     dirs.push(dir);
