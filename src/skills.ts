@@ -1,3 +1,5 @@
+import { BLUEPRINT_SKILL_CATALOG } from "./skill-catalog.js";
+
 export type SkillScope = "GLOBAL" | "GROUP" | "MEMBER" | "DM" | "MESSAGE";
 
 export interface SkillResult {
@@ -112,40 +114,51 @@ export interface SkillExecutionEvent {
 
 export function createCoreSkillRegistry(): SkillRegistry {
   const registry = new SkillRegistry();
-  const definitions: Array<Omit<SkillDefinition, "handler">> = [
-    skill("reply_to_message", "Reply to message", "Send a response quoted to the triggering message.", "communication", "MESSAGE", ["message"], ["reply"], true),
-    skill("mention_user", "Mention user", "Mention a verified group member.", "communication", "MESSAGE", ["memberId"], [], true),
-    skill("react_to_message", "React to message", "Send a controlled reaction.", "communication", "MESSAGE", ["messageId", "reaction"], [], true),
-    skill("send_text", "Send text", "Send a validated text message.", "communication", "MESSAGE", ["text"], [], true),
-    skill("send_media", "Send media", "Send approved image, video, audio, or document media.", "media", "MESSAGE", ["mediaUrl"], ["mimeType"], true),
-    skill("quote_context", "Quote context", "Load the message relationship behind a reply.", "conversation", "MESSAGE", ["messageId"], [], false),
-    skill("silence_decision", "Silence decision", "Explicitly choose no response for low-value conversation.", "conversation", "MESSAGE", ["relevant"], [], false),
-    skill("conversation_continuation", "Conversation continuation", "Continue a pending interaction after a tool result.", "conversation", "MESSAGE", ["conversationId"], ["result"], false),
-    skill("detect_message_burst", "Detect message burst", "Group rapid messages into one conversational unit.", "conversation", "GROUP", ["messages"], [], false),
-    skill("question_detection", "Question detection", "Detect whether a message asks a question.", "conversation", "MESSAGE", ["text"], [], false),
-    skill("self_reference", "Self-reference", "Keep normal bot self-reference in first person.", "human_behavior", "GLOBAL", [], [], false),
-    skill("natural_response_length", "Natural response length", "Adapt output length to persona and context.", "human_behavior", "MESSAGE", ["text"], ["responseLength"], false),
-    skill("retrieve_memory", "Retrieve memory", "Retrieve relevant scoped long-term context.", "memory", "GROUP", ["query", "scopeId"], ["limit"], true),
-    skill("store_memory", "Store memory", "Store a validated memory candidate with provenance.", "memory", "GROUP", ["memory"], [], true),
-    skill("memory_consolidation", "Consolidate memory", "Merge duplicate observations without losing evidence.", "memory", "GROUP", ["memories"], [], true),
-    skill("memory_privacy_isolation", "Memory privacy isolation", "Prevent memory crossing group and DM boundaries.", "memory", "GLOBAL", ["scopeId"], [], false),
-    skill("web_search", "Web search", "Search the web through a configured provider.", "research", "GROUP", ["query"], [], true),
-    skill("fact_verification", "Fact verification", "Cross-check important or current claims.", "research", "GROUP", ["evidence"], [], true),
-    skill("provider_fallback", "Provider fallback", "Use the next healthy AI provider after a failure.", "orchestration", "GLOBAL", ["operation"], [], false),
-    skill("voice_note_detection", "Voice note detection", "Recognize incoming audio messages.", "audio", "MESSAGE", ["messageType"], [], false),
-    skill("speech_to_text", "Speech to text", "Transcribe an incoming voice note.", "audio", "MESSAGE", ["audio"], [], true),
-    skill("text_to_speech", "Text to speech", "Generate audio when an approved provider is available.", "audio", "MESSAGE", ["text"], [], true),
-    skill("media_search", "Media search", "Find safe media for an explicit request.", "media", "MESSAGE", ["query"], [], true),
-    skill("skill_permission_check", "Skill permission check", "Keep permissions outside model-generated instructions.", "administration", "GLOBAL", ["skillId"], [], false),
-    skill("skill_observability", "Skill observability", "Record status and latency without logging message contents.", "monitoring", "GLOBAL", ["skillId"], [], false),
-  ];
-  for (const definition of definitions) registry.register(definition);
+  for (const definition of BLUEPRINT_SKILL_CATALOG) {
+    registry.register(skill(definition.skillId, definition.name, definition.description, definition.category, definition.scope, definition.requiresPermission));
+  }
   return registry;
 }
 
-function skill(skillId: string, name: string, description: string, category: string, scope: SkillScope, requiredInputs: string[], optionalInputs: string[], requiresPermission: boolean): Omit<SkillDefinition, "handler"> {
-  return { skillId, name, description, category, version: "1.0.0", scope, enabled: true, requiresPermission, supportsChaining: true, triggers: [], requiredInputs, optionalInputs, timeoutMs: 15_000, dependencies: [], failureBehavior: "fallback", learningEnabled: true };
+function skill(skillId: string, name: string, description: string, category: string, scope: SkillScope, requiresPermission: boolean): Omit<SkillDefinition, "handler"> {
+  const inputs = SKILL_INPUTS[skillId] ?? { required: [], optional: [] };
+  return { skillId, name, description, category, version: "1.0.0", scope, enabled: true, requiresPermission, supportsChaining: true, triggers: [], requiredInputs: inputs.required, optionalInputs: inputs.optional, timeoutMs: 15_000, dependencies: [], failureBehavior: "fallback", learningEnabled: true };
 }
+
+const SKILL_INPUTS: Record<string, { required: string[]; optional: string[] }> = {
+  reply_to_message: { required: ["message"], optional: ["reply"] },
+  mention_user: { required: ["memberId"], optional: [] },
+  mention_multiple_users: { required: ["memberIds"], optional: [] },
+  mention_entire_group: { required: ["message"], optional: [] },
+  react_to_message: { required: ["messageId", "reaction"], optional: [] },
+  edit_bot_message: { required: ["messageId", "text"], optional: [] },
+  delete_bot_message: { required: ["messageId"], optional: [] },
+  send_text: { required: ["text"], optional: [] },
+  send_media: { required: ["mediaUrl"], optional: ["mimeType"] },
+  quote_context: { required: ["messageId"], optional: [] },
+  conversation_continuation: { required: ["conversationId"], optional: ["result"] },
+  detect_message_burst: { required: ["messages"], optional: [] },
+  question_detection: { required: ["text"], optional: [] },
+  natural_response_length: { required: ["text"], optional: ["responseLength"] },
+  retrieve_memory: { required: ["query", "scopeId"], optional: ["limit"] },
+  store_memory: { required: ["memory"], optional: [] },
+  memory_consolidation: { required: ["memories"], optional: [] },
+  memory_privacy_isolation: { required: ["scopeId"], optional: [] },
+  web_search: { required: ["query"], optional: [] },
+  fact_verification: { required: ["evidence"], optional: [] },
+  provider_fallback: { required: ["operation"], optional: [] },
+  voice_note_detection: { required: ["messageType"], optional: [] },
+  audio_download: { required: ["messageId"], optional: [] },
+  speech_to_text: { required: ["audio"], optional: [] },
+  text_to_speech: { required: ["text"], optional: [] },
+  audio_response: { required: ["audio"], optional: [] },
+  audio_fallback: { required: ["audio"], optional: [] },
+  whatsapp_voice_call: { required: ["whatsappUserId"], optional: [] },
+  translation: { required: ["text"], optional: ["targetLanguage"] },
+  language_detection: { required: ["text"], optional: [] },
+  skill_permission_check: { required: ["skillId"], optional: [] },
+  skill_observability: { required: ["skillId"], optional: [] },
+};
 
 function scoreSkill(skill: SkillStatus, terms: string[]): number {
   const haystack = `${skill.skillId} ${skill.name} ${skill.description} ${skill.category}`.toLowerCase();

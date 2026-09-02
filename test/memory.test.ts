@@ -31,6 +31,48 @@ describe("conversation memory", () => {
     expect(style).toMatchObject({ importance: 0.25, status: "WEAK", sourceMessageId: message.id, sourceTimestamp: message.timestamp, sourceMemberId: message.senderId });
   });
 
+  it("keeps matching messages together and drops unrelated topic history", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-thread-context-"));
+    dirs.push(dir);
+    const store = new FileStore(dir);
+    await store.init();
+    const group = { id: "thread@g.us", subject: "Thread group", participantCount: 2, whatsappGroupId: "thread@g.us", isAdmin: false, enabled: true, aiPaused: false, lastSeenAt: Date.now() };
+    const save = async (id: string, text: string, timestamp: number, quotedMessageId?: string) => {
+      const message: CanonicalMessage = { id, chatId: group.id, groupId: group.id, senderId: id === "current" ? "member-2" : "member-1", timestamp, type: "text", text, mentionedIds: [], ...(quotedMessageId ? { quotedMessageId } : {}), isGroup: true, isStatus: false, isFromBot: false };
+      await store.storeMessage({ ...message, storedAt: timestamp });
+      return message;
+    };
+    const now = Date.now();
+    await save("bitcoin", "The bitcoin price is moving", now - 3_000);
+    await save("weather", "The weather is changing", now - 2_000);
+    await save("current", "What is the bitcoin price?", now);
+    const memory = new MemoryService(store);
+    const continuation = memory.context(group, "member-2", loadConfig({ NODE_ENV: "test" }).personality, "What is the bitcoin price?");
+    expect(continuation.thread?.state).toBe("continuation");
+    expect(continuation.recentMessages.map((item) => item.text)).toEqual(["The bitcoin price is moving", "What is the bitcoin price?"]);
+
+    await save("new-topic", "What is the football score?", now + 1_000);
+    const newTopic = memory.context(group, "member-2", loadConfig({ NODE_ENV: "test" }).personality, "What is the football score?");
+    expect(newTopic.thread?.state).toBe("new_topic");
+    expect(newTopic.recentMessages.map((item) => item.text)).toEqual(["What is the football score?"]);
+  });
+
+  it("follows explicit WhatsApp reply chains over intervening messages", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-reply-chain-"));
+    dirs.push(dir);
+    const store = new FileStore(dir);
+    await store.init();
+    const group = { id: "reply@g.us", subject: "Reply group", participantCount: 2, whatsappGroupId: "reply@g.us", isAdmin: false, enabled: true, aiPaused: false, lastSeenAt: Date.now() };
+    const now = Date.now();
+    const root: CanonicalMessage = { id: "root", chatId: group.id, groupId: group.id, senderId: "member-1", timestamp: now - 2_000, type: "text", text: "The launch is Friday", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+    const unrelated: CanonicalMessage = { id: "unrelated", chatId: group.id, groupId: group.id, senderId: "member-1", timestamp: now - 1_000, type: "text", text: "The match starts soon", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+    const reply: CanonicalMessage = { id: "reply", chatId: group.id, groupId: group.id, senderId: "member-2", timestamp: now, type: "text", text: "Yes, I will be ready", mentionedIds: [], quotedMessageId: root.id, isGroup: true, isStatus: false, isFromBot: false };
+    for (const message of [root, unrelated, reply]) await store.storeMessage({ ...message, storedAt: message.timestamp });
+    const context = new MemoryService(store).context(group, reply.senderId, loadConfig({ NODE_ENV: "test" }).personality, reply.text);
+    expect(context.thread?.state).toBe("reply_chain");
+    expect(context.recentMessages.map((item) => item.text)).toEqual([root.text, reply.text]);
+  });
+
   it("learns repeated group topics with scoped confidence", async () => {
     const dir = await mkdtemp(join(tmpdir(), "whatsapp-ai-topic-"));
     dirs.push(dir);

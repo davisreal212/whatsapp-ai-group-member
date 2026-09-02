@@ -72,7 +72,7 @@ export class ElevenLabsSpeechToTextProvider implements SpeechToTextProvider {
   readonly name = "elevenlabs-scribe";
   readonly available: boolean;
 
-  constructor(private readonly apiKey?: string, private readonly model = "scribe_v1") {
+  constructor(private readonly apiKey?: string, private readonly model = "scribe_v1", private readonly apiBaseUrl = "https://api.elevenlabs.io") {
     this.available = Boolean(apiKey);
   }
 
@@ -83,7 +83,7 @@ export class ElevenLabsSpeechToTextProvider implements SpeechToTextProvider {
     form.append("file", new Blob([bytes], { type: media.mimeType }), "voice-note");
     form.append("model_id", this.model);
     form.append("tag_audio_events", "false");
-    const response = await fetch("https://api.elevenlabs.io/v1/speech-to-text", {
+    const response = await fetch(`${this.apiBaseUrl.replace(/\/$/, "")}/v1/speech-to-text`, {
       method: "POST",
       headers: { "xi-api-key": this.apiKey },
       body: form,
@@ -158,16 +158,21 @@ export class ElevenLabsTextToSpeechProvider implements TextToSpeechProvider {
   readonly name = "elevenlabs-tts";
   readonly available: boolean;
 
-  constructor(private readonly apiKey?: string, private readonly voiceId = "21m00Tcm4TlvDq8ikWAM") {
+  constructor(
+    private readonly apiKey?: string,
+    private readonly voiceId = "21m00Tcm4TlvDq8ikWAM",
+    private readonly model = "eleven_multilingual_v2",
+    private readonly apiBaseUrl = "https://api.elevenlabs.io",
+  ) {
     this.available = Boolean(apiKey);
   }
 
   async synthesize(text: string): Promise<DownloadedMedia> {
     if (!this.apiKey) throw new Error("ElevenLabs API key is not configured");
-    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(this.voiceId)}`, {
+    const response = await fetch(`${this.apiBaseUrl.replace(/\/$/, "")}/v1/text-to-speech/${encodeURIComponent(this.voiceId)}`, {
       method: "POST",
       headers: { "xi-api-key": this.apiKey, "content-type": "application/json", accept: "audio/ogg" },
-      body: JSON.stringify({ text: text.slice(0, 4000), model_id: "eleven_multilingual_v2", output_format: "opus_48000_128" }),
+      body: JSON.stringify({ text: text.slice(0, 4000), model_id: this.model, output_format: "opus_48000_128" }),
       signal: AbortSignal.timeout(60_000),
     });
     if (!response.ok) throw new Error(`ElevenLabs returned HTTP ${response.status}`);

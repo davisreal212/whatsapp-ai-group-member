@@ -6,7 +6,7 @@ export type ConnectionStatus =
   | "RECONNECTING"
   | "REQUIRES_REPAIR";
 
-export type LanguagePreference = "english" | "pidgin" | "mixed";
+export type LanguagePreference = "english" | "pidgin" | "yoruba" | "igbo" | "hausa" | "french" | "spanish" | "chinese" | "mixed" | "auto" | (string & {});
 
 export type MessageType =
   | "text"
@@ -98,6 +98,12 @@ export interface AppConfig {
   ttsVoice: string;
   elevenLabsApiKey?: string;
   elevenLabsVoiceId: string;
+  elevenLabsTtsModel: string;
+  elevenLabsApiBaseUrl: string;
+  elevenLabsAgentId?: string;
+  elevenLabsWhatsAppPhoneNumberId?: string;
+  elevenLabsWhatsAppCallPermissionTemplateName?: string;
+  elevenLabsWhatsAppCallPermissionTemplateLanguageCode?: string;
   cmcApiKey?: string;
   maxMediaBytes: number;
   maxVideoDurationSeconds: number;
@@ -412,6 +418,7 @@ export interface PersistedState {
     aiProcessingPaused?: boolean;
     directMessageAllowlist?: string[];
     personality?: Partial<Personality>;
+    languagePreferenceConfigured?: boolean;
     participation?: Partial<ParticipationSettings>;
     skillOverrides?: Record<string, boolean>;
     dmLanguagePreferences?: Record<string, LanguagePreference>;

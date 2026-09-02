@@ -265,7 +265,7 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     if (mimeType.startsWith("image/")) {
       await this.socket.sendMessage(groupId, { image: body, mimetype: resolvedMimeType, ...(caption ? { caption } : {}) }, sendOptions);
     } else if (mimeType.startsWith("audio/")) {
-      await this.socket.sendMessage(groupId, { audio: body, mimetype: mimeType, ptt: true, ...(caption ? { caption } : {}) }, sendOptions);
+      await this.sendAudioWithFallback(groupId, body, mimeType, caption, sendOptions);
     } else {
       throw new Error("Unsupported media type");
     }
@@ -275,7 +275,15 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     if (!this.socket) throw new Error("WhatsApp is not connected");
     if (data.byteLength > this.maxMediaBytes) throw new Error("Media exceeds the configured size limit");
     const quoted = quotedMessageId ? this.rawMessages.get(quotedMessageId) : undefined;
-    await this.socket.sendMessage(groupId, { audio: data, mimetype: mimeType, ptt: true, ...(caption ? { caption } : {}) }, quoted ? { quoted } : undefined);
+    await this.sendAudioWithFallback(groupId, data, mimeType, caption, quoted ? { quoted } : undefined);
+  }
+
+  private async sendAudioWithFallback(groupId: string, data: Buffer, mimeType: string, caption?: string, options?: { quoted: WAMessage }): Promise<void> {
+    if (!this.socket) throw new Error("WhatsApp is not connected");
+    await sendAudioWithFallback(
+      () => this.socket?.sendMessage(groupId, { audio: data, mimetype: mimeType, ptt: true, ...(caption ? { caption } : {}) }, options) ?? Promise.reject(new Error("WhatsApp is not connected")),
+      () => this.socket?.sendMessage(groupId, { audio: data, mimetype: mimeType, ptt: false, ...(caption ? { caption } : {}) }, options) ?? Promise.reject(new Error("WhatsApp is not connected")),
+    );
   }
 
   private async handleConnectionUpdate(
@@ -410,6 +418,14 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
   private async clearAuthState(): Promise<void> {
     await this.credentialsSave.catch(() => undefined);
     await rm(this.authDir, { recursive: true, force: true });
+  }
+}
+
+export async function sendAudioWithFallback(sendVoiceNote: () => Promise<unknown>, sendAudio: () => Promise<unknown>): Promise<void> {
+  try {
+    await sendVoiceNote();
+  } catch {
+    await sendAudio();
   }
 }
 

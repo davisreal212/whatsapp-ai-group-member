@@ -6,6 +6,7 @@ import { AuthService, sessionCookieName } from "./auth.js";
 import type { AppConfig } from "./types.js";
 import type { BotRuntime } from "./bot.js";
 import { languagePreferenceSchema, personalityPatchSchema } from "./persona.js";
+import { LANGUAGE_LABELS, SUPPORTED_LANGUAGE_COUNT } from "./languages.js";
 
 export function createApp(runtime: BotRuntime, config: AppConfig) {
   const app = express();
@@ -58,6 +59,7 @@ export function createApp(runtime: BotRuntime, config: AppConfig) {
   app.use("/api", requireAdmin(config, auth));
   app.get("/api/status", (_request, response) => response.json(runtime.dashboardState()));
   app.get("/api/personality", (_request, response) => response.json(runtime.personalityForGroup()));
+  app.get("/api/languages", (_request, response) => response.json({ count: SUPPORTED_LANGUAGE_COUNT, languages: Object.entries(LANGUAGE_LABELS).filter(([key]) => !["mixed", "auto"].includes(key)).map(([id, label]) => ({ id, label })) }));
   app.get("/api/groups", (_request, response) => response.json(runtime.store.groups()));
   app.post("/api/groups/sync", async (_request, response, next) => {
     try {

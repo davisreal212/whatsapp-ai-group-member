@@ -93,7 +93,9 @@ describe("admin HTTP surface", () => {
     });
     expect((await preview.json()).response).toContain("I");
     const skills = await fetch(`${base}/api/skills`, { headers: { authorization: "Bearer test-token-that-is-long-enough" } });
-    expect((await skills.json()).length).toBeGreaterThan(20);
+    expect((await skills.json()).length).toBeGreaterThanOrEqual(178);
+    const languages = await fetch(`${base}/api/languages`, { headers: { authorization: "Bearer test-token-that-is-long-enough" } });
+    expect((await languages.json()).count).toBeGreaterThanOrEqual(100);
     await runtime.store.upsertMemory({ id: "memory", scopeType: "group", scopeId: "old@g.us", memoryType: "topic", value: { topic: "bitcoin" }, confidence: 0.8, importance: 0.5, status: "ACTIVE", evidenceCount: 1, createdAt: Date.now(), lastConfirmedAt: Date.now(), updatedAt: Date.now() });
     const memoryStatus = await fetch(`${base}/api/status`, { headers: { authorization: "Bearer test-token-that-is-long-enough" } });
     expect((await memoryStatus.json()).memory).toMatchObject({ storedMemories: 1, activeMemories: 1, groups: 1 });

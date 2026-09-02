@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { CanonicalMessage, LanguagePreference, Personality } from "./types.js";
 import type { ParticipationSignals } from "./participation.js";
+import { languageLabel as formatLanguageLabel, normalizeLanguageName } from "./languages.js";
 
 const ratio = z.preprocess((value) => {
   const number = typeof value === "number" ? value : Number(value);
@@ -9,7 +10,7 @@ const ratio = z.preprocess((value) => {
 
 const language = z.string().trim().min(2).max(40);
 
-export const languagePreferenceSchema = z.enum(["english", "pidgin", "mixed"]);
+export const languagePreferenceSchema = z.string().trim().min(2).max(40).regex(/^[a-zA-Z _-]+$/).transform((value) => normalizeLanguageName(value) ?? value.toLowerCase());
 
 export const personalityPatchSchema = z.object({
   displayName: z.string().trim().min(1).max(40),
@@ -18,7 +19,7 @@ export const personalityPatchSchema = z.object({
   talkativeness: ratio,
   confidence: ratio,
   formality: ratio,
-  languageMix: z.enum(["english", "pidgin", "mixed"]),
+  languageMix: languagePreferenceSchema,
   emojiFrequency: ratio,
   initiative: ratio,
   responseLength: z.enum(["short", "medium", "long"]),
@@ -96,13 +97,13 @@ export function resolvePersonality(base: Personality, override?: Partial<Persona
     ...(override ?? {}),
     personalityPresets: [...new Set(presetNames)],
   };
+  const languageMix = normalizeLanguageName(resolved.languageMix) as LanguagePreference | undefined ?? "english";
   return {
     ...resolved,
-    languages: resolved.languageMix === "english"
-      ? ["english"]
-      : resolved.languageMix === "pidgin"
-        ? ["nigerian pidgin", "english"]
-        : [...new Set(override?.languages ?? baseValue.languages)],
+    languageMix,
+    languages: languageMix === "mixed"
+      ? [...new Set(override?.languages ?? baseValue.languages)]
+      : languageList(languageMix),
   };
 }
 
@@ -116,22 +117,45 @@ export function migrateLegacyPersonality(personality?: Partial<Personality>): Pa
 }
 
 export function applyLanguagePreference(personality: Personality, preference: LanguagePreference): Personality {
+  const normalized = normalizeLanguageName(preference) as LanguagePreference | undefined ?? "english";
   return {
     ...personality,
-    languageMix: preference,
-    languages: preference === "english"
-      ? ["english"]
-      : preference === "pidgin"
-        ? ["nigerian pidgin", "english"]
-        : ["english", "nigerian pidgin"],
+    languageMix: normalized,
+    languages: languageList(normalized),
   };
 }
 
 export function parseLanguageCommand(text: string): LanguagePreference | "help" | undefined {
   const normalized = text.trim().toLowerCase().replace(/[.!?]+$/, "");
-  const match = normalized.match(/^(?:\/)?(?:set\s+)?(?:my\s+)?(?:language|lang)(?:\s+preference)?(?:\s+(?:is|to|as))?\s*(?::|=)?\s*(english|pidgin|mixed)?$/);
-  if (!match) return undefined;
-  return (match[1] as LanguagePreference | undefined) ?? "help";
+  const languageCommand = normalized.match(/^(?:\/)?(?:set\s+)?(?:my\s+)?(?:language|lang)(?:\s+preference)?(?:\s+(?:is|to|as))?\s*(?::|=)?\s*([a-z -]+)?$/);
+  if (languageCommand) return normalizeLanguageName(languageCommand[1]) as LanguagePreference | undefined ?? "help";
+  const communicationCommand = normalized.match(/^(?:always\s+)?(?:communicate|speak|reply|respond|write|talk|use)(?:\s+in|\s+using|\s+with|\s+only)?\s+([a-z -]+?)(?:\s+from\s+now(?:\s+on)?)?$/);
+  return communicationCommand ? normalizeLanguageName(communicationCommand[1]) as LanguagePreference | undefined : undefined;
+}
+
+export interface LanguageTaskRequest {
+  kind: "translate" | "analyze" | "summarize";
+  text: string;
+  targetLanguage?: LanguagePreference;
+}
+
+export function parseLanguageTask(text: string): LanguageTaskRequest | undefined {
+  const normalized = text.trim();
+  const targetedTranslation = normalized.match(/^(?:please\s+)?translate(?:\s+(?:this|that|it))?\s+(?:to|into)\s+([a-z -]+?)\s*[:\-]\s*(.+)$/i);
+  if (targetedTranslation) {
+    const targetLanguage = normalizeLanguageName(targetedTranslation[1]) as LanguagePreference | undefined;
+    const taskText = targetedTranslation[2];
+    if (targetLanguage && taskText) return { kind: "translate", targetLanguage, text: taskText.trim() };
+  }
+  const translation = normalized.match(/^(?:please\s+)?translate(?:\s+(?:this|that|it))?\s*(?::|-)\s*(.+)$/i);
+  if (translation?.[1]) return { kind: "translate", text: translation[1].trim() };
+  const analysis = normalized.match(/^(?:please\s+)?(?:analy[sz]e|summari[sz]e)(?:\s+(?:this|that|the\s+message|the\s+following))?\s*(?::|-)?\s*(.*)$/i);
+  if (analysis?.[1] !== undefined) return { kind: /summari[sz]e/i.test(normalized) ? "summarize" : "analyze", text: analysis[1].trim() };
+  return undefined;
+}
+
+export function languageLabel(preference: LanguagePreference): string {
+  return formatLanguageLabel(preference);
 }
 
 export interface ResponsePolicy {
@@ -158,11 +182,11 @@ export function responsePolicy(personality: Personality, message: CanonicalMessa
     (!signals.directMention || personality.respondToMentions) &&
     (!signals.directReply || personality.respondToReplies)
   );
-  const language = personality.languageMix === "pidgin"
-    ? "Nigerian Pidgin"
-    : personality.languageMix === "mixed"
-      ? "the incoming language, mixing English and Nigerian Pidgin only when natural"
-      : "English";
+  const language = personality.languageMix === "mixed"
+    ? "the incoming language, mixing English and Nigerian Pidgin only when natural"
+    : personality.languageMix === "auto"
+      ? "the user's detected language"
+      : languageLabel(personality.languageMix);
   return {
     shouldReply,
     replyToMessage: shouldReply && (directlyAddressed || message.isGroup),
@@ -185,7 +209,11 @@ export function personaInstructions(personality: Personality): string[] {
     ? "Output language: standard English only. Do not use Nigerian Pidgin, Yoruba, Igbo, or Hausa unless the user explicitly asks for it."
     : personality.languageMix === "pidgin"
       ? "Output language: Nigerian Pidgin, unless the user explicitly asks for another language."
-      : "Output language: follow the user's language naturally, using Nigerian Pidgin only when it is clearly appropriate.";
+      : personality.languageMix === "auto"
+        ? "Output language: detect the user's language for each message and reply in that language. Do not default to Nigerian Pidgin."
+        : personality.languageMix === "mixed"
+          ? "Output language: follow the user's language naturally, using Nigerian Pidgin only when it is clearly appropriate."
+          : `Output language: ${languageLabel(personality.languageMix)} only, unless the user explicitly asks for another language.`;
   return [
     `Persona name: ${personality.displayName}. Presentation: ${personality.genderPresentation}.`,
     `Tone: ${personality.tone}; humor level: ${Math.round(personality.humorLevel * 100)}%; response length: ${personality.responseLength}.`,
@@ -210,4 +238,12 @@ export function previewPersonality(message: string, personality: Personality): s
   if (personality.tone === "playful" || personality.humorLevel >= 0.65) reply += pidgin ? " Una no go let me rest 😂" : " You people are keeping me busy 😂";
   else if (personality.emojiFrequency >= 0.6) reply += " 🙂";
   return reply.slice(0, 2_000);
+}
+
+function languageList(preference: LanguagePreference): string[] {
+  if (preference === "english") return ["english"];
+  if (preference === "pidgin") return ["nigerian pidgin", "english"];
+  if (preference === "mixed") return ["english", "nigerian pidgin"];
+  if (preference === "auto") return ["auto"];
+  return [preference];
 }

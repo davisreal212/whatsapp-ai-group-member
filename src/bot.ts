@@ -20,8 +20,10 @@ import type { ParticipationSettings } from "./types.js";
 import { isSafeHttpsUrl } from "./network.js";
 import { GeminiEmbeddingProvider, QdrantVectorMemoryProvider } from "./vector-memory.js";
 import { MemoryVectorWorker } from "./memory-vector-worker.js";
-import { applyLanguagePreference, migrateLegacyPersonality, parseLanguageCommand, previewPersonality, resolvePersonality } from "./persona.js";
+import { applyLanguagePreference, languageLabel, migrateLegacyPersonality, parseLanguageCommand, parseLanguageTask, previewPersonality, resolvePersonality } from "./persona.js";
 import { createCoreSkillRegistry, SkillRegistry } from "./skills.js";
+import { ElevenLabsWhatsAppCallService, parseVoiceCallCommand } from "./voice.js";
+import { normalizeLanguageName } from "./languages.js";
 
 export class BotRuntime {
   readonly memory: MemoryService;
@@ -34,6 +36,7 @@ export class BotRuntime {
   readonly backups: BackupService;
   readonly memoryVector: MemoryVectorWorker;
   readonly skills: SkillRegistry;
+  readonly voiceCalls: ElevenLabsWhatsAppCallService;
   private readonly inboundQueue = new KeyedJobQueue(4);
   private readonly personaCache = new Map<string, Personality>();
   private lastDecisionDiagnostics?: Record<string, unknown>;
@@ -67,7 +70,15 @@ export class BotRuntime {
     this.skills = createCoreSkillRegistry();
     this.actions = new ActionService(store, config, transport);
     this.tasks = new TaskService(store, config, transport);
-    this.media = new MediaProcessor(new FallbackSpeechToTextProvider([new GroqSpeechToTextProvider(config.groqApiKey), new ElevenLabsSpeechToTextProvider(config.elevenLabsApiKey)]), new GeminiVisionProvider(config.geminiApiKey, config.geminiModel), new FallbackTextToSpeechProvider([new OpenAITextToSpeechProvider(config.ttsApiKey, config.ttsBaseUrl, config.ttsModel, config.ttsVoice), new ElevenLabsTextToSpeechProvider(config.elevenLabsApiKey, config.elevenLabsVoiceId)]), config.mediaDownloadsPerHour);
+    this.media = new MediaProcessor(new FallbackSpeechToTextProvider([new GroqSpeechToTextProvider(config.groqApiKey), new ElevenLabsSpeechToTextProvider(config.elevenLabsApiKey, "scribe_v1", config.elevenLabsApiBaseUrl)]), new GeminiVisionProvider(config.geminiApiKey, config.geminiModel), new FallbackTextToSpeechProvider([new ElevenLabsTextToSpeechProvider(config.elevenLabsApiKey, config.elevenLabsVoiceId, config.elevenLabsTtsModel, config.elevenLabsApiBaseUrl), new OpenAITextToSpeechProvider(config.ttsApiKey, config.ttsBaseUrl, config.ttsModel, config.ttsVoice)]), config.mediaDownloadsPerHour);
+    this.voiceCalls = new ElevenLabsWhatsAppCallService({
+      apiKey: config.elevenLabsApiKey,
+      agentId: config.elevenLabsAgentId,
+      apiBaseUrl: config.elevenLabsApiBaseUrl,
+      whatsappPhoneNumberId: config.elevenLabsWhatsAppPhoneNumberId,
+      permissionTemplateName: config.elevenLabsWhatsAppCallPermissionTemplateName,
+      permissionTemplateLanguageCode: config.elevenLabsWhatsAppCallPermissionTemplateLanguageCode,
+    });
     this.backups = new BackupService(store, config.dataDir, config.backupIntervalHours, config.backupRetentionCount);
   }
 
@@ -76,10 +87,14 @@ export class BotRuntime {
     const pruned = await this.store.pruneExpired(this.config.messageRetentionDays);
     if (Object.values(pruned).some((count) => count > 0)) await this.log("retention.pruned", "info", { ...pruned });
     const settings = this.store.settings();
-    const storedPersonality = migrateLegacyPersonality(settings?.personality);
+    const storedPersonality = settings?.languagePreferenceConfigured
+      ? settings.personality
+      : migrateLegacyPersonality(settings?.personality);
     if (storedPersonality) {
       this.config.personality = resolvePersonality(this.config.personality, storedPersonality);
-      if (storedPersonality !== settings?.personality) await this.store.updateSettings({ personality: storedPersonality });
+      if (storedPersonality !== settings?.personality || !settings?.languagePreferenceConfigured) {
+        await this.store.updateSettings({ personality: storedPersonality, languagePreferenceConfigured: true });
+      }
     }
     if (settings?.outboundPaused !== undefined) this.config.outboundPaused = settings.outboundPaused;
     if (settings?.aiProcessingPaused !== undefined) this.config.aiProcessingPaused = settings.aiProcessingPaused;
@@ -91,7 +106,9 @@ export class BotRuntime {
     this.personaCache.clear();
     this.config.groupCooldownMs = this.config.participation.groupCooldownMs;
     if (!settings) {
-      await this.store.updateSettings({ outboundPaused: this.config.outboundPaused, aiProcessingPaused: this.config.aiProcessingPaused, directMessageAllowlist: this.config.directMessageAllowlist, personality: this.config.personality, participation: this.config.participation });
+      await this.store.updateSettings({ outboundPaused: this.config.outboundPaused, aiProcessingPaused: this.config.aiProcessingPaused, directMessageAllowlist: this.config.directMessageAllowlist, personality: this.config.personality, languagePreferenceConfigured: true, participation: this.config.participation });
+    } else if (!settings.languagePreferenceConfigured && !storedPersonality) {
+      await this.store.updateSettings({ languagePreferenceConfigured: true });
     }
     this.actions.start();
     this.backups.start();
@@ -245,7 +262,7 @@ export class BotRuntime {
       if (languageCommand) {
         const current = this.dmLanguagePreference(message.chatId);
         const reply = languageCommand === "help"
-          ? `Your saved reply language is ${current}. Use "language english", "language pidgin", or "language mixed" to change it.`
+          ? `Your saved reply language is ${current}. Use "language english", "language pidgin", "language yoruba", "language igbo", "language hausa", "language french", "language spanish", "language chinese", "language mixed", or "language auto" to change it.`
           : await this.saveDmLanguagePreference(message.chatId, languageCommand);
         await this.executeTaskResult({ reply }, message, group);
         return;
@@ -257,6 +274,34 @@ export class BotRuntime {
     const context = personality.memoryEnabled
       ? await this.memory.contextWithSemantic(contextGroup, message.senderId, personality, message.text ?? message.media?.caption ?? "")
       : { ...this.memory.context(contextGroup, message.senderId, personality, ""), memories: [], member: undefined };
+    const languageTask = parseLanguageTask(message.text ?? "");
+    if (languageTask && (!message.isGroup || message.text?.toLowerCase().includes(this.config.botName.toLowerCase()))) {
+      const taskText = languageTask.text || message.text || "";
+      const response = await this.providers.generateResponse({
+        messageText: taskText,
+        messageType: message.type,
+        directed: true,
+        ...(message.senderName ? { senderName: message.senderName } : {}),
+        context,
+        task: languageTask.kind,
+        ...(languageTask.targetLanguage ? { targetLanguage: languageLabel(languageTask.targetLanguage) } : { targetLanguage: languageLabel(personality.languageMix) }),
+      }, message.groupId ?? message.chatId);
+      await this.executeTaskResult({ reply: response ?? "I couldn't complete that language task right now." }, message, group);
+      return;
+    }
+    if (!message.isGroup && parseVoiceCallCommand(message.text ?? "")) {
+      const recipient = message.senderPhone?.replace(/\D/g, "") || message.senderId.split("@")[0] || message.chatId.split("@")[0];
+      try {
+        if (!recipient) throw new Error("Unable to determine the WhatsApp call recipient");
+        const result = await this.voiceCalls.startCall(recipient);
+        await this.log("voice.call_started", "info", { conversationId: result.conversationId ?? "unknown" }, message);
+        await this.executeTaskResult({ reply: "I have started the ElevenLabs WhatsApp voice call request." }, message, group);
+      } catch (error) {
+        await this.log("voice.call_failed", "warn", { error: error instanceof Error ? error.message : "unknown" }, message);
+        await this.executeTaskResult({ reply: "Voice calling is not ready yet. Please configure the ElevenLabs WhatsApp call settings." }, message, group);
+      }
+      return;
+    }
     if (!message.isGroup) {
       const task = await this.tasks.handleMessage(message);
       if (task.handled) {
@@ -456,7 +501,7 @@ export class BotRuntime {
   async setPersonality(personality: Partial<AppConfig["personality"]>): Promise<void> {
     this.config.personality = resolvePersonality(this.config.personality, personality);
     this.personaCache.clear();
-    await this.store.updateSettings({ personality: this.config.personality });
+    await this.store.updateSettings({ personality: this.config.personality, ...(personality.languageMix === undefined ? {} : { languagePreferenceConfigured: true }) });
     await this.log("personality.changed", "info", { fields: Object.keys(personality) });
   }
 
@@ -481,17 +526,17 @@ export class BotRuntime {
 
   dmLanguagePreference(chatId: string): LanguagePreference {
     const preference = this.store.settings()?.dmLanguagePreferences?.[chatId];
-    return preference === "pidgin" || preference === "mixed" ? preference : "english";
+    return normalizeLanguageName(preference) as LanguagePreference | undefined ?? "english";
   }
 
   async saveDmLanguagePreference(chatId: string, preference: LanguagePreference): Promise<string> {
-    const preferences = { ...(this.store.settings()?.dmLanguagePreferences ?? {}), [chatId]: preference };
+    const normalized = normalizeLanguageName(preference) as LanguagePreference | undefined ?? "english";
+    const preferences = { ...(this.store.settings()?.dmLanguagePreferences ?? {}), [chatId]: normalized };
     await this.store.updateSettings({ dmLanguagePreferences: preferences });
     this.personaCache.delete(chatId);
-    await this.log("dm.language_changed", "info", { chatId, preference });
-    if (preference === "english") return "English is now your saved reply language. I will use standard English and avoid Nigerian Pidgin unless you ask for it.";
-    if (preference === "pidgin") return "Nigerian Pidgin is now your saved reply language.";
-    return "Mixed English and Nigerian Pidgin is now your saved reply language.";
+    await this.log("dm.language_changed", "info", { chatId, preference: normalized });
+    if (normalized === "english") return "English is now your saved reply language. I will use standard English and avoid Nigerian Pidgin unless you ask for it.";
+    return `${languageLabel(normalized)} is now your saved reply language.`;
   }
 
   async resetMemory(scopeId: string): Promise<number> {
@@ -572,7 +617,7 @@ export class BotRuntime {
       groupActivity: Object.fromEntries(this.store.groups().map((group) => [group.id, groupActivityState(this.store, group.id, groupParticipation(group, this.config.participation))])),
       metrics: snapshot.runtime.metrics,
       providers: this.providers.statuses(),
-      media: this.media.health(),
+      media: { ...this.media.health(), elevenLabsWhatsAppCalling: this.voiceCalls.available },
       research: { tavilyAvailable: Boolean(this.config.tavilyApiKey) },
       memory: {
         totalMessages: Object.keys(snapshot.messages).length,

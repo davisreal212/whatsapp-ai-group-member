@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { localRelevance } from "../src/decision.js";
-import { applyLanguagePreference, defaultPersonality, migrateLegacyPersonality, parseLanguageCommand, previewPersonality, resolvePersonality, responsePolicy } from "../src/persona.js";
-import { SkillExecutor, SkillRegistry } from "../src/skills.js";
+import { applyLanguagePreference, defaultPersonality, languageLabel, migrateLegacyPersonality, parseLanguageCommand, parseLanguageTask, previewPersonality, resolvePersonality, responsePolicy } from "../src/persona.js";
+import { SUPPORTED_LANGUAGE_COUNT, normalizeLanguageName } from "../src/languages.js";
+import { SkillExecutor, SkillRegistry, createCoreSkillRegistry } from "../src/skills.js";
 
 describe("persona behavior", () => {
   it("defaults to English and treats it as an output-language lock", () => {
@@ -19,8 +20,24 @@ describe("persona behavior", () => {
   it("parses explicit language commands", () => {
     expect(parseLanguageCommand("language english")).toBe("english");
     expect(parseLanguageCommand("set my language to pidgin")).toBe("pidgin");
+    expect(parseLanguageCommand("Always communicate in Chinese from now on")).toBe("chinese");
+    expect(parseLanguageCommand("language auto")).toBe("auto");
     expect(parseLanguageCommand("/language")).toBe("help");
     expect(parseLanguageCommand("I speak English")).toBeUndefined();
+    expect(languageLabel("chinese")).toBe("Chinese");
+  });
+
+  it("parses translation and analysis requests", () => {
+    expect(parseLanguageTask("translate to Chinese: Good morning")).toEqual({ kind: "translate", targetLanguage: "chinese", text: "Good morning" });
+    expect(parseLanguageTask("translate: Good morning")).toEqual({ kind: "translate", text: "Good morning" });
+    expect(parseLanguageTask("analyse: this message")).toEqual({ kind: "analyze", text: "this message" });
+    expect(parseLanguageTask("summarize: this message")).toEqual({ kind: "summarize", text: "this message" });
+  });
+
+  it("supports the broad language catalog", () => {
+    expect(SUPPORTED_LANGUAGE_COUNT).toBeGreaterThanOrEqual(100);
+    expect(normalizeLanguageName("Haitian Creole")).toBe("haitian_creole");
+    expect(applyLanguagePreference(defaultPersonality("Kola"), "japanese")).toMatchObject({ languageMix: "japanese", languages: ["japanese"] });
   });
 
   it("resolves preset expression without changing safety controls", () => {
@@ -50,6 +67,13 @@ describe("persona behavior", () => {
 });
 
 describe("skill registry and executor", () => {
+  it("registers the complete blueprint skill catalog", () => {
+    const skills = createCoreSkillRegistry().list();
+    expect(skills.length).toBeGreaterThanOrEqual(178);
+    expect(skills.some((skill) => skill.skillId === "whatsapp_voice_call")).toBe(true);
+    expect(skills.some((skill) => skill.skillId === "pending_conversation_recall")).toBe(true);
+  });
+
   it("discovers skills and enforces permissions before execution", async () => {
     const registry = new SkillRegistry();
     registry.register({
