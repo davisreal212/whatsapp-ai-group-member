@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { WAMessage } from "@whiskeysockets/baileys";
+import type { WACallEvent, WAMessage } from "@whiskeysockets/baileys";
 import { ActionService, type OutboundTransport } from "./actions.js";
 import { DecisionEngine, isLinkAnalysisRequestText } from "./decision.js";
 import type { AppConfig, CanonicalMessage, GroupRecord, InboundJobRecord, LanguagePreference, Personality, TaskRecord } from "./types.js";
@@ -176,6 +176,12 @@ export class BotRuntime {
       return;
     }
     await this.inboundQueue.enqueueAndWait(message.chatId, () => this.processInboundMessage(message, loadMedia));
+  }
+
+  async handleIncomingCalls(calls: WACallEvent[]): Promise<void> {
+    for (const call of calls.filter((item) => item.status === "offer")) {
+      await this.log("voice.incoming_call_unsupported", "warn", { isGroup: Boolean(call.isGroup), isVideo: Boolean(call.isVideo) });
+    }
   }
 
   private async processInboundMessage(initialMessage: CanonicalMessage, loadMedia?: () => Promise<import("./media.js").DownloadedMedia>): Promise<void> {

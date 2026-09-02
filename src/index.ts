@@ -5,6 +5,7 @@ import { createApp } from "./server.js";
 import { FileStore } from "./store.js";
 import { PostgresStore } from "./postgres-store.js";
 import { BaileysWhatsAppAdapter } from "./whatsapp.js";
+import type { WACallEvent } from "@whiskeysockets/baileys";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -14,6 +15,7 @@ async function main(): Promise<void> {
   const whatsapp = new BaileysWhatsAppAdapter(config.whatsappAuthDir, store, {
     onRawMessage: async (message, loadMedia, resolvePhone) => runtime.handleRawMessage(message, loadMedia, resolvePhone),
     onGroups: async (groups) => runtime.syncGroups(groups),
+    onIncomingCalls: async (calls: WACallEvent[]) => runtime.handleIncomingCalls(calls),
     onIdentity: async (identities) => runtime.setBotIdentities(identities),
   }, config.maxMediaBytes, config.maxVideoDurationSeconds);
   runtime = new BotRuntime(store, config, whatsapp);

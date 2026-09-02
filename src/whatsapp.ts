@@ -6,6 +6,7 @@ import makeWASocket, {
   downloadContentFromMessage,
   useMultiFileAuthState,
   type GroupMetadata,
+  type WACallEvent,
   type WAMessage,
   type WASocket,
 } from "@whiskeysockets/baileys";
@@ -34,6 +35,7 @@ export interface DiscoveredDirectMessage {
 export interface WhatsAppEvents {
   onRawMessage(raw: WAMessage, loadMedia?: () => Promise<DownloadedMedia>, resolvePhone?: PhoneIdentityResolver): Promise<void>;
   onGroups(groups: DiscoveredGroup[]): Promise<void>;
+  onIncomingCalls?(calls: WACallEvent[]): Promise<void>;
   onIdentity?(identities: string[]): Promise<void>;
 }
 
@@ -109,6 +111,7 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     socket.ev.on("contacts.upsert", (contacts) => contacts.forEach((contact) => this.rememberPhoneIdentity(contact.lid ?? contact.id, contact.jid)));
     socket.ev.on("contacts.update", (contacts) => contacts.forEach((contact) => this.rememberPhoneIdentity(contact.lid ?? contact.id, contact.jid)));
     socket.ev.on("messaging-history.set", ({ contacts }) => contacts.forEach((contact) => this.rememberPhoneIdentity(contact.lid ?? contact.id, contact.jid)));
+    socket.ev.on("call", (calls) => void this.events.onIncomingCalls?.(calls));
     socket.ev.on("messages.upsert", ({ messages, type }) => {
       console.log(`[whatsapp] messages.upsert type=${type} count=${messages.length}`);
       for (const raw of messages) {
@@ -448,8 +451,9 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
   }
 
   private rememberPhoneIdentity(lid: string | undefined, jid: string | undefined): void {
-    if (!lid || !jid || !jid.endsWith("@s.whatsapp.net")) return;
-    this.phoneByLid.set(normalizeWhatsAppJid(lid), jid);
+    const normalizedJid = jid ? normalizeWhatsAppJid(jid) : undefined;
+    if (!lid || !normalizedJid?.endsWith("@s.whatsapp.net")) return;
+    this.phoneByLid.set(normalizeWhatsAppJid(lid), normalizedJid);
   }
 }
 

@@ -135,6 +135,11 @@ describe("decision safety helpers", () => {
     expect(localRelevance(message, "Kola", undefined, 0.1).reason).toBe("group_greeting");
   });
 
+  it("lets short unrelated group messages reach the classifier", () => {
+    const message = { id: "short-message", chatId: "g@g.us", groupId: "g@g.us", senderId: "u", timestamp: Date.now(), type: "text" as const, text: "okay", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+    expect(localRelevance(message, "Kola", undefined, 0.1)).toMatchObject({ relevant: true, reason: "conversation_message", directed: false });
+  });
+
   it("turns a provider ignore into a response plan for a direct address", async () => {
     const message = { id: "direct-message", chatId: "g@g.us", groupId: "g@g.us", senderId: "member", timestamp: Date.now(), type: "text" as const, text: "Kola, help me", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
     const group: GroupRecord = { id: "g@g.us", whatsappGroupId: "g@g.us", subject: "Test", participantCount: 1, isAdmin: true, enabled: true, aiPaused: false, lastSeenAt: Date.now() };

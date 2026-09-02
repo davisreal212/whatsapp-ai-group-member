@@ -103,7 +103,9 @@ export function localRelevance(message: CanonicalMessage, botName: string, botJi
   if (message.isGroup && talkativeness >= 0.35 && text.trim().length >= 10) {
     return { relevant: true, reason: "group_conversation", ...signals };
   }
-  return { relevant: false, reason: "no_local_relevance_signal", directed: false };
+  return text.trim()
+    ? { relevant: true, reason: "conversation_message", ...signals }
+    : { relevant: false, reason: "empty_message", ...signals };
 }
 
 export class DecisionEngine {
