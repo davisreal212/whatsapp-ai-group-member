@@ -16,7 +16,8 @@ import type { ConnectionStatus } from "./types.js";
 import { fetchSafeMedia } from "./network.js";
 import { KeyedJobQueue, type QueueStats } from "./queue.js";
 import type { DownloadedMedia } from "./media.js";
-import { normalizePhoneNumber, sameWhatsAppIdentity } from "./identity.js";
+import { normalizePhoneNumber, normalizeWhatsAppJid, sameWhatsAppIdentity } from "./identity.js";
+import type { PhoneIdentityResolver } from "./normalize.js";
 
 export interface DiscoveredGroup {
   id: string;
@@ -31,7 +32,7 @@ export interface DiscoveredDirectMessage {
 }
 
 export interface WhatsAppEvents {
-  onRawMessage(raw: WAMessage, loadMedia?: () => Promise<DownloadedMedia>): Promise<void>;
+  onRawMessage(raw: WAMessage, loadMedia?: () => Promise<DownloadedMedia>, resolvePhone?: PhoneIdentityResolver): Promise<void>;
   onGroups(groups: DiscoveredGroup[]): Promise<void>;
   onIdentity?(identities: string[]): Promise<void>;
 }
@@ -39,6 +40,7 @@ export interface WhatsAppEvents {
 export class BaileysWhatsAppAdapter implements OutboundTransport {
   private socket?: WASocket;
   private readonly rawMessages = new Map<string, WAMessage>();
+  private readonly phoneByLid = new Map<string, string>();
   private readonly messageQueue = new KeyedJobQueue(4);
   private reconnectAttempts = 0;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
@@ -103,6 +105,10 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     socket.ev.on("creds.update", () => {
       this.credentialsSave = this.credentialsSave.then(() => saveCreds());
     });
+    socket.ev.on("chats.phoneNumberShare", ({ lid, jid }) => this.rememberPhoneIdentity(lid, jid));
+    socket.ev.on("contacts.upsert", (contacts) => contacts.forEach((contact) => this.rememberPhoneIdentity(contact.lid ?? contact.id, contact.jid)));
+    socket.ev.on("contacts.update", (contacts) => contacts.forEach((contact) => this.rememberPhoneIdentity(contact.lid ?? contact.id, contact.jid)));
+    socket.ev.on("messaging-history.set", ({ contacts }) => contacts.forEach((contact) => this.rememberPhoneIdentity(contact.lid ?? contact.id, contact.jid)));
     socket.ev.on("messages.upsert", ({ messages, type }) => {
       console.log(`[whatsapp] messages.upsert type=${type} count=${messages.length}`);
       for (const raw of messages) {
@@ -111,7 +117,7 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
           let lastError: unknown;
           for (let attempt = 1; attempt <= 3; attempt += 1) {
             try {
-              await this.events.onRawMessage(raw, () => this.downloadMedia(raw));
+              await this.events.onRawMessage(raw, () => this.downloadMedia(raw), (identity) => this.phoneByLid.get(normalizeWhatsAppJid(identity)));
               return;
             } catch (error) {
               lastError = error;
@@ -164,6 +170,7 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     this.pairingCodeRequest = undefined;
     this.pairingPhoneNumber = undefined;
     this.rawMessages.clear();
+    this.phoneByLid.clear();
     let logoutError: string | undefined;
     if (socket) {
       try {
@@ -209,6 +216,7 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
   async listGroups(): Promise<DiscoveredGroup[]> {
     if (!this.socket) return [];
     const groups = await this.socket.groupFetchAllParticipating();
+    for (const group of Object.values(groups)) group.participants.forEach((participant) => this.rememberPhoneIdentity(participant.lid ?? participant.id, participant.jid));
     return Object.values(groups).map((group) => toDiscoveredGroup(group, this.socket?.user?.id));
   }
 
@@ -437,6 +445,11 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
   private async clearAuthState(): Promise<void> {
     await this.credentialsSave.catch(() => undefined);
     await rm(this.authDir, { recursive: true, force: true });
+  }
+
+  private rememberPhoneIdentity(lid: string | undefined, jid: string | undefined): void {
+    if (!lid || !jid || !jid.endsWith("@s.whatsapp.net")) return;
+    this.phoneByLid.set(normalizeWhatsAppJid(lid), jid);
   }
 }
 

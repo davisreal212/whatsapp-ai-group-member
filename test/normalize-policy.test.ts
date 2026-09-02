@@ -115,6 +115,14 @@ describe("message normalization and inbound policy", () => {
     expect(message?.senderPhone).toBe("2349067818982@s.whatsapp.net");
   });
 
+  it("resolves a LID through the adapter identity map", () => {
+    const message = normalizeMessage({
+      key: { remoteJid: "1234567890@lid", id: "dm-lid-2" },
+      message: { conversation: "hello" },
+    }, undefined, (identity) => identity === "1234567890@lid" ? "2349067818982@s.whatsapp.net" : undefined);
+    expect(message?.senderPhone).toBe("2349067818982@s.whatsapp.net");
+  });
+
   it("defaults unapproved and disabled groups to denial", () => {
     const message = {
       id: "group-1", chatId: group.id, groupId: group.id, senderId: "member", timestamp: Date.now(), type: "text" as const,

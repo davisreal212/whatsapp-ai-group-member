@@ -12,7 +12,7 @@ async function main(): Promise<void> {
   const store = config.databaseUrl ? new PostgresStore(config.databaseUrl, vectorJobsEnabled) : new FileStore(config.dataDir, vectorJobsEnabled);
   let runtime: BotRuntime;
   const whatsapp = new BaileysWhatsAppAdapter(config.whatsappAuthDir, store, {
-    onRawMessage: async (message, loadMedia) => runtime.handleRawMessage(message, loadMedia),
+    onRawMessage: async (message, loadMedia, resolvePhone) => runtime.handleRawMessage(message, loadMedia, resolvePhone),
     onGroups: async (groups) => runtime.syncGroups(groups),
     onIdentity: async (identities) => runtime.setBotIdentities(identities),
   }, config.maxMediaBytes, config.maxVideoDurationSeconds);

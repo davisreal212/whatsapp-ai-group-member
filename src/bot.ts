@@ -169,8 +169,8 @@ export class BotRuntime {
     return (this.transport as unknown as { listDirectMessages(): DiscoveredDirectMessage[] }).listDirectMessages();
   }
 
-  async handleRawMessage(raw: WAMessage, loadMedia?: () => Promise<import("./media.js").DownloadedMedia>): Promise<void> {
-    const message = normalizeMessage(raw as unknown as Parameters<typeof normalizeMessage>[0], this.config.botJid);
+  async handleRawMessage(raw: WAMessage, loadMedia?: () => Promise<import("./media.js").DownloadedMedia>, resolvePhone?: import("./normalize.js").PhoneIdentityResolver): Promise<void> {
+    const message = normalizeMessage(raw as unknown as Parameters<typeof normalizeMessage>[0], this.config.botJid, resolvePhone);
     if (!message) {
       await this.log("message.invalid", "warn", { reason: "normalization_failed" });
       return;
@@ -291,7 +291,7 @@ export class BotRuntime {
       await this.executeTaskResult({ reply: response ?? "I couldn't complete that language task right now." }, message, group);
       return;
     }
-    if (!message.isGroup && parseVoiceCallCommand(message.text ?? "")) {
+    if (parseVoiceCallCommand(message.text ?? "")) {
       try {
         if (this.config.dryRun) {
           await this.log("voice.call_skipped", "info", { reason: "dry_run" }, message);

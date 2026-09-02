@@ -15,6 +15,8 @@ export interface WhatsAppRawMessage {
   pushName?: string | null;
 }
 
+export type PhoneIdentityResolver = (identity: string) => string | undefined;
+
 type MessageContent = Record<string, unknown>;
 
 const unwrapMessage = (message: MessageContent): MessageContent => {
@@ -41,7 +43,7 @@ const numberValue = (value: unknown): number | undefined => {
   return undefined;
 };
 
-export function normalizeMessage(raw: WhatsAppRawMessage, botJid?: string): CanonicalMessage | undefined {
+export function normalizeMessage(raw: WhatsAppRawMessage, botJid?: string, resolvePhone?: PhoneIdentityResolver): CanonicalMessage | undefined {
   const chatId = raw.key?.remoteJid ?? undefined;
   const id = raw.key?.id ?? undefined;
   if (!chatId || !id || !raw.message) return undefined;
@@ -54,7 +56,7 @@ export function normalizeMessage(raw: WhatsAppRawMessage, botJid?: string): Cano
     ? (payload.contextInfo as MessageContent)
     : {};
   const senderId = raw.key?.participant ?? chatId;
-  const senderPhone = raw.key?.senderPn ?? raw.key?.participantPn;
+  const senderPhone = raw.key?.senderPn ?? raw.key?.participantPn ?? resolvePhone?.(senderId) ?? resolvePhone?.(chatId);
   const group = chatId.endsWith("@g.us");
   const status = chatId === "status@broadcast";
   const mentions = Array.isArray(contextInfo.mentionedJid)
