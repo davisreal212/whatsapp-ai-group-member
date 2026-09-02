@@ -750,7 +750,7 @@ function mediaSearchQuery(value: string): string {
 }
 
 function messageContainsUrl(text: string | undefined, candidate: string): boolean {
-  return Boolean(text && [...text.matchAll(/https:\/\/[^\s<>]+/gi)].some((match) => match[0] === candidate));
+  return Boolean(text && extractHttpsUrls(text).includes(candidate));
 }
 
 function callRecipient(message: CanonicalMessage): string {
