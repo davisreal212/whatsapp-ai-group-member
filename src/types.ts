@@ -25,6 +25,7 @@ export type Decision =
   | "REPLY_QUOTED"
   | "MENTION_REPLY"
   | "SEND_IMAGE"
+  | "SEND_STICKER"
   | "SEND_AUDIO";
 
 export interface Personality {

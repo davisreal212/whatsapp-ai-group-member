@@ -154,6 +154,38 @@ describe("validated outbound actions", () => {
     expect(sent).toEqual([{ chatId: group.id, bytes: 5, quoted: source.id }]);
   });
 
+  it("uses the transport's group-wide mention path when requested", async () => {
+    const { store, config } = await setup();
+    let mentionedAll = false;
+    const transport = {
+      connected: true,
+      sendText: async () => {},
+      sendTextToAll: async () => { mentionedAll = true; },
+      sendReaction: async () => {},
+      sendMedia: async () => {},
+    };
+    const service = new ActionService(store, config, transport);
+    const plan = { decision: "REPLY" as const, confidence: 1, reason: "announce", text: "Heads up everyone.", mentionAll: true, delayMs: 0, needsWeb: false, needsMedia: false, responseStyle: "short_casual" as const };
+    expect((await service.execute(plan, source, group)).reason).toBe("sent");
+    expect(mentionedAll).toBe(true);
+  });
+
+  it("sends a validated WebP sticker through the sticker transport", async () => {
+    const { store, config } = await setup();
+    let sentUrl = "";
+    const transport = {
+      connected: true,
+      sendText: async () => {},
+      sendReaction: async () => {},
+      sendMedia: async () => {},
+      sendSticker: async (_chatId: string, url: string) => { sentUrl = url; },
+    };
+    const service = new ActionService(store, config, transport);
+    const plan = { decision: "SEND_STICKER" as const, confidence: 1, reason: "sticker reply", mediaUrl: "https://example.com/funny.webp", mediaMimeType: "image/webp", delayMs: 0, needsWeb: false, needsMedia: true, responseStyle: "short_casual" as const };
+    expect((await service.execute(plan, source, group)).reason).toBe("sent");
+    expect(sentUrl).toBe("https://example.com/funny.webp");
+  });
+
   it("quotes URL media replies", async () => {
     const { store, config } = await setup();
     let quoted: string | undefined;

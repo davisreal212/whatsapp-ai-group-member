@@ -4,6 +4,15 @@ import { isIP } from "node:net";
 const redirectStatuses = new Set([301, 302, 303, 307, 308]);
 const maxRedirects = 3;
 
+export function extractHttpsUrls(value: string): string[] {
+  const urls = new Set<string>();
+  for (const match of value.matchAll(/https:\/\/[^\s<>"'`]+/gi)) {
+    const cleaned = (match[0] ?? "").replace(/[),.!?:;]+$/g, "");
+    if (isSafeHttpsUrl(cleaned)) urls.add(cleaned);
+  }
+  return [...urls];
+}
+
 export function isSafeHttpsUrl(value: string): boolean {
   try {
     const url = new URL(value);

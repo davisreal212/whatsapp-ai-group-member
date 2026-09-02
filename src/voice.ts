@@ -46,5 +46,6 @@ export class ElevenLabsWhatsAppCallService {
 }
 
 export function parseVoiceCallCommand(text: string): boolean {
-  return /^(?:please\s+)?(?:call me|voice call(?: me)?|start(?: a)? voice call|talk to me by voice|call)$/i.test(text.trim().replace(/[.!?]+$/, ""));
+  return /^(?:please\s+)?(?:call me(?: now)?|voice call(?: me)?|start(?: a)? voice call|talk to me by voice|call)$/i.test(text.trim().replace(/[.!?]+$/, ""))
+    || /^(?:can|could|would)\s+you(?:\s+please)?\s+call me(?: now)?$/i.test(text.trim().replace(/[.!?]+$/, ""));
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ElevenLabsSpeechToTextProvider, FallbackSpeechToTextProvider, FallbackTextToSpeechProvider, MediaProcessor, type DownloadedMedia, type SpeechToTextProvider, type TextToSpeechProvider, type VisionProvider } from "../src/media.js";
+import { ElevenLabsSpeechToTextProvider, FallbackSpeechToTextProvider, FallbackTextToSpeechProvider, GeminiVisionProvider, MediaProcessor, type DownloadedMedia, type SpeechToTextProvider, type TextToSpeechProvider, type VisionProvider } from "../src/media.js";
 
 const media: DownloadedMedia = { data: Buffer.from("voice"), mimeType: "audio/ogg" };
 
@@ -36,6 +36,17 @@ describe("media processing", () => {
     await processor.analyzeImage(async () => ({ data: Buffer.from("image"), mimeType: "image/png" }));
     await processor.analyzeImage(async () => ({ data: Buffer.from("image"), mimeType: "image/png" }));
     expect(calls).toBe(1);
+  });
+
+  it("accepts fenced vision JSON for sticker analysis", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "```json\n{\"description\":\"laughing sticker\",\"confidence\":0.9}\n```" }] } }] }), { status: 200 }));
+    try {
+      await expect(new GeminiVisionProvider("test-key").analyze({ data: Buffer.from("sticker"), mimeType: "image/webp" })).resolves.toMatchObject({ description: "laughing sticker", confidence: 0.9 });
+      const request = fetchMock.mock.calls[0]?.[1];
+      expect(String(request?.body)).toContain("WhatsApp sticker");
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it("generates audio only when a TTS provider is available", async () => {

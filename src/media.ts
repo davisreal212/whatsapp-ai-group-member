@@ -109,20 +109,40 @@ export class GeminiVisionProvider implements VisionProvider {
 
   async analyze(media: DownloadedMedia): Promise<VisionResult> {
     if (!this.apiKey) throw new Error("Gemini API key is not configured");
+    const instruction = media.mimeType.toLowerCase() === "image/webp"
+      ? "Describe this WhatsApp sticker or image. Explain the likely emotion, joke, meme meaning, visible objects, and any visible text. Return JSON with description, ocrText, and confidence (0..1)."
+      : "Describe this image for a WhatsApp conversation. Explain the important objects, scene, intent, and visible text as OCR. Return JSON with description, ocrText, and confidence (0..1).";
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(this.model)}:generateContent?key=${encodeURIComponent(this.apiKey)}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "Describe this image for a WhatsApp conversation. Extract any visible text as OCR. Return JSON with description, ocrText, and confidence (0..1)." }, { inline_data: { mime_type: media.mimeType, data: media.data.toString("base64") } }] }], generationConfig: { responseMimeType: "application/json" } }),
+      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: instruction }, { inline_data: { mime_type: media.mimeType, data: media.data.toString("base64") } }] }], generationConfig: { responseMimeType: "application/json" } }),
       signal: AbortSignal.timeout(60_000),
     });
     if (!response.ok) throw new Error(`Gemini vision returned HTTP ${response.status}`);
     const body = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
     const text = body.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) throw new Error("Vision provider returned no text");
-    const parsed = JSON.parse(text) as { description?: unknown; ocrText?: unknown; confidence?: unknown };
+    const parsed = parseVisionJson(text);
+    if (!parsed) return { description: text.replace(/^```(?:json)?\s*|\s*```$/gi, "").trim().slice(0, 2_000), confidence: 0.5 };
     if (typeof parsed.description !== "string" || !parsed.description.trim()) throw new Error("Vision provider returned no description");
     const confidence = typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence) ? Math.min(1, Math.max(0, parsed.confidence)) : 0.6;
     return { description: parsed.description.trim().slice(0, 2000), ...(typeof parsed.ocrText === "string" && parsed.ocrText.trim() ? { ocrText: parsed.ocrText.trim().slice(0, 2000) } : {}), confidence };
+  }
+}
+
+function parseVisionJson(value: string): { description?: unknown; ocrText?: unknown; confidence?: unknown } | undefined {
+  const cleaned = value.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+  try {
+    return JSON.parse(cleaned) as { description?: unknown; ocrText?: unknown; confidence?: unknown };
+  } catch {
+    const start = cleaned.indexOf("{");
+    const end = cleaned.lastIndexOf("}");
+    if (start < 0 || end <= start) return undefined;
+    try {
+      return JSON.parse(cleaned.slice(start, end + 1)) as { description?: unknown; ocrText?: unknown; confidence?: unknown };
+    } catch {
+      return undefined;
+    }
   }
 }
 

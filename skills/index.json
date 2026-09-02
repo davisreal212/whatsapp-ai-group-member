@@ -88,6 +88,14 @@
     "requiresPermission": true
   },
   {
+    "skillId": "brand_page_analysis",
+    "name": "Brand page analysis",
+    "description": "Extract a public brand page's offer, audience, and trust signals.",
+    "category": "research",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
     "skillId": "calculator",
     "name": "Calculator",
     "description": "Perform mathematical calculations.",
@@ -197,6 +205,14 @@
     "description": "Learn from reliable corrections.",
     "category": "learning",
     "scope": "MEMBER",
+    "requiresPermission": false
+  },
+  {
+    "skillId": "crypto_market_explanation",
+    "name": "Crypto market explanation",
+    "description": "Explain crypto market concepts and trading terminology without placing orders.",
+    "category": "finance",
+    "scope": "MESSAGE",
     "requiresPermission": false
   },
   {
@@ -400,6 +416,14 @@
     "requiresPermission": true
   },
   {
+    "skillId": "freelance_opportunity_matching",
+    "name": "Freelance opportunity matching",
+    "description": "Compare a public opportunity page with a member's stated skills and preferences.",
+    "category": "research",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
     "skillId": "gender_style",
     "name": "Gender style",
     "description": "Apply dashboard-controlled persona presentation style.",
@@ -542,6 +566,14 @@
     "category": "monitoring",
     "scope": "GLOBAL",
     "requiresPermission": false
+  },
+  {
+    "skillId": "link_page_analysis",
+    "name": "Link page analysis",
+    "description": "Fetch and summarize a user-provided public HTTPS page.",
+    "category": "research",
+    "scope": "MESSAGE",
+    "requiresPermission": true
   },
   {
     "skillId": "log_analysis",
@@ -1128,6 +1160,14 @@
     "requiresPermission": true
   },
   {
+    "skillId": "send_sticker",
+    "name": "Send sticker",
+    "description": "Send a validated WebP sticker from a permitted source.",
+    "category": "media",
+    "scope": "MESSAGE",
+    "requiresPermission": true
+  },
+  {
     "skillId": "send_text",
     "name": "Send text",
     "description": "Send a validated text message.",
@@ -1238,6 +1278,14 @@
     "category": "audio",
     "scope": "MESSAGE",
     "requiresPermission": true
+  },
+  {
+    "skillId": "spotify_music_recommendation",
+    "name": "Spotify music recommendation",
+    "description": "Recommend a song and provide a Spotify link.",
+    "category": "media",
+    "scope": "MESSAGE",
+    "requiresPermission": false
   },
   {
     "skillId": "sql_assistance",

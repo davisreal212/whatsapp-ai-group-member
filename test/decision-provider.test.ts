@@ -82,6 +82,20 @@ describe("decision safety helpers", () => {
     expect(localRelevance(message, "Kola")).toMatchObject({ relevant: true, reason: "media_request", directed: true, priority: "HIGH" });
   });
 
+  it("keeps link analysis and music requests relevant in groups", () => {
+    const link = { id: "link-request", chatId: "g@g.us", groupId: "g@g.us", senderId: "u", timestamp: Date.now(), type: "text" as const, text: "Please analyze this brand https://example.com", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+    const music = { ...link, id: "music-request", text: "Recommend a workout song" };
+    expect(localRelevance(link, "Kola")).toMatchObject({ relevant: true, reason: "link_analysis_request", directed: true });
+    expect(localRelevance(music, "Kola")).toMatchObject({ relevant: true, reason: "music_request", directed: true });
+  });
+
+  it("creates a sticker action when no classifier is available", async () => {
+    const message = { id: "sticker-request", chatId: "g@g.us", groupId: "g@g.us", senderId: "u", timestamp: Date.now(), type: "text" as const, text: "Send me a funny sticker", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+    const group: GroupRecord = { id: "g@g.us", whatsappGroupId: "g@g.us", subject: "Test", participantCount: 1, isAdmin: true, enabled: true, aiPaused: false, lastSeenAt: Date.now() };
+    const result = await new DecisionEngine({ classify: async () => undefined } as unknown as ProviderRouter).decide(message, group, { group, recentMessages: [], memories: [], personality: loadConfig({ NODE_ENV: "test" }).personality }, { botName: "Kola" });
+    expect(result.plan).toMatchObject({ decision: "SEND_STICKER", needsMedia: true, reason: "local_sticker_request" });
+  });
+
   it("falls back to an image action when AI classification is unavailable", async () => {
     const message = { id: "image-request-fallback", chatId: "g@g.us", groupId: "g@g.us", senderId: "u", timestamp: Date.now(), type: "text" as const, text: "Send me us president picture", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
     const group: GroupRecord = { id: "g@g.us", whatsappGroupId: "g@g.us", subject: "Test", participantCount: 1, isAdmin: true, enabled: true, aiPaused: false, lastSeenAt: Date.now() };

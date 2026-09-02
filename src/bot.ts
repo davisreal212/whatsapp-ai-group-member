@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { WAMessage } from "@whiskeysockets/baileys";
 import { ActionService, type OutboundTransport } from "./actions.js";
-import { DecisionEngine } from "./decision.js";
+import { DecisionEngine, isLinkAnalysisRequestText } from "./decision.js";
 import type { AppConfig, CanonicalMessage, GroupRecord, InboundJobRecord, LanguagePreference, Personality, TaskRecord } from "./types.js";
 import { MemoryService } from "./memory.js";
 import { isCurrentInformationQuestion, evaluateInboundPolicy } from "./policy.js";
@@ -17,13 +17,14 @@ import { KeyedJobQueue } from "./queue.js";
 import { formatNigeriaDateTime, NIGERIA_TIME_ZONE } from "./time.js";
 import { groupActivityState, groupParticipation } from "./participation.js";
 import type { ParticipationSettings } from "./types.js";
-import { isSafeHttpsUrl } from "./network.js";
+import { extractHttpsUrls, isSafeHttpsUrl } from "./network.js";
 import { GeminiEmbeddingProvider, QdrantVectorMemoryProvider } from "./vector-memory.js";
 import { MemoryVectorWorker } from "./memory-vector-worker.js";
 import { applyLanguagePreference, languageLabel, migrateLegacyPersonality, parseLanguageCommand, parseLanguageTask, previewPersonality, resolvePersonality } from "./persona.js";
 import { createCoreSkillRegistry, SkillRegistry } from "./skills.js";
 import { ElevenLabsWhatsAppCallService, parseVoiceCallCommand } from "./voice.js";
 import { normalizeLanguageName } from "./languages.js";
+import { formatMusicRecommendation } from "./music.js";
 
 export class BotRuntime {
   readonly memory: MemoryService;
@@ -291,9 +292,16 @@ export class BotRuntime {
       return;
     }
     if (!message.isGroup && parseVoiceCallCommand(message.text ?? "")) {
-      const recipient = message.senderPhone?.replace(/\D/g, "") || message.senderId.split("@")[0] || message.chatId.split("@")[0];
       try {
-        if (!recipient) throw new Error("Unable to determine the WhatsApp call recipient");
+        if (this.config.dryRun) {
+          await this.log("voice.call_skipped", "info", { reason: "dry_run" }, message);
+          return;
+        }
+        if (this.config.outboundPaused) {
+          await this.log("voice.call_skipped", "info", { reason: "outbound_paused" }, message);
+          return;
+        }
+        const recipient = callRecipient(message);
         const result = await this.voiceCalls.startCall(recipient);
         await this.log("voice.call_started", "info", { conversationId: result.conversationId ?? "unknown" }, message);
         await this.executeTaskResult({ reply: "I have started the ElevenLabs WhatsApp voice call request." }, message, group);
@@ -318,6 +326,11 @@ export class BotRuntime {
     const dateTimeReply = this.tasks.currentNigeriaDateTimeReply(message.text ?? "");
     if (dateTimeReply) {
       await this.executeTaskResult({ reply: dateTimeReply }, message, group);
+      return;
+    }
+    const musicReply = formatMusicRecommendation(message.text ?? "");
+    if (musicReply) {
+      await this.executeTaskResult({ reply: musicReply }, message, group);
       return;
     }
     const result = await this.decisions.decide(message, contextGroup, context, { ...this.config, botName: personality.displayName, alwaysReplyToAllowedDm: !message.isGroup });
@@ -353,25 +366,30 @@ export class BotRuntime {
       }
     }
     const currentQuestion = isCurrentInformationQuestion(message.text ?? "");
-    this.lastDecisionDiagnostics = { ...this.lastDecisionDiagnostics, searchRequired: Boolean(plan.needsWeb || currentQuestion), mediaSearchRequired: plan.decision === "SEND_IMAGE" };
-    const evidence = plan.decision !== "IGNORE" && personality.webSearchEnabled && (plan.needsWeb || currentQuestion)
+    const linkAnalysis = isLinkAnalysisRequestText(message.text ?? "");
+    this.lastDecisionDiagnostics = { ...this.lastDecisionDiagnostics, searchRequired: Boolean(plan.needsWeb || currentQuestion || linkAnalysis), mediaSearchRequired: ["SEND_IMAGE", "SEND_STICKER"].includes(plan.decision) };
+    const evidence = plan.decision !== "IGNORE" && personality.webSearchEnabled && (plan.needsWeb || currentQuestion || linkAnalysis)
       ? await this.research.research(message.text ?? "", this.config.tavilyMaxResults)
       : undefined;
-    if (plan.needsWeb || currentQuestion) {
+    if (plan.needsWeb || currentQuestion || linkAnalysis) {
       plan = { ...plan, needsWeb: true };
     }
-    if (plan.decision === "SEND_IMAGE" && (!plan.mediaUrl || !isSafeHttpsUrl(plan.mediaUrl) || !messageContainsUrl(message.text, plan.mediaUrl))) {
-      const mediaQuery = plan.mediaQuery ?? mediaSearchQuery(message.text ?? message.media?.caption ?? "");
-      const media = await this.research.searchMedia(mediaQuery, this.config.tavilyMaxResults);
-      const candidate = media[0];
+    if (["SEND_IMAGE", "SEND_STICKER"].includes(plan.decision) && (!plan.mediaUrl || !isSafeHttpsUrl(plan.mediaUrl) || !messageContainsUrl(message.text, plan.mediaUrl))) {
+      const sticker = plan.decision === "SEND_STICKER";
+      const mediaQuery = `${plan.mediaQuery ?? mediaSearchQuery(message.text ?? message.media?.caption ?? "")}${sticker ? " sticker webp" : ""}`;
+      const explicitStickerUrl = sticker ? extractHttpsUrls(message.text ?? "").find((url) => /\.webp(?:[?#]|$)/i.test(url)) : undefined;
+      const media = explicitStickerUrl ? [] : await this.research.searchMedia(mediaQuery, this.config.tavilyMaxResults);
+      const candidate = explicitStickerUrl
+        ? { url: explicitStickerUrl, mimeType: "image/webp" }
+        : sticker ? media.find((item) => item.mimeType === "image/webp" || /\.webp(?:[?#]|$)/i.test(item.url)) : media[0];
       if (candidate) {
-        plan = { ...plan, mediaUrl: candidate.url, mediaMimeType: candidate.mimeType ?? "image/jpeg", needsMedia: true };
-        await this.log("media.search_succeeded", "info", { query: mediaQuery, providerUrl: candidate.url }, message);
+        plan = { ...plan, mediaUrl: candidate.url, mediaMimeType: sticker ? "image/webp" : candidate.mimeType ?? "image/jpeg", needsMedia: true };
+        await this.log(sticker ? "sticker.search_succeeded" : "media.search_succeeded", "info", { query: mediaQuery, providerUrl: candidate.url }, message);
       } else {
         plan = {
           ...plan,
           decision: "REPLY",
-          text: "I couldn't find a safe image for that request.",
+          text: sticker ? "I couldn't find a safe sticker for that request." : "I couldn't find a safe image for that request.",
           mediaUrl: undefined,
           mediaMimeType: undefined,
           needsMedia: false,
@@ -379,7 +397,7 @@ export class BotRuntime {
         await this.log("media.search_failed", "warn", { query: mediaQuery }, message);
       }
     }
-    if (plan.decision !== "IGNORE" && !plan.text && !["REACT", "SEND_IMAGE"].includes(plan.decision)) {
+    if (plan.decision !== "IGNORE" && !["REACT", "SEND_IMAGE", "SEND_STICKER"].includes(plan.decision) && (!plan.text || Boolean(evidence))) {
       const input: ProviderInput = {
         messageText: message.text ?? message.media?.caption ?? "",
         messageType: message.type,
@@ -389,6 +407,7 @@ export class BotRuntime {
         ...(message.transcriptLanguage ? { transcriptLanguage: message.transcriptLanguage } : {}),
         context,
         ...(evidence ? { evidence } : {}),
+        ...(linkAnalysis ? { task: "analyze" as const } : {}),
       };
       const response = await this.providers.generateResponse(input, message.groupId);
       if (response) plan = { ...plan, text: response };
@@ -732,4 +751,11 @@ function mediaSearchQuery(value: string): string {
 
 function messageContainsUrl(text: string | undefined, candidate: string): boolean {
   return Boolean(text && [...text.matchAll(/https:\/\/[^\s<>]+/gi)].some((match) => match[0] === candidate));
+}
+
+function callRecipient(message: CanonicalMessage): string {
+  const source = message.senderPhone ?? (message.senderId.endsWith("@s.whatsapp.net") ? message.senderId : undefined);
+  const digits = source?.replace(/\D/g, "") ?? "";
+  if (digits.length < 7) throw new Error("Unable to determine the WhatsApp call recipient");
+  return digits;
 }

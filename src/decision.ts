@@ -4,9 +4,11 @@ import type { ContextSnapshot } from "./memory.js";
 import type { ProviderRouter, ProviderInput } from "./providers.js";
 import { DEFAULT_PARTICIPATION, naturalDelay, participationSignals, shouldBypassCooldown, type ActionPriority } from "./participation.js";
 import { responsePolicy } from "./persona.js";
+import { extractHttpsUrls } from "./network.js";
+import { isMusicRequestText } from "./music.js";
 
 const decisionSchema = z.object({
-  decision: z.enum(["IGNORE", "REACT", "REPLY", "REPLY_QUOTED", "MENTION_REPLY", "SEND_IMAGE", "SEND_AUDIO"]),
+  decision: z.enum(["IGNORE", "REACT", "REPLY", "REPLY_QUOTED", "MENTION_REPLY", "SEND_IMAGE", "SEND_STICKER", "SEND_AUDIO"]),
   confidence: z.coerce.number().min(0).max(1),
   reason: z.string().min(1).max(500),
   targetMessageId: z.string().min(1).max(200).optional(),
@@ -80,6 +82,9 @@ export function localRelevance(message: CanonicalMessage, botName: string, botJi
   if (signals.directReply && personality?.respondToReplies === false) return { relevant: false, reason: "replies_disabled", ...signals };
   if (message.isGroup && !signals.directed && personality?.joinRelevantConversations === false) return { relevant: false, reason: "conversation_joining_disabled", ...signals };
   if (isMediaRequestText(text)) return { relevant: true, reason: "media_request", ...signals, directed: true, priority: "HIGH" };
+  if (isStickerRequestText(text)) return { relevant: true, reason: "sticker_request", ...signals, directed: true, priority: "HIGH" };
+  if (isLinkAnalysisRequestText(text)) return { relevant: true, reason: "link_analysis_request", ...signals, directed: true, priority: "HIGH" };
+  if (isMusicRequestText(text)) return { relevant: true, reason: "music_request", ...signals, directed: true, priority: "NORMAL" };
   if (signals.directed) return { relevant: true, reason: "directed_to_bot", ...signals };
   if (message.quotedMessageId) return { relevant: true, reason: "reply_or_quote", ...signals };
   if (message.isGroup && recentBotFollowUp(text, recentBotActions)) return { relevant: true, reason: "recent_bot_reply", ...signals };
@@ -153,18 +158,19 @@ export class DecisionEngine {
       ? { ...plan, targetMessageId: message.id }
       : plan;
     const mediaRequest = isMediaRequestText(message.text ?? "");
-    const responsePlan = safePlan && local.directed && safePlan.decision === "IGNORE" && !mediaRequest
+    const stickerRequest = isStickerRequestText(message.text ?? "");
+    const responsePlan = safePlan && local.directed && safePlan.decision === "IGNORE" && !mediaRequest && !stickerRequest
       ? { ...safePlan, decision: "REPLY" as const, reason: "Directly addressed; generate a safe response." }
       : safePlan;
     if (!responsePlan) {
       return {
-        plan: isMediaRequestText(message.text ?? "") ? mediaRequestPlan() : ignorePlan("No healthy AI provider is configured; choosing silence."),
+        plan: mediaRequest ? mediaRequestPlan() : stickerRequest ? stickerRequestPlan() : ignorePlan("No healthy AI provider is configured; choosing silence."),
         local,
         usedAi: false,
       };
     }
-    let safeResponsePlan = mediaRequest && responsePlan.decision === "IGNORE" ? mediaRequestPlan() : responsePlan;
-    if (safeResponsePlan.decision === "SEND_IMAGE" && !context.personality.mediaSkillsEnabled) {
+    let safeResponsePlan = mediaRequest && responsePlan.decision === "IGNORE" ? mediaRequestPlan() : stickerRequest && responsePlan.decision === "IGNORE" ? stickerRequestPlan() : responsePlan;
+    if (["SEND_IMAGE", "SEND_STICKER"].includes(safeResponsePlan.decision) && !context.personality.mediaSkillsEnabled) {
       safeResponsePlan = { ...safeResponsePlan, decision: "REPLY", reason: "media_skills_disabled", needsMedia: false, text: "I can't send media in this group right now." };
     }
     if (safeResponsePlan.decision === "SEND_AUDIO" && !context.personality.voiceSkillsEnabled) {
@@ -183,7 +189,7 @@ export class DecisionEngine {
       plan: {
         ...safeResponsePlan,
         delayMs,
-        needsMedia: safeResponsePlan.needsMedia || safeResponsePlan.decision === "SEND_IMAGE",
+        needsMedia: safeResponsePlan.needsMedia || ["SEND_IMAGE", "SEND_STICKER"].includes(safeResponsePlan.decision),
         priority: safeResponsePlan.priority ?? local.priority ?? (local.directed ? "HIGH" : "NORMAL"),
         bypassCooldown: safeResponsePlan.bypassCooldown ?? bypassCooldown,
         mentionAll: safeResponsePlan.mentionAll ?? local.mentionAll ?? false,
@@ -199,11 +205,33 @@ export function isMediaRequestText(text: string): boolean {
     || /\b(?:picture|image|photo|meme|gif)\s+(?:of|about)\b/i.test(text);
 }
 
+export function isStickerRequestText(text: string): boolean {
+  return /\b(?:send|show|find|get|search|look\s+up)\b[\s\S]{0,100}\bsticker\b/i.test(text)
+    || /\bsticker\b[\s\S]{0,100}\b(?:of|about|for)\b/i.test(text);
+}
+
+export function isLinkAnalysisRequestText(text: string): boolean {
+  if (!extractHttpsUrls(text).length) return false;
+  return /\b(?:analy[sz]e|summari[sz]e|review|explain|inspect|check|look\s+at|what\s+do\s+you\s+think|brand|company|website|freelance|client|job|legit|scam)\b/i.test(text);
+}
+
 function mediaRequestPlan(): DecisionPlan {
   return {
     decision: "SEND_IMAGE",
     confidence: 1,
     reason: "local_media_request",
+    delayMs: 0,
+    needsWeb: false,
+    needsMedia: true,
+    responseStyle: "short_casual",
+  };
+}
+
+function stickerRequestPlan(): DecisionPlan {
+  return {
+    decision: "SEND_STICKER",
+    confidence: 1,
+    reason: "local_sticker_request",
     delayMs: 0,
     needsWeb: false,
     needsMedia: true,

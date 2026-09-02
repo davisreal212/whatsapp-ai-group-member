@@ -26,6 +26,7 @@ describe("voice features", () => {
 
   it("recognizes explicit voice call requests only", () => {
     expect(parseVoiceCallCommand("call me")).toBe(true);
+    expect(parseVoiceCallCommand("Can you please call me now?")).toBe(true);
     expect(parseVoiceCallCommand("start a voice call")).toBe(true);
     expect(parseVoiceCallCommand("I had a call earlier")).toBe(false);
   });

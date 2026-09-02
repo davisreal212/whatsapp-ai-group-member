@@ -241,6 +241,14 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     }, quoted ? { quoted } : undefined);
   }
 
+  async sendTextToAll(groupId: string, text: string, quotedMessageId?: string): Promise<void> {
+    if (!this.socket) throw new Error("WhatsApp is not connected");
+    const quoted = quotedMessageId ? this.rawMessages.get(quotedMessageId) : undefined;
+    const metadata = await this.socket.groupMetadata(groupId);
+    const mentions = metadata.participants.map((participant) => participant.id).filter(Boolean);
+    await this.socket.sendMessage(groupId, { text, ...(mentions.length ? { mentions } : {}) }, quoted ? { quoted } : undefined);
+  }
+
   async sendReaction(groupId: string, messageId: string, reaction: string): Promise<void> {
     if (!this.socket) throw new Error("WhatsApp is not connected");
     const raw = this.rawMessages.get(messageId);
@@ -269,6 +277,17 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     } else {
       throw new Error("Unsupported media type");
     }
+  }
+
+  async sendSticker(groupId: string, mediaUrl: string, quotedMessageId?: string): Promise<void> {
+    if (!this.socket) throw new Error("WhatsApp is not connected");
+    const quoted = quotedMessageId ? this.rawMessages.get(quotedMessageId) : undefined;
+    const response = await fetchSafeMedia(mediaUrl, { signal: AbortSignal.timeout(30_000) });
+    if (!response.ok) throw new Error(`Sticker source returned HTTP ${response.status}`);
+    const responseMimeType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+    if (responseMimeType !== "image/webp" && !/\.webp(?:[?#]|$)/i.test(response.url || mediaUrl)) throw new Error("Sticker source is not a WebP image");
+    const body = await readResponseBody(response, this.maxMediaBytes);
+    await this.socket.sendMessage(groupId, { sticker: body }, quoted ? { quoted } : undefined);
   }
 
   async sendAudioBuffer(groupId: string, data: Buffer, mimeType: string, caption?: string, quotedMessageId?: string): Promise<void> {

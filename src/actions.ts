@@ -12,13 +12,15 @@ export interface OutboundTransport {
   queueStats?(): QueueStats;
   sendTyping?(chatId: string, typing: boolean): Promise<void>;
   sendText(groupId: string, text: string, quotedMessageId?: string, mentionedIds?: string[]): Promise<void>;
+  sendTextToAll?(groupId: string, text: string, quotedMessageId?: string): Promise<void>;
   sendReaction(groupId: string, messageId: string, reaction: string): Promise<void>;
   sendMedia(groupId: string, mediaUrl: string, mimeType: string, caption?: string, quotedMessageId?: string): Promise<void>;
+  sendSticker?(groupId: string, mediaUrl: string, quotedMessageId?: string): Promise<void>;
   sendAudioBuffer?(groupId: string, data: Buffer, mimeType: string, caption?: string, quotedMessageId?: string): Promise<void>;
 }
 
 const planSchema = z.object({
-  decision: z.enum(["IGNORE", "REACT", "REPLY", "REPLY_QUOTED", "MENTION_REPLY", "SEND_IMAGE", "SEND_AUDIO"]),
+  decision: z.enum(["IGNORE", "REACT", "REPLY", "REPLY_QUOTED", "MENTION_REPLY", "SEND_IMAGE", "SEND_STICKER", "SEND_AUDIO"]),
   confidence: z.number().min(0).max(1),
   reason: z.string().min(1).max(500),
   targetMessageId: z.string().min(1).max(200).optional(),
@@ -74,10 +76,11 @@ export function validateActionPlan(
     return { valid: false, reason: "text_required" };
   }
   if (plan.decision === "REACT" && !plan.reaction) return { valid: false, reason: "reaction_required" };
-  if (["SEND_IMAGE", "SEND_AUDIO"].includes(plan.decision)) {
+  if (["SEND_IMAGE", "SEND_STICKER", "SEND_AUDIO"].includes(plan.decision)) {
     if (!(allowGeneratedAudio && plan.decision === "SEND_AUDIO") && (!plan.mediaUrl || !isSafeHttpsUrl(plan.mediaUrl))) return { valid: false, reason: "safe_media_url_required" };
     if (plan.mediaUrl && !isSafeHttpsUrl(plan.mediaUrl)) return { valid: false, reason: "safe_media_url_required" };
     if (plan.decision === "SEND_IMAGE" && plan.mediaMimeType && !plan.mediaMimeType.startsWith("image/")) return { valid: false, reason: "image_mime_required" };
+    if (plan.decision === "SEND_STICKER" && plan.mediaMimeType !== "image/webp") return { valid: false, reason: "sticker_mime_required" };
     if (plan.decision === "SEND_AUDIO" && plan.mediaMimeType && !plan.mediaMimeType.startsWith("audio/")) return { valid: false, reason: "audio_mime_required" };
   }
   return { valid: true, reason: "validated", plan };
@@ -129,7 +132,11 @@ export class ActionService {
     if (!admission) throw new Error("Action admission did not complete");
     if (!admission.validation.valid || plan.decision === "IGNORE") return admission.validation;
     await this.queue.enqueueAndWait(conversationId, () => this.runPendingAction(admission?.actionId as string));
-    const completed = this.store.action(admission.actionId as string);
+    let completed = this.store.action(admission.actionId as string);
+    if (generatedAudio && completed?.status === "PENDING") {
+      await this.skipAction(admission.actionId as string, sourceMessage, plan, "generated_audio_send_failed");
+      completed = this.store.action(admission.actionId as string);
+    }
     if (completed?.status === "SENT") return { valid: true, reason: "sent", plan };
     if (completed?.status === "SKIPPED") return { valid: true, reason: completed.error ?? "skipped", plan };
     return { valid: false, reason: completed?.error ?? "transport_failure", plan };
@@ -250,6 +257,9 @@ export class ActionService {
     try {
       if (plan.decision === "REACT") {
         await this.transport.sendReaction(conversationId, plan.targetMessageId ?? sourceMessage.id, plan.reaction as string);
+      } else if (plan.decision === "SEND_STICKER") {
+        if (!this.transport.sendSticker) throw new Error("sticker_transport_unsupported");
+        await this.transport.sendSticker(conversationId, plan.mediaUrl as string, quotedMessageId);
       } else if (plan.decision === "SEND_IMAGE" || plan.decision === "SEND_AUDIO") {
         if (plan.decision === "SEND_AUDIO" && generatedAudio && this.transport.sendAudioBuffer) {
           await this.transport.sendAudioBuffer(conversationId, generatedAudio.data, generatedAudio.mimeType, undefined, quotedMessageId);
@@ -257,7 +267,11 @@ export class ActionService {
           await this.transport.sendMedia(conversationId, plan.mediaUrl as string, plan.mediaMimeType ?? (plan.decision === "SEND_IMAGE" ? "image/jpeg" : "audio/ogg"), plan.text, quotedMessageId);
         }
       } else {
-        await this.transport.sendText(conversationId, plan.text as string, ["REPLY", "REPLY_QUOTED", "MENTION_REPLY"].includes(plan.decision) ? quotedMessageId : undefined, plan.decision === "MENTION_REPLY" ? [sourceMessage.senderId] : undefined);
+        if (plan.mentionAll && this.transport.sendTextToAll) {
+          await this.transport.sendTextToAll(conversationId, plan.text as string, quotedMessageId);
+        } else {
+          await this.transport.sendText(conversationId, plan.text as string, ["REPLY", "REPLY_QUOTED", "MENTION_REPLY"].includes(plan.decision) ? quotedMessageId : undefined, plan.decision === "MENTION_REPLY" ? [sourceMessage.senderId] : undefined);
+        }
       }
       await this.store.updateAction(id, { status: "SENT", executedAt: Date.now(), error: undefined, nextAttemptAt: undefined });
       await this.store.incrementMetric("actionsSent");
@@ -273,6 +287,7 @@ export class ActionService {
         this.scheduleRetry(id, action.groupId, nextAttemptAt);
       } else {
         await this.store.updateAction(id, { status: "FAILED", attempts, error: message, nextAttemptAt: undefined });
+        this.generatedAudio.delete(id);
         await this.store.incrementMetric("actionFailures");
         await this.store.addLog({ id: randomUUID(), event: "action.failed", level: "error", messageId: sourceMessage.id, ...(sourceMessage.groupId ? { groupId: sourceMessage.groupId } : {}), details: { decision: plan.decision, reason: "transport_failure", attempts }, createdAt: Date.now() });
       }
@@ -310,6 +325,7 @@ export class ActionService {
   }
 
   private async skipAction(actionId: string, message: CanonicalMessage, plan: DecisionPlan, reason: string): Promise<ActionValidation> {
+    this.generatedAudio.delete(actionId);
     await this.store.updateAction(actionId, { status: "SKIPPED", error: reason, nextAttemptAt: undefined });
     await this.store.incrementMetric("actionsSkipped");
     await this.store.addLog({

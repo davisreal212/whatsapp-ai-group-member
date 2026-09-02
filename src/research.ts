@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { AppConfig, EvidenceBundle, EvidenceSource, MemoryRecord, MemoryUpsertHook } from "./types.js";
 import type { Store } from "./store.js";
-import { isSafeHttpsUrl } from "./network.js";
+import { extractHttpsUrls, fetchSafeMedia, isSafeHttpsUrl } from "./network.js";
 
 export interface SearchResult {
   url?: string;
@@ -176,6 +176,11 @@ export class ResearchService {
   }
 
   async research(question: string, maxResults: number): Promise<EvidenceBundle> {
+    const links = extractHttpsUrls(question).slice(0, Math.max(1, maxResults));
+    if (links.length) {
+      const linked = await this.researchLinks(question, links);
+      if (linked.sources.length) return linked;
+    }
     const available = this.providers.filter((provider) => provider.available);
     if (!available.length) return unverified(question);
     const cacheKey = createHash("sha256").update(question.trim().toLowerCase()).digest("hex");
@@ -237,6 +242,69 @@ export class ResearchService {
     if (failures.length) await this.store.addLog({ id: crypto.randomUUID(), event: "research.unverified", level: "warn", details: { providers: failures.map((failure) => failure.split(":", 1)[0]) }, createdAt: Date.now() });
     return unverified(question);
   }
+
+  private async researchLinks(question: string, links: string[]): Promise<EvidenceBundle> {
+    const sources: EvidenceSource[] = [];
+    for (const link of links) {
+      try {
+        const response = await fetchSafeMedia(link, {
+          headers: { accept: "text/html, text/plain, application/json" },
+          signal: AbortSignal.timeout(30_000),
+        });
+        if (!response.ok) throw new Error(`linked page returned HTTP ${response.status}`);
+        const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+        const body = contentType.includes("text/") || contentType.includes("html") || contentType.includes("json")
+          ? await readBoundedText(response, 500_000)
+          : "";
+        const pageText = body ? stripHtml(body).slice(0, 4_000) : "";
+        const title = extractTitle(body) ?? new URL(link).hostname;
+        sources.push({
+          url: response.url || link,
+          title,
+          sourceType: classifySource(response.url || link),
+          retrievedAt: Date.now(),
+          ...(pageText ? { evidence: pageText } : {}),
+        });
+      } catch (error) {
+        await this.store.addLog({
+          id: crypto.randomUUID(),
+          event: "research.link_failure",
+          level: "warn",
+          details: { url: link, error: error instanceof Error ? error.message : "unknown" },
+          createdAt: Date.now(),
+        });
+      }
+    }
+    const now = Date.now();
+    if (sources.length) await this.store.incrementMetric("webSearches");
+    for (const source of sources) {
+      const memory: MemoryRecord = {
+        id: createHash("sha256").update(`${question}:${source.url}`).digest("hex"),
+        scopeType: "source",
+        scopeId: question,
+        memoryType: "research-source",
+        value: { url: source.url, title: source.title ?? "", evidence: source.evidence ?? "" },
+        confidence: source.evidence ? 0.8 : 0.5,
+        importance: source.sourceType === "official" ? 0.7 : 0.4,
+        status: "ACTIVE",
+        evidenceCount: 1,
+        createdAt: source.retrievedAt,
+        lastConfirmedAt: source.retrievedAt,
+        updatedAt: source.retrievedAt,
+        expiresAt: now + 6 * 60 * 60 * 1000,
+      };
+      await this.store.upsertMemory(memory);
+      await this.onMemoryUpsert?.(memory);
+    }
+    return {
+      question,
+      claims: sources.length ? [{ claim: "The linked page was retrieved for analysis.", support: sources.map((source) => source.url), confidence: sources.some((source) => source.evidence) ? 0.8 : 0.5 }] : [],
+      contradictions: [],
+      sources,
+      freshness: sources.length ? "recent" : "unknown",
+      verdict: sources.length ? "verified" : "unverified",
+    };
+  }
 }
 
 function decodeSearchUrl(value: string): string {
@@ -250,7 +318,31 @@ function decodeSearchUrl(value: string): string {
 }
 
 function stripHtml(value: string): string {
-  return value.replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/\s+/g, " ").trim();
+  return value
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractTitle(value: string): string | undefined {
+  const title = value.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1];
+  const cleaned = title ? stripHtml(title) : "";
+  return cleaned || undefined;
+}
+
+async function readBoundedText(response: Response, maxBytes: number): Promise<string> {
+  const declaredLength = Number(response.headers.get("content-length") ?? 0);
+  if (declaredLength > maxBytes) throw new Error("linked page exceeds the analysis size limit");
+  const data = Buffer.from(await response.arrayBuffer());
+  if (data.byteLength > maxBytes) throw new Error("linked page exceeds the analysis size limit");
+  return data.toString("utf8");
 }
 
 function classifySource(url: string): EvidenceSource["sourceType"] {
