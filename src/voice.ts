@@ -13,11 +13,28 @@ export interface ElevenLabsCallResult {
   conversationId?: string;
 }
 
+export interface ElevenLabsCallStatus {
+  available: boolean;
+  missing: string[];
+}
+
 export class ElevenLabsWhatsAppCallService {
   readonly available: boolean;
 
   constructor(private readonly config: ElevenLabsWhatsAppCallConfig) {
-    this.available = Boolean(config.apiKey && config.agentId && config.whatsappPhoneNumberId && config.permissionTemplateName && config.permissionTemplateLanguageCode);
+    this.available = this.status().available;
+  }
+
+  status(): ElevenLabsCallStatus {
+    const fields: Array<[string, string | undefined]> = [
+      ["ELEVENLABS_API_KEY", this.config.apiKey],
+      ["ELEVENLABS_AGENT_ID", this.config.agentId],
+      ["ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID", this.config.whatsappPhoneNumberId],
+      ["ELEVENLABS_WHATSAPP_CALL_PERMISSION_TEMPLATE_NAME", this.config.permissionTemplateName],
+      ["ELEVENLABS_WHATSAPP_CALL_PERMISSION_TEMPLATE_LANGUAGE_CODE", this.config.permissionTemplateLanguageCode],
+    ];
+    const missing = fields.filter(([, value]) => !value).map(([name]) => name);
+    return { available: missing.length === 0, missing };
   }
 
   async startCall(whatsappUserId: string): Promise<ElevenLabsCallResult> {
@@ -34,7 +51,10 @@ export class ElevenLabsWhatsAppCallService {
       }),
       signal: AbortSignal.timeout(45_000),
     });
-    if (!response.ok) throw new Error(`ElevenLabs WhatsApp call returned HTTP ${response.status}`);
+    if (!response.ok) {
+      const detail = (await response.text().catch(() => "")).replace(/\s+/g, " ").trim().slice(0, 240);
+      throw new Error(`ElevenLabs WhatsApp call returned HTTP ${response.status}${detail ? `: ${detail}` : ""}`);
+    }
     const body = await response.json() as { success?: unknown; message?: unknown; conversation_id?: unknown };
     if (body.success !== true) throw new Error(typeof body.message === "string" ? body.message : "ElevenLabs WhatsApp call was not started");
     return {

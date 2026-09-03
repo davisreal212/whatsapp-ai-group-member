@@ -31,6 +31,19 @@ describe("voice features", () => {
     expect(parseVoiceCallCommand("I had a call earlier")).toBe(false);
   });
 
+  it("reports exactly which call settings are missing", () => {
+    const service = new ElevenLabsWhatsAppCallService({ apiKey: "test-key", apiBaseUrl: "https://elevenlabs.test" });
+    expect(service.status()).toEqual({
+      available: false,
+      missing: [
+        "ELEVENLABS_AGENT_ID",
+        "ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID",
+        "ELEVENLABS_WHATSAPP_CALL_PERMISSION_TEMPLATE_NAME",
+        "ELEVENLABS_WHATSAPP_CALL_PERMISSION_TEMPLATE_LANGUAGE_CODE",
+      ],
+    });
+  });
+
   it("falls back from voice-note mode to regular audio", async () => {
     const attempts: string[] = [];
     await sendAudioWithFallback(async () => { attempts.push("voice-note"); throw new Error("voice note unsupported"); }, async () => { attempts.push("audio"); });

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ElevenLabsSpeechToTextProvider, FallbackSpeechToTextProvider, FallbackTextToSpeechProvider, GeminiVisionProvider, MediaProcessor, type DownloadedMedia, type SpeechToTextProvider, type TextToSpeechProvider, type VisionProvider } from "../src/media.js";
+import { ElevenLabsSpeechToTextProvider, ElevenLabsTextToSpeechProvider, FallbackSpeechToTextProvider, FallbackTextToSpeechProvider, GeminiVisionProvider, MediaProcessor, type DownloadedMedia, type SpeechToTextProvider, type TextToSpeechProvider, type VisionProvider } from "../src/media.js";
 
 const media: DownloadedMedia = { data: Buffer.from("voice"), mimeType: "audio/ogg" };
 
@@ -18,6 +18,22 @@ describe("media processing", () => {
     } finally {
       fetchMock.mockRestore();
     }
+  });
+
+  it("records the current media operation and clears it after completion", async () => {
+    let release!: () => void;
+    const provider: SpeechToTextProvider = {
+      name: "test-speech",
+      available: true,
+      transcribe: async () => new Promise((resolve) => { release = () => resolve({ text: "hello", confidence: 0.9 }); }),
+    };
+    const processor = new MediaProcessor(provider);
+    const pending = processor.transcribeAudio(async () => media);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(processor.health().activity).toMatchObject({ active: true, operations: [{ operation: "transcription", provider: "test-speech" }] });
+    release();
+    await pending;
+    expect(processor.health().activity).toMatchObject({ active: false, lastOperation: "transcription", lastStatus: "succeeded", lastProvider: "test-speech" });
   });
 
   it("does not transcribe the same audio hash twice", async () => {
@@ -61,6 +77,18 @@ describe("media processing", () => {
     const primary: TextToSpeechProvider = { name: "primary", available: true, synthesize: async () => { throw new Error("quota"); } };
     const backup: TextToSpeechProvider = { name: "elevenlabs", available: true, synthesize: async () => media };
     await expect(new FallbackTextToSpeechProvider([primary, backup]).synthesize("Hello")).resolves.toEqual(media);
+  });
+
+  it("sends the ElevenLabs output format as a query parameter", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(Buffer.from("audio"), { status: 200, headers: { "content-type": "audio/ogg" } }));
+    try {
+      await new ElevenLabsTextToSpeechProvider("test-key").synthesize("Hello");
+      const request = fetchMock.mock.calls[0]?.[0];
+      expect(String(request)).toContain("output_format=opus_48000_128");
+      expect(String(fetchMock.mock.calls[0]?.[1]?.body)).not.toContain("output_format");
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it("enforces a per-scope hourly media download limit", async () => {

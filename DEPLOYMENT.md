@@ -23,7 +23,7 @@ Use this path when deploying from the Railway dashboard instead of the CLI.
 
 1. Open Railway and select the `Davis Harley's Projects` workspace.
 2. Create a new project or open the target project, then choose **Deploy from GitHub repo**.
-3. Select `Phoenix1185/whatsapp-ai-group-member` and deploy the `main` branch.
+3. Select `davisreal212/whatsapp-ai-group-member` and deploy the `main` branch.
 4. Let Railway build from the repository `Dockerfile`. Do not replace the start command; it already runs `node dist/index.js`.
 5. Add a Railway volume mounted at `/var/lib/whatsapp-ai`. The WhatsApp auth files and application data must survive restarts.
 6. Add these service variables:
@@ -107,12 +107,25 @@ PROVIDER_COOLDOWN_MS=60000
 12. If `GROUP_ONLY_MODE=false`, use **Sync DMs** to show recent contacts seen by the current WhatsApp session, then add permitted phone numbers or JIDs in the dashboard's **DM allowlist** panel. An empty list denies every DM.
 13. Keep `DRY_RUN=true` and `OUTBOUND_PAUSED=true` until a controlled test group is verified. Configure at least one AI provider before enabling AI processing.
 
+## ElevenLabs voice and calling setup
+
+The single `ELEVENLABS_API_KEY` enables incoming voice-note transcription and ElevenLabs text-to-speech. It does not enable WhatsApp calling by itself.
+
+1. In ElevenLabs, create or select the Conversational AI agent that should answer the call and copy its agent ID into `ELEVENLABS_AGENT_ID`.
+2. Add or import the WhatsApp business phone number in ElevenLabs and copy its phone number ID into `ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID`. This is the WhatsApp business number, not the user's personal recipient number.
+3. In Meta/WhatsApp, create and approve the call-permission message template. Copy its exact name and language code into `ELEVENLABS_WHATSAPP_CALL_PERMISSION_TEMPLATE_NAME` and `ELEVENLABS_WHATSAPP_CALL_PERMISSION_TEMPLATE_LANGUAGE_CODE`.
+4. Set `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, and the four call variables in the Railway **production service** environment. Do not put them in the repository or browser.
+5. Keep `DRY_RUN=true` while testing a voice note. The dashboard's Voice card should show `Ready for audio`; a failed attempt shows the provider error in the same card and in Logs.
+6. Set `DRY_RUN=false` and `OUTBOUND_PAUSED=false` only after a controlled audio reply succeeds. A message containing only `call me` requests an outbound ElevenLabs WhatsApp call.
+
+The service sends ElevenLabs audio as Opus and first requests a native WhatsApp voice note. If that format is rejected, it retries as regular audio, then falls back to text. Baileys cannot answer an incoming WhatsApp call; incoming call offers are recorded as `voice.incoming_call_unsupported` instead of being falsely reported as answered.
+
 ## Current Koyeb deployment
 
 - Koyeb app: `whatsapp-ai`
 - Koyeb service: `whatsapp-ai-bot`
 - Live URL: https://whatsapp-ai-suhailtechlnfo-27ca2e5b.koyeb.app
-- Git source: `github.com/Phoenix1185/whatsapp-ai-group-member`, branch `main`
+- Git source: `github.com/davisreal212/whatsapp-ai-group-member`, branch `main`
 
 The current Koyeb organization only permits the `free` instance type, which enforces scale-to-zero. That is suitable for checking the landing page and API, but it is not suitable for a continuously connected WhatsApp session. Upgrade the Koyeb plan and change the service to an always-on instance with minimum scale `1` before pairing the bot for unattended production use.
 

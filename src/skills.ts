@@ -113,10 +113,10 @@ export interface SkillExecutionEvent {
   error?: string;
 }
 
-export function createCoreSkillRegistry(): SkillRegistry {
+export function createCoreSkillRegistry(handlers: Partial<Record<string, SkillHandler>> = {}): SkillRegistry {
   const registry = new SkillRegistry();
   for (const definition of BLUEPRINT_SKILL_CATALOG) {
-    registry.register(skill(definition.skillId, definition.name, definition.description, definition.category, definition.scope, definition.requiresPermission));
+    registry.register({ ...skill(definition.skillId, definition.name, definition.description, definition.category, definition.scope, definition.requiresPermission), ...(handlers[definition.skillId] ? { handler: handlers[definition.skillId] } : {}) });
   }
   return registry;
 }
@@ -155,6 +155,7 @@ const SKILL_INPUTS: Record<string, { required: string[]; optional: string[] }> =
   voice_note_detection: { required: ["messageType"], optional: [] },
   audio_download: { required: ["messageId"], optional: [] },
   speech_to_text: { required: ["audio"], optional: [] },
+  audio_understanding: { required: ["text"], optional: [] },
   text_to_speech: { required: ["text"], optional: [] },
   audio_response: { required: ["audio"], optional: [] },
   audio_fallback: { required: ["audio"], optional: [] },

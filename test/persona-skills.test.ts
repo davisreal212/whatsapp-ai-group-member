@@ -75,6 +75,12 @@ describe("skill registry and executor", () => {
     expect(skills.every((skill) => skill.skillFile === `skills/${skill.skillId}/SKILL.md`)).toBe(true);
   });
 
+  it("reports only explicitly wired runtime handlers as executable", () => {
+    const registry = createCoreSkillRegistry({ voice_call_status: () => ({ success: true, data: "ready" }) });
+    expect(registry.list().find((skill) => skill.skillId === "voice_call_status")).toMatchObject({ enabled: true, available: true });
+    expect(registry.list().find((skill) => skill.skillId === "calculator")).toMatchObject({ enabled: true, available: false });
+  });
+
   it("discovers skills and enforces permissions before execution", async () => {
     const registry = new SkillRegistry();
     registry.register({

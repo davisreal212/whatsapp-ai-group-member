@@ -21,7 +21,7 @@ import { extractHttpsUrls, isSafeHttpsUrl } from "./network.js";
 import { GeminiEmbeddingProvider, QdrantVectorMemoryProvider } from "./vector-memory.js";
 import { MemoryVectorWorker } from "./memory-vector-worker.js";
 import { applyLanguagePreference, languageLabel, migrateLegacyPersonality, parseLanguageCommand, parseLanguageTask, previewPersonality, resolvePersonality } from "./persona.js";
-import { createCoreSkillRegistry, SkillRegistry } from "./skills.js";
+import { createCoreSkillRegistry, SkillExecutor, SkillRegistry } from "./skills.js";
 import { ElevenLabsWhatsAppCallService, parseVoiceCallCommand } from "./voice.js";
 import { normalizeLanguageName } from "./languages.js";
 import { formatMusicRecommendation } from "./music.js";
@@ -37,6 +37,7 @@ export class BotRuntime {
   readonly backups: BackupService;
   readonly memoryVector: MemoryVectorWorker;
   readonly skills: SkillRegistry;
+  readonly skillExecutor: SkillExecutor;
   readonly voiceCalls: ElevenLabsWhatsAppCallService;
   private readonly inboundQueue = new KeyedJobQueue(4);
   private readonly personaCache = new Map<string, Personality>();
@@ -68,7 +69,6 @@ export class BotRuntime {
     this.providers = new ProviderRouter(store, config);
     this.research = new ResearchService(store, [new TavilyProvider(config.tavilyApiKey), new DuckDuckGoProvider()], [new DuckDuckGoImageProvider(), new WikimediaImageProvider()], (memory) => this.memoryVector.enqueue(memory));
     this.decisions = new DecisionEngine(this.providers);
-    this.skills = createCoreSkillRegistry();
     this.actions = new ActionService(store, config, transport);
     this.tasks = new TaskService(store, config, transport);
     this.media = new MediaProcessor(new FallbackSpeechToTextProvider([new GroqSpeechToTextProvider(config.groqApiKey), new ElevenLabsSpeechToTextProvider(config.elevenLabsApiKey, "scribe_v1", config.elevenLabsApiBaseUrl)]), new GeminiVisionProvider(config.geminiApiKey, config.geminiModel), new FallbackTextToSpeechProvider([new ElevenLabsTextToSpeechProvider(config.elevenLabsApiKey, config.elevenLabsVoiceId, config.elevenLabsTtsModel, config.elevenLabsApiBaseUrl), new OpenAITextToSpeechProvider(config.ttsApiKey, config.ttsBaseUrl, config.ttsModel, config.ttsVoice)]), config.mediaDownloadsPerHour);
@@ -79,6 +79,32 @@ export class BotRuntime {
       whatsappPhoneNumberId: config.elevenLabsWhatsAppPhoneNumberId,
       permissionTemplateName: config.elevenLabsWhatsAppCallPermissionTemplateName,
       permissionTemplateLanguageCode: config.elevenLabsWhatsAppCallPermissionTemplateLanguageCode,
+    });
+    this.skills = createCoreSkillRegistry({
+      voice_note_detection: (input) => ({ success: true, data: { isVoiceNote: input.messageType === "audio" } }),
+      speech_to_text: async (input) => {
+        const audio = skillAudio(input.audio);
+        if (!audio) return { success: false, error: "invalid_audio" };
+        return { success: true, data: await this.media.transcribeAudio(async () => audio) };
+      },
+      text_to_speech: async (input) => {
+        if (typeof input.text !== "string" || !input.text.trim()) return { success: false, error: "missing_input:text" };
+        const audio = await this.media.synthesizeSpeech(input.text);
+        return { success: true, data: audio };
+      },
+      voice_call_status: () => ({ success: true, data: this.voiceCalls.status() }),
+      whatsapp_voice_call: async (input) => {
+        if (typeof input.whatsappUserId !== "string" || !input.whatsappUserId.trim()) return { success: false, error: "missing_input:whatsappUserId" };
+        return { success: true, data: await this.voiceCalls.startCall(input.whatsappUserId) };
+      },
+    });
+    this.skillExecutor = new SkillExecutor(this.skills, async (event) => {
+      await this.log("skill.execution", event.status === "COMPLETED" ? "info" : "warn", {
+        skillId: event.skillId,
+        status: event.status,
+        latencyMs: event.latencyMs,
+        ...(event.error ? { error: event.error } : {}),
+      });
     });
     this.backups = new BackupService(store, config.dataDir, config.backupIntervalHours, config.backupRetentionCount);
   }
@@ -111,6 +137,14 @@ export class BotRuntime {
     } else if (!settings.languagePreferenceConfigured && !storedPersonality) {
       await this.store.updateSettings({ languagePreferenceConfigured: true });
     }
+    const voiceStatus = this.voiceCalls.status();
+    const mediaHealth = this.media.health();
+    await this.log("voice.configuration", voiceStatus.available ? "info" : "warn", {
+      speechToText: mediaHealth.speechToText,
+      textToSpeech: mediaHealth.textToSpeech,
+      whatsappCalling: voiceStatus.available,
+      ...(voiceStatus.missing.length ? { missing: voiceStatus.missing } : {}),
+    });
     this.actions.start();
     this.backups.start();
   }
@@ -308,7 +342,9 @@ export class BotRuntime {
           return;
         }
         const recipient = callRecipient(message);
-        const result = await this.voiceCalls.startCall(recipient);
+        const execution = await this.skillExecutor.execute("whatsapp_voice_call", { whatsappUserId: recipient }, { groupId: message.groupId, messageId: message.id, permissionGranted: true });
+        if (!execution.success) throw new Error(execution.error ?? "voice_call_skill_failed");
+        const result = execution.data as { conversationId?: string };
         await this.log("voice.call_started", "info", { conversationId: result.conversationId ?? "unknown" }, message);
         await this.executeTaskResult({ reply: "I have started the ElevenLabs WhatsApp voice call request." }, message, group);
       } catch (error) {
@@ -420,7 +456,10 @@ export class BotRuntime {
     }
     if ((plan.decision === "SEND_AUDIO" || this.shouldUseAudioReply(message, personality)) && plan.text && plan.decision !== "REACT" && plan.decision !== "IGNORE") {
       try {
-        const audio = await this.media.synthesizeSpeech(plan.text);
+        const execution = await this.skillExecutor.execute("text_to_speech", { text: plan.text }, { groupId: message.groupId, messageId: message.id, permissionGranted: true });
+        if (!execution.success) throw new Error(execution.error ?? "text_to_speech_skill_failed");
+        const audio = skillAudio(execution.data);
+        if (!audio) throw new Error("text_to_speech_returned_invalid_audio");
         const audioPlan = { ...plan, decision: "SEND_AUDIO" as const, text: undefined, mediaUrl: undefined, mediaMimeType: audio.mimeType };
         const result = await this.actions.execute(audioPlan, message, group, audio);
         if (result.reason === "sent") return;
@@ -643,7 +682,7 @@ export class BotRuntime {
       groupActivity: Object.fromEntries(this.store.groups().map((group) => [group.id, groupActivityState(this.store, group.id, groupParticipation(group, this.config.participation))])),
       metrics: snapshot.runtime.metrics,
       providers: this.providers.statuses(),
-      media: { ...this.media.health(), elevenLabsWhatsAppCalling: this.voiceCalls.available },
+      media: { ...this.media.health(), elevenLabsWhatsAppCalling: this.voiceCalls.status() },
       research: { tavilyAvailable: Boolean(this.config.tavilyApiKey) },
       memory: {
         totalMessages: Object.keys(snapshot.messages).length,
@@ -764,4 +803,11 @@ function callRecipient(message: CanonicalMessage): string {
   const digits = source?.replace(/\D/g, "") ?? "";
   if (digits.length < 7) throw new Error("Unable to determine the WhatsApp call recipient");
   return digits;
+}
+
+function skillAudio(value: unknown): { data: Buffer; mimeType: string } | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const audio = value as { data?: unknown; mimeType?: unknown };
+  if (!Buffer.isBuffer(audio.data) || typeof audio.mimeType !== "string" || !audio.mimeType.startsWith("audio/")) return undefined;
+  return { data: audio.data, mimeType: audio.mimeType };
 }

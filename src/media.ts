@@ -40,6 +40,16 @@ export interface TextToSpeechProvider {
   synthesize(text: string): Promise<DownloadedMedia>;
 }
 
+export interface MediaActivity {
+  active: boolean;
+  operations: Array<{ operation: "transcription" | "vision" | "text_to_speech"; provider: string; startedAt: number }>;
+  lastOperation?: "transcription" | "vision" | "text_to_speech";
+  lastProvider?: string;
+  lastStatus?: "succeeded" | "failed";
+  lastFinishedAt?: number;
+  lastError?: string;
+}
+
 export class GroqSpeechToTextProvider implements SpeechToTextProvider {
   readonly name = "groq-whisper";
   readonly available: boolean;
@@ -61,7 +71,7 @@ export class GroqSpeechToTextProvider implements SpeechToTextProvider {
       body: form,
       signal: AbortSignal.timeout(60_000),
     });
-    if (!response.ok) throw new Error(`Groq transcription returned HTTP ${response.status}`);
+    if (!response.ok) throw new Error(await providerError(response, "Groq transcription"));
     const body = await response.json() as { text?: unknown; language?: unknown };
     if (typeof body.text !== "string" || !body.text.trim()) throw new Error("Transcription provider returned no text");
     return { text: body.text.trim().slice(0, 4000), confidence: 0.75, ...(typeof body.language === "string" ? { language: body.language } : {}) };
@@ -89,7 +99,7 @@ export class ElevenLabsSpeechToTextProvider implements SpeechToTextProvider {
       body: form,
       signal: AbortSignal.timeout(60_000),
     });
-    if (!response.ok) throw new Error(`ElevenLabs transcription returned HTTP ${response.status}`);
+    if (!response.ok) throw new Error(await providerError(response, "ElevenLabs transcription"));
     const body = await response.json() as { text?: unknown; language_code?: unknown; language_probability?: unknown };
     if (typeof body.text !== "string" || !body.text.trim()) throw new Error("Transcription provider returned no text");
     const confidence = typeof body.language_probability === "number" && Number.isFinite(body.language_probability)
@@ -118,7 +128,7 @@ export class GeminiVisionProvider implements VisionProvider {
       body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: instruction }, { inline_data: { mime_type: media.mimeType, data: media.data.toString("base64") } }] }], generationConfig: { responseMimeType: "application/json" } }),
       signal: AbortSignal.timeout(60_000),
     });
-    if (!response.ok) throw new Error(`Gemini vision returned HTTP ${response.status}`);
+    if (!response.ok) throw new Error(await providerError(response, "Gemini vision"));
     const body = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
     const text = body.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) throw new Error("Vision provider returned no text");
@@ -146,6 +156,11 @@ function parseVisionJson(value: string): { description?: unknown; ocrText?: unkn
   }
 }
 
+async function providerError(response: Response, label: string): Promise<string> {
+  const detail = (await response.text().catch(() => "")).replace(/\s+/g, " ").trim().slice(0, 240);
+  return `${label} returned HTTP ${response.status}${detail ? `: ${detail}` : ""}`;
+}
+
 export class OpenAITextToSpeechProvider implements TextToSpeechProvider {
   readonly name = "openai-tts";
   readonly available: boolean;
@@ -167,7 +182,7 @@ export class OpenAITextToSpeechProvider implements TextToSpeechProvider {
       body: JSON.stringify({ model: this.model, voice: this.voice, input: text.slice(0, 4000), response_format: "opus" }),
       signal: AbortSignal.timeout(60_000),
     });
-    if (!response.ok) throw new Error(`TTS provider returned HTTP ${response.status}`);
+    if (!response.ok) throw new Error(await providerError(response, "TTS provider"));
     const data = Buffer.from(await response.arrayBuffer());
     if (!data.length || data.length > 10 * 1024 * 1024) throw new Error("TTS audio is empty or exceeds the 10 MB limit");
     return { data, mimeType: response.headers.get("content-type")?.split(";", 1)[0] || "audio/ogg" };
@@ -189,13 +204,15 @@ export class ElevenLabsTextToSpeechProvider implements TextToSpeechProvider {
 
   async synthesize(text: string): Promise<DownloadedMedia> {
     if (!this.apiKey) throw new Error("ElevenLabs API key is not configured");
-    const response = await fetch(`${this.apiBaseUrl.replace(/\/$/, "")}/v1/text-to-speech/${encodeURIComponent(this.voiceId)}`, {
+    const url = new URL(`${this.apiBaseUrl.replace(/\/$/, "")}/v1/text-to-speech/${encodeURIComponent(this.voiceId)}`);
+    url.searchParams.set("output_format", "opus_48000_128");
+    const response = await fetch(url, {
       method: "POST",
       headers: { "xi-api-key": this.apiKey, "content-type": "application/json", accept: "audio/ogg" },
-      body: JSON.stringify({ text: text.slice(0, 4000), model_id: this.model, output_format: "opus_48000_128" }),
+      body: JSON.stringify({ text: text.slice(0, 4000), model_id: this.model }),
       signal: AbortSignal.timeout(60_000),
     });
-    if (!response.ok) throw new Error(`ElevenLabs returned HTTP ${response.status}`);
+    if (!response.ok) throw new Error(await providerError(response, "ElevenLabs TTS"));
     const data = Buffer.from(await response.arrayBuffer());
     if (!data.length || data.length > 10 * 1024 * 1024) throw new Error("ElevenLabs audio is empty or exceeds the 10 MB limit");
     return { data, mimeType: response.headers.get("content-type")?.split(";", 1)[0] || "audio/ogg" };
@@ -250,37 +267,45 @@ export class MediaProcessor {
   private readonly cache = new Map<string, TranscriptResult>();
   private readonly visionCache = new Map<string, VisionResult>();
   private readonly downloadTimes = new Map<string, number[]>();
+  private readonly activeOperations = new Map<string, MediaActivity["operations"][number]>();
+  private lastActivity: Omit<MediaActivity, "active" | "operations"> = {};
 
   constructor(private readonly speech: SpeechToTextProvider, private readonly vision?: VisionProvider, private readonly tts?: TextToSpeechProvider, private readonly downloadsPerHour = 100) {}
 
   async transcribeAudio(loader: () => Promise<DownloadedMedia>, scopeId?: string): Promise<TranscriptResult> {
-    this.reserveDownload(scopeId);
-    const media = await loader();
-    const hash = createHash("sha256").update(media.data).digest("hex");
-    const cached = this.cache.get(hash);
-    if (cached) return cached;
-    const transcript = await this.speech.transcribe(media);
-    this.cache.set(hash, transcript);
-    if (this.cache.size > 100) this.cache.delete(this.cache.keys().next().value as string);
-    return transcript;
+    return this.trackActivity("transcription", this.speech.name, async () => {
+      this.reserveDownload(scopeId);
+      const media = await loader();
+      const hash = createHash("sha256").update(media.data).digest("hex");
+      const cached = this.cache.get(hash);
+      if (cached) return cached;
+      const transcript = await this.speech.transcribe(media);
+      this.cache.set(hash, transcript);
+      if (this.cache.size > 100) this.cache.delete(this.cache.keys().next().value as string);
+      return transcript;
+    });
   }
 
   async analyzeImage(loader: () => Promise<DownloadedMedia>, scopeId?: string): Promise<VisionResult> {
-    if (!this.vision?.available) throw new Error("No vision provider is configured");
-    this.reserveDownload(scopeId);
-    const media = await loader();
-    const hash = createHash("sha256").update(media.data).digest("hex");
-    const cached = this.visionCache.get(hash);
-    if (cached) return cached;
-    const result = await this.vision.analyze(media);
-    this.visionCache.set(hash, result);
-    if (this.visionCache.size > 100) this.visionCache.delete(this.visionCache.keys().next().value as string);
-    return result;
+    return this.trackActivity("vision", this.vision?.name ?? "none", async () => {
+      if (!this.vision?.available) throw new Error("No vision provider is configured");
+      this.reserveDownload(scopeId);
+      const media = await loader();
+      const hash = createHash("sha256").update(media.data).digest("hex");
+      const cached = this.visionCache.get(hash);
+      if (cached) return cached;
+      const result = await this.vision.analyze(media);
+      this.visionCache.set(hash, result);
+      if (this.visionCache.size > 100) this.visionCache.delete(this.visionCache.keys().next().value as string);
+      return result;
+    });
   }
 
   async synthesizeSpeech(text: string): Promise<DownloadedMedia> {
-    if (!this.tts?.available) throw new Error("No TTS provider is configured");
-    return this.tts.synthesize(text);
+    return this.trackActivity("text_to_speech", this.tts?.name ?? "none", async () => {
+      if (!this.tts?.available) throw new Error("No TTS provider is configured");
+      return this.tts.synthesize(text);
+    });
   }
 
   async extractDocumentText(loader: () => Promise<DownloadedMedia>, scopeId?: string): Promise<DocumentTextResult> {
@@ -293,8 +318,40 @@ export class MediaProcessor {
     return { text: text.slice(0, 4000), mimeType };
   }
 
-  health(): { speechToText: boolean; vision: boolean; textToSpeech: boolean } {
-    return { speechToText: this.speech.available, vision: Boolean(this.vision?.available), textToSpeech: Boolean(this.tts?.available) };
+  health(): { speechToText: boolean; vision: boolean; textToSpeech: boolean; activity: MediaActivity } {
+    return {
+      speechToText: this.speech.available,
+      vision: Boolean(this.vision?.available),
+      textToSpeech: Boolean(this.tts?.available),
+      activity: {
+        active: this.activeOperations.size > 0,
+        operations: [...this.activeOperations.values()],
+        ...this.lastActivity,
+      },
+    };
+  }
+
+  private async trackActivity<T>(operation: MediaActivity["lastOperation"], provider: string, handler: () => Promise<T>): Promise<T> {
+    if (!operation) return handler();
+    const id = `${operation}:${Date.now()}:${Math.random()}`;
+    const startedAt = Date.now();
+    this.activeOperations.set(id, { operation, provider, startedAt });
+    try {
+      const result = await handler();
+      this.lastActivity = { lastOperation: operation, lastProvider: provider, lastStatus: "succeeded", lastFinishedAt: Date.now() };
+      return result;
+    } catch (error) {
+      this.lastActivity = {
+        lastOperation: operation,
+        lastProvider: provider,
+        lastStatus: "failed",
+        lastFinishedAt: Date.now(),
+        lastError: error instanceof Error ? error.message.slice(0, 300) : "media_operation_failed",
+      };
+      throw error;
+    } finally {
+      this.activeOperations.delete(id);
+    }
   }
 
   private reserveDownload(scopeId?: string): void {
