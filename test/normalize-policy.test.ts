@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { normalizeMessage } from "../src/normalize.js";
 import { evaluateInboundPolicy, isQuietHours } from "../src/policy.js";
 import { normalizeWhatsAppJid, sameWhatsAppIdentity } from "../src/identity.js";
+import { nigeriaLocalTimeToTimestamp } from "../src/time.js";
 import type { AppConfig, GroupRecord } from "../src/types.js";
 
 const config = { groupOnlyMode: true, directMessageAllowlist: [], aiProcessingPaused: false } satisfies Pick<AppConfig, "groupOnlyMode" | "directMessageAllowlist" | "aiProcessingPaused">;
@@ -24,9 +25,10 @@ describe("message normalization and inbound policy", () => {
   });
 
   it("handles overnight quiet-hour windows", () => {
-    expect(isQuietHours(22, 7, new Date(2026, 0, 1, 23))).toBe(true);
-    expect(isQuietHours(22, 7, new Date(2026, 0, 1, 6))).toBe(true);
-    expect(isQuietHours(22, 7, new Date(2026, 0, 1, 12))).toBe(false);
+    expect(isQuietHours(22, 7, new Date(nigeriaLocalTimeToTimestamp(2026, 1, 1, 23, 0)))).toBe(true);
+    expect(isQuietHours(22, 7, new Date(nigeriaLocalTimeToTimestamp(2026, 1, 1, 6, 0)))).toBe(true);
+    expect(isQuietHours(22, 7, new Date(nigeriaLocalTimeToTimestamp(2026, 1, 1, 12, 0)))).toBe(false);
+    expect(isQuietHours(22, 7, new Date(nigeriaLocalTimeToTimestamp(2026, 1, 1, 23, 0)), false)).toBe(false);
   });
 
   it("normalizes text, mentions, and quote metadata without exposing transport shape", () => {

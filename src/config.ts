@@ -19,6 +19,15 @@ const booleanString = z.preprocess(
   z.boolean().default(false),
 );
 
+const optionalBoolean = z.preprocess(
+  (value) => {
+    if (value === undefined) return undefined;
+    if (typeof value === "boolean") return value;
+    return String(value).toLowerCase() === "true";
+  },
+  z.boolean().optional(),
+);
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
@@ -46,8 +55,9 @@ const envSchema = z.object({
   ACTIONS_PER_MINUTE: z.coerce.number().int().min(0).max(1_000).default(10),
   ACTIONS_PER_HOUR: z.coerce.number().int().min(0).max(10_000).default(50),
   ACTION_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
-  QUIET_HOURS_START: z.coerce.number().int().min(-1).max(23).default(-1),
-  QUIET_HOURS_END: z.coerce.number().int().min(-1).max(23).default(-1),
+  QUIET_HOURS_ENABLED: optionalBoolean,
+  QUIET_HOURS_START: z.coerce.number().int().min(-1).max(23).default(22),
+  QUIET_HOURS_END: z.coerce.number().int().min(-1).max(23).default(7),
   BACKUP_INTERVAL_HOURS: z.coerce.number().int().min(1).max(720).default(24),
   BACKUP_RETENTION_COUNT: z.coerce.number().int().min(1).max(100).default(7),
   AUDIO_REPLY_MODE: z.enum(["text", "adaptive", "always"]).default("text"),
@@ -143,6 +153,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     actionsPerMinute: values.ACTIONS_PER_MINUTE,
     actionsPerHour: values.ACTIONS_PER_HOUR,
     actionMaxAttempts: values.ACTION_MAX_ATTEMPTS,
+    quietHoursEnabled: values.QUIET_HOURS_ENABLED ?? values.NODE_ENV === "production",
     quietHoursStart: values.QUIET_HOURS_START,
     quietHoursEnd: values.QUIET_HOURS_END,
     backupIntervalHours: values.BACKUP_INTERVAL_HOURS,

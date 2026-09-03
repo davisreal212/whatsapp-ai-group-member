@@ -199,8 +199,8 @@ export class TaskService {
   }
 
   private async notify(task: TaskRecord, text: string): Promise<boolean> {
-    if (this.config.dryRun || this.config.outboundPaused || isQuietHours(this.config.quietHoursStart, this.config.quietHoursEnd) || !this.transport.connected) {
-      await this.store.updateTask(task.id, { lastError: this.config.dryRun ? "dry_run" : this.config.outboundPaused ? "outbound_paused" : isQuietHours(this.config.quietHoursStart, this.config.quietHoursEnd) ? "quiet_hours" : "transport_disconnected" });
+    if (this.config.dryRun || this.config.outboundPaused || isQuietHours(this.config.quietHoursStart, this.config.quietHoursEnd, new Date(), this.config.quietHoursEnabled) || !this.transport.connected) {
+      await this.store.updateTask(task.id, { lastError: this.config.dryRun ? "dry_run" : this.config.outboundPaused ? "outbound_paused" : isQuietHours(this.config.quietHoursStart, this.config.quietHoursEnd, new Date(), this.config.quietHoursEnabled) ? "quiet_hours" : "transport_disconnected" });
       return false;
     }
     try {

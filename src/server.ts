@@ -252,9 +252,17 @@ export function createApp(runtime: BotRuntime, config: AppConfig) {
       next(error);
     }
   });
+  app.post("/api/quiet-hours", async (request, response, next) => {
+    try {
+      const body = z.object({ enabled: z.boolean(), start: z.number().int().min(0).max(23), end: z.number().int().min(0).max(23) }).refine((value) => !value.enabled || value.start !== value.end, "Quiet hours start and end must differ when enabled").parse(request.body);
+      response.json(await runtime.setQuietHours(body));
+    } catch (error) {
+      next(error);
+    }
+  });
   app.post("/api/controls", async (request, response, next) => {
     try {
-      const body = z.object({ outboundPaused: z.boolean().optional(), aiProcessingPaused: z.boolean().optional() }).refine((value) => Object.keys(value).length > 0).parse(request.body);
+      const body = z.object({ outboundPaused: z.boolean().optional(), aiProcessingPaused: z.boolean().optional(), dailyActionLimit: z.number().int().min(0).max(10_000).optional() }).refine((value) => Object.keys(value).length > 0).parse(request.body);
       await runtime.setControls(body);
       response.json(runtime.dashboardState().safety);
     } catch (error) {

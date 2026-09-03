@@ -85,6 +85,7 @@ export interface AppConfig {
   groupCooldownMs: number;
   participation: ParticipationSettings;
   dailyActionLimit: number;
+  quietHoursEnabled: boolean;
   actionsPerMinute: number;
   actionsPerHour: number;
   actionMaxAttempts: number;
@@ -417,6 +418,10 @@ export interface PersistedState {
   settings?: {
     outboundPaused?: boolean;
     aiProcessingPaused?: boolean;
+    dailyActionLimit?: number;
+    quietHoursEnabled?: boolean;
+    quietHoursStart?: number;
+    quietHoursEnd?: number;
     directMessageAllowlist?: string[];
     personality?: Partial<Personality>;
     languagePreferenceConfigured?: boolean;

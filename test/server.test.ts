@@ -35,6 +35,20 @@ describe("admin HTTP surface", () => {
     const status = await fetch(`${base}/api/status`, { headers: { authorization: "Bearer test-token-that-is-long-enough" } });
     expect(status.status).toBe(200);
     expect((await status.json()).safety.groupOnlyMode).toBe(false);
+    const quietHours = await fetch(`${base}/api/quiet-hours`, {
+      method: "POST",
+      headers: { authorization: "Bearer test-token-that-is-long-enough", "content-type": "application/json" },
+      body: JSON.stringify({ enabled: true, start: 21, end: 6 }),
+    });
+    expect(await quietHours.json()).toEqual({ enabled: true, start: 21, end: 6 });
+    expect(runtime.dashboardState().safety).toMatchObject({ quietHoursEnabled: true, quietHoursStart: 21, quietHoursEnd: 6 });
+    const dailyLimit = await fetch(`${base}/api/controls`, {
+      method: "POST",
+      headers: { authorization: "Bearer test-token-that-is-long-enough", "content-type": "application/json" },
+      body: JSON.stringify({ dailyActionLimit: 12 }),
+    });
+    expect(dailyLimit.status).toBe(200);
+    expect(runtime.dashboardState().safety).toMatchObject({ dailyActionLimit: 12 });
     await runtime.store.setConnection("PAIRING", "ABCD-EFGH");
     const pairingStatus = await fetch(`${base}/api/status`, { headers: { authorization: "Bearer test-token-that-is-long-enough" } });
     expect((await pairingStatus.json()).connection).toMatchObject({ connectionStatus: "PAIRING", pairingCode: "ABCD-EFGH" });

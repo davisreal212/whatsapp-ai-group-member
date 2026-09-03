@@ -1,5 +1,6 @@
 import type { AppConfig, CanonicalMessage, GroupRecord } from "./types.js";
 import { matchesWhatsAppIdentity } from "./identity.js";
+import { nigeriaDateParts } from "./time.js";
 
 export type PolicyReason =
   | "AI_PROCESSING_PAUSED"
@@ -50,8 +51,8 @@ export function isCurrentInformationQuestion(text: string): boolean {
   return /\b(now|today|tonight|latest|current|breaking|recent|this week|price|listing|is this true|official)\b/i.test(text);
 }
 
-export function isQuietHours(start: number, end: number, now = new Date()): boolean {
-  if (start < 0 || end < 0 || start === end) return false;
-  const hour = now.getHours();
+export function isQuietHours(start: number, end: number, now = new Date(), enabled = true): boolean {
+  if (!enabled || start < 0 || end < 0 || start === end) return false;
+  const hour = nigeriaDateParts(now.getTime()).hour;
   return start < end ? hour >= start && hour < end : hour >= start || hour < end;
 }

@@ -440,5 +440,47 @@
       $('outbound').onclick = () => control('outboundPaused', !(appState?.safety?.outboundPaused === true));
     })();
   </script>
+  <script>
+    (() => {
+      let panel;
+      function ensureSafetySettings() {
+        if (panel) return panel;
+        const view = document.querySelector('[data-view="settings"]');
+        panel = document.createElement('div');
+        panel.className = 'two-col large-card';
+        panel.innerHTML = `<div class="card"><div class="card-head"><h2>Quiet hours</h2><span id="quietHoursState" class="pill">On</span></div><p class="muted" style="margin-bottom:18px">Scheduled sends are held during Nigeria time. Set the hours below.</p><div class="timing-grid"><div class="field"><label for="quietHoursStart">START HOUR (WAT)</label><input id="quietHoursStart" type="number" min="0" max="23" step="1"></div><div class="field"><label for="quietHoursEnd">END HOUR (WAT)</label><input id="quietHoursEnd" type="number" min="0" max="23" step="1"></div></div><div class="switch-row"><span>Enable quiet hours</span><input id="quietHoursEnabled" type="checkbox"></div><button id="saveQuietHours" class="primary" type="button">Save quiet hours</button></div><div class="card"><div class="card-head"><h2>Daily reply limit</h2><span class="pill">Groups only</span></div><p class="muted" style="margin-bottom:18px">Limit automatic replies per group each Nigeria day. Direct messages have no daily cap.</p><div class="field"><label for="dailyGroupReplyLimit">GROUP REPLIES PER DAY (0 = UNLIMITED)</label><input id="dailyGroupReplyLimit" type="number" min="0" max="10000" step="1"></div><button id="saveDailyGroupReplyLimit" class="primary" type="button">Save reply limit</button></div>`;
+        view.append(panel);
+        $('saveQuietHours').onclick = async () => {
+          const enabled = $('quietHoursEnabled').checked;
+          const start = Number($('quietHoursStart').value);
+          const end = Number($('quietHoursEnd').value);
+          if (![start, end].every((value) => Number.isInteger(value) && value >= 0 && value <= 23) || (enabled && start === end)) return message('Choose different start and end hours when quiet hours are enabled.', 'error');
+          try { await api('/api/quiet-hours', { method: 'POST', body: JSON.stringify({ enabled, start, end }) }); message('Quiet hours saved.'); await refresh(); } catch (error) { message(error.message, 'error'); }
+        };
+        $('saveDailyGroupReplyLimit').onclick = async () => {
+          const dailyActionLimit = Number($('dailyGroupReplyLimit').value);
+          if (!Number.isInteger(dailyActionLimit) || dailyActionLimit < 0 || dailyActionLimit > 10000) return message('Enter a whole number from 0 to 10000.', 'error');
+          try { await api('/api/controls', { method: 'POST', body: JSON.stringify({ dailyActionLimit }) }); message('Daily group reply limit saved.'); await refresh(); } catch (error) { message(error.message, 'error'); }
+        };
+        return panel;
+      }
+      function renderSafetySettings(data) {
+        ensureSafetySettings();
+        const safety = data.safety || {};
+        const enabled = safety.quietHoursEnabled !== false;
+        const start = Number.isInteger(safety.quietHoursStart) ? safety.quietHoursStart : 22;
+        const end = Number.isInteger(safety.quietHoursEnd) ? safety.quietHoursEnd : 7;
+        $('quietHoursEnabled').checked = enabled;
+        $('quietHoursStart').value = start;
+        $('quietHoursEnd').value = end;
+        $('dailyGroupReplyLimit').value = Number.isInteger(safety.dailyActionLimit) ? safety.dailyActionLimit : 50;
+        $('quietHoursState').textContent = enabled && start !== end ? 'On' : 'Off';
+        $('quietHoursState').className = `pill${enabled && start !== end ? '' : ' warn'}`;
+        $('quietHours').textContent = enabled && start !== end ? `${String(start).padStart(2, '0')}:00 - ${String(end).padStart(2, '0')}:00 WAT` : 'Off';
+      }
+      const previousRender = render;
+      render = (data) => { previousRender(data); renderSafetySettings(data); };
+    })();
+  </script>
 </body>
 </html>

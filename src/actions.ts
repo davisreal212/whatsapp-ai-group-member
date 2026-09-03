@@ -6,6 +6,7 @@ import { isDirectMessageAllowed, isQuietHours } from "./policy.js";
 import { isSafeHttpsUrl } from "./network.js";
 import { KeyedJobQueue, type QueueStats } from "./queue.js";
 import { groupActivityState, groupParticipation, type ActionPriority } from "./participation.js";
+import { nigeriaDateParts, nigeriaLocalTimeToTimestamp } from "./time.js";
 
 export interface OutboundTransport {
   readonly connected: boolean;
@@ -54,6 +55,7 @@ export function validateActionPlan(
   quietHoursStart = -1,
   quietHoursEnd = -1,
   allowGeneratedAudio = false,
+  quietHoursEnabled = true,
 ): ActionValidation {
   const parsed = planSchema.safeParse(plan);
   if (!parsed.success) return { valid: false, reason: "malformed_action_plan" };
@@ -67,7 +69,7 @@ export function validateActionPlan(
     if (!group.enabled || group.aiPaused) return { valid: false, reason: "group_not_enabled" };
   }
   if (outboundPaused) return { valid: false, reason: "outbound_paused" };
-  if (isQuietHours(quietHoursStart, quietHoursEnd)) return { valid: false, reason: "quiet_hours" };
+  if (isQuietHours(quietHoursStart, quietHoursEnd, new Date(), quietHoursEnabled)) return { valid: false, reason: "quiet_hours" };
 
   const targetId = plan.targetMessageId ?? sourceMessage.id;
   const target = store.message(targetId);
@@ -144,7 +146,7 @@ export class ActionService {
 
   private async admit(plan: DecisionPlan, sourceMessage: CanonicalMessage, group: GroupRecord | undefined, conversationId: string, generatedAudio?: { data: Buffer; mimeType: string }): Promise<{ validation: ActionValidation; actionId?: string }> {
     const hasGeneratedAudio = Boolean(generatedAudio);
-    const validation = validateActionPlan(plan, sourceMessage, group, this.store, this.config.outboundPaused, this.config.groupOnlyMode, this.config.directMessageAllowlist, this.config.quietHoursStart, this.config.quietHoursEnd, hasGeneratedAudio);
+    const validation = validateActionPlan(plan, sourceMessage, group, this.store, this.config.outboundPaused, this.config.groupOnlyMode, this.config.directMessageAllowlist, this.config.quietHoursStart, this.config.quietHoursEnd, hasGeneratedAudio, this.config.quietHoursEnabled);
     if (!validation.valid || plan.decision === "IGNORE") {
       await this.store.incrementMetric("actionsSkipped");
       await this.store.addLog({
@@ -168,9 +170,9 @@ export class ActionService {
     const idempotencyKey = `${conversationId}:${sourceMessage.id}:${plan.decision}`;
     const now = Date.now();
     const recentActions = this.store.actions(1000).filter((action) => action.groupId === conversationId);
-    const dayStart = new Date(now);
-    dayStart.setHours(0, 0, 0, 0);
-    if (recentActions.filter((action) => action.scheduledFor >= dayStart.getTime() && action.status === "SENT").length >= this.config.dailyActionLimit) {
+    const today = nigeriaDateParts(now);
+    const dayStart = nigeriaLocalTimeToTimestamp(today.year, today.month, today.day, 0, 0);
+    if (sourceMessage.isGroup && this.config.dailyActionLimit > 0 && recentActions.filter((action) => action.scheduledFor >= dayStart && action.status === "SENT").length >= this.config.dailyActionLimit) {
       return { validation: await this.rejectRuntime(sourceMessage, plan, "daily_action_limit") };
     }
     if (recentActions.filter((action) => action.scheduledFor >= now - 60_000 && action.status === "SENT").length >= this.config.actionsPerMinute) {
@@ -235,7 +237,7 @@ export class ActionService {
     const group = sourceMessage.groupId ? this.store.group(sourceMessage.groupId) : undefined;
     const plan = planFromAction(action);
     const generatedAudio = this.generatedAudio.get(id);
-    const validation = validateActionPlan(plan, sourceMessage, group, this.store, this.config.outboundPaused, this.config.groupOnlyMode, this.config.directMessageAllowlist, this.config.quietHoursStart, this.config.quietHoursEnd, Boolean(generatedAudio));
+    const validation = validateActionPlan(plan, sourceMessage, group, this.store, this.config.outboundPaused, this.config.groupOnlyMode, this.config.directMessageAllowlist, this.config.quietHoursStart, this.config.quietHoursEnd, Boolean(generatedAudio), this.config.quietHoursEnabled);
     if (!validation.valid) {
       await this.skipAction(id, sourceMessage, plan, validation.reason);
       return;
@@ -317,9 +319,10 @@ export class ActionService {
     return { valid: false, reason };
   }
 
-  private outboundSkipReason(): "dry_run" | "outbound_paused" | "transport_disconnected" | undefined {
+  private outboundSkipReason(): "dry_run" | "outbound_paused" | "quiet_hours" | "transport_disconnected" | undefined {
     if (this.config.dryRun) return "dry_run";
     if (this.config.outboundPaused) return "outbound_paused";
+    if (isQuietHours(this.config.quietHoursStart, this.config.quietHoursEnd, new Date(), this.config.quietHoursEnabled)) return "quiet_hours";
     if (!this.transport.connected) return "transport_disconnected";
     return undefined;
   }

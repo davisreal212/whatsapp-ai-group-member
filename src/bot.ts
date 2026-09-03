@@ -125,6 +125,10 @@ export class BotRuntime {
     }
     if (settings?.outboundPaused !== undefined) this.config.outboundPaused = settings.outboundPaused;
     if (settings?.aiProcessingPaused !== undefined) this.config.aiProcessingPaused = settings.aiProcessingPaused;
+    if (settings?.dailyActionLimit !== undefined) this.config.dailyActionLimit = settings.dailyActionLimit;
+    if (settings?.quietHoursEnabled !== undefined) this.config.quietHoursEnabled = settings.quietHoursEnabled;
+    if (settings?.quietHoursStart !== undefined) this.config.quietHoursStart = settings.quietHoursStart;
+    if (settings?.quietHoursEnd !== undefined) this.config.quietHoursEnd = settings.quietHoursEnd;
     if (settings?.directMessageAllowlist !== undefined) this.config.directMessageAllowlist = [...settings.directMessageAllowlist];
     if (settings?.participation) this.config.participation = { ...this.config.participation, ...settings.participation };
     for (const [skillId, enabled] of Object.entries(settings?.skillOverrides ?? {})) {
@@ -133,7 +137,7 @@ export class BotRuntime {
     this.personaCache.clear();
     this.config.groupCooldownMs = this.config.participation.groupCooldownMs;
     if (!settings) {
-      await this.store.updateSettings({ outboundPaused: this.config.outboundPaused, aiProcessingPaused: this.config.aiProcessingPaused, directMessageAllowlist: this.config.directMessageAllowlist, personality: this.config.personality, languagePreferenceConfigured: true, participation: this.config.participation });
+      await this.store.updateSettings({ outboundPaused: this.config.outboundPaused, aiProcessingPaused: this.config.aiProcessingPaused, dailyActionLimit: this.config.dailyActionLimit, quietHoursEnabled: this.config.quietHoursEnabled, quietHoursStart: this.config.quietHoursStart, quietHoursEnd: this.config.quietHoursEnd, directMessageAllowlist: this.config.directMessageAllowlist, personality: this.config.personality, languagePreferenceConfigured: true, participation: this.config.participation });
     } else if (!settings.languagePreferenceConfigured && !storedPersonality) {
       await this.store.updateSettings({ languagePreferenceConfigured: true });
     }
@@ -276,7 +280,7 @@ export class BotRuntime {
     }
     if (["image", "sticker"].includes(message.type) && message.media?.hasDownloadableContent && loadMedia) {
       try {
-        const vision = await this.media.analyzeImage(loadMedia, message.chatId);
+        const vision = await this.media.analyzeImage(loadMedia, message.chatId, { messageType: message.type as "image" | "sticker", ...(message.media?.caption ? { caption: message.media.caption } : {}) });
         message = { ...message, text: [message.text, vision.description, vision.ocrText].filter(Boolean).join("\n"), media: { ...message.media, description: vision.description, ...(vision.ocrText ? { ocrText: vision.ocrText } : {}) } };
         await this.log("media.image_analyzed", "info", { type: message.type, confidence: vision.confidence, ocr: Boolean(vision.ocrText) }, message);
       } catch (error) {
@@ -641,17 +645,29 @@ export class BotRuntime {
     return this.backups.create();
   }
 
-  async setControls(update: { outboundPaused?: boolean; aiProcessingPaused?: boolean }): Promise<void> {
+  async setControls(update: { outboundPaused?: boolean; aiProcessingPaused?: boolean; dailyActionLimit?: number }): Promise<void> {
     if (update.outboundPaused !== undefined) this.config.outboundPaused = update.outboundPaused;
     if (update.aiProcessingPaused !== undefined) this.config.aiProcessingPaused = update.aiProcessingPaused;
+    if (update.dailyActionLimit !== undefined) this.config.dailyActionLimit = update.dailyActionLimit;
     await this.store.updateSettings({
       ...(update.outboundPaused !== undefined ? { outboundPaused: update.outboundPaused } : {}),
       ...(update.aiProcessingPaused !== undefined ? { aiProcessingPaused: update.aiProcessingPaused } : {}),
+      ...(update.dailyActionLimit !== undefined ? { dailyActionLimit: update.dailyActionLimit } : {}),
     });
     await this.log("controls.changed", "info", {
       outboundPaused: this.config.outboundPaused,
       aiProcessingPaused: this.config.aiProcessingPaused,
+      ...(update.dailyActionLimit !== undefined ? { dailyActionLimit: this.config.dailyActionLimit } : {}),
     });
+  }
+
+  async setQuietHours(update: { enabled: boolean; start: number; end: number }): Promise<{ enabled: boolean; start: number; end: number }> {
+    this.config.quietHoursEnabled = update.enabled;
+    this.config.quietHoursStart = update.start;
+    this.config.quietHoursEnd = update.end;
+    await this.store.updateSettings({ quietHoursEnabled: update.enabled, quietHoursStart: update.start, quietHoursEnd: update.end });
+    await this.log("quiet_hours.changed", "info", update);
+    return update;
   }
 
   dashboardState(): Record<string, unknown> {
@@ -666,7 +682,9 @@ export class BotRuntime {
         directMessageAllowlist: this.config.directMessageAllowlist,
         outboundPaused: this.config.outboundPaused,
         aiProcessingPaused: this.config.aiProcessingPaused,
+        dailyActionLimit: this.config.dailyActionLimit,
         dryRun: this.config.dryRun,
+        quietHoursEnabled: this.config.quietHoursEnabled,
         quietHoursStart: this.config.quietHoursStart,
         quietHoursEnd: this.config.quietHoursEnd,
         audioReplyMode: this.config.audioReplyMode,

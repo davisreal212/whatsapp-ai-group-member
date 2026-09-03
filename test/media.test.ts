@@ -57,9 +57,23 @@ describe("media processing", () => {
   it("accepts fenced vision JSON for sticker analysis", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "```json\n{\"description\":\"laughing sticker\",\"confidence\":0.9}\n```" }] } }] }), { status: 200 }));
     try {
-      await expect(new GeminiVisionProvider("test-key").analyze({ data: Buffer.from("sticker"), mimeType: "image/webp" })).resolves.toMatchObject({ description: "laughing sticker", confidence: 0.9 });
+      await expect(new GeminiVisionProvider("test-key").analyze({ data: Buffer.from("sticker"), mimeType: "image/webp" }, { messageType: "sticker", caption: "A funny sticker" })).resolves.toMatchObject({ description: "laughing sticker", confidence: 0.9 });
       const request = fetchMock.mock.calls[0]?.[1];
-      expect(String(request?.body)).toContain("WhatsApp sticker");
+      const body = JSON.parse(String(request?.body));
+      expect(String(body.contents[0].parts[0].text)).toContain("Do not invent details");
+      expect(String(body.contents[0].parts[0].text)).toContain("A funny sticker");
+      expect(body.generationConfig.temperature).toBe(0.1);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("normalizes JPEG MIME aliases before vision analysis", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"description":"a clear object","confidence":0.9}' }] } }] }), { status: 200 }));
+    try {
+      await new GeminiVisionProvider("test-key").analyze({ data: Buffer.from("image"), mimeType: "image/jpg; charset=binary" });
+      const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+      expect(body.contents[0].parts[1].inline_data.mime_type).toBe("image/jpeg");
     } finally {
       fetchMock.mockRestore();
     }

@@ -31,7 +31,12 @@ export interface SpeechToTextProvider {
 export interface VisionProvider {
   readonly name: string;
   readonly available: boolean;
-  analyze(media: DownloadedMedia): Promise<VisionResult>;
+  analyze(media: DownloadedMedia, context?: VisionAnalysisContext): Promise<VisionResult>;
+}
+
+export interface VisionAnalysisContext {
+  messageType?: "image" | "sticker";
+  caption?: string;
 }
 
 export interface TextToSpeechProvider {
@@ -117,15 +122,25 @@ export class GeminiVisionProvider implements VisionProvider {
     this.available = Boolean(apiKey);
   }
 
-  async analyze(media: DownloadedMedia): Promise<VisionResult> {
+  async analyze(media: DownloadedMedia, context: VisionAnalysisContext = {}): Promise<VisionResult> {
     if (!this.apiKey) throw new Error("Gemini API key is not configured");
-    const instruction = media.mimeType.toLowerCase() === "image/webp"
-      ? "Describe this WhatsApp sticker or image. Explain the likely emotion, joke, meme meaning, visible objects, and any visible text. Return JSON with description, ocrText, and confidence (0..1)."
-      : "Describe this image for a WhatsApp conversation. Explain the important objects, scene, intent, and visible text as OCR. Return JSON with description, ocrText, and confidence (0..1).";
+    const mimeType = normalizeVisionMimeType(media.mimeType);
+    const mediaLabel = context.messageType === "sticker" || mimeType === "image/webp" ? "WhatsApp sticker or image" : "image";
+    const caption = context.caption?.trim().slice(0, 500);
+    const instruction = [
+      `Inspect this ${mediaLabel} as a literal visual inspection tool.`,
+      "First describe only what is visibly present in the pixels: objects, people, colors, layout, and legible text.",
+      "Do not invent details, identities, brands, locations, motives, or events that cannot be seen.",
+      "Do not guess when the image is blurry, cropped, dark, occluded, or ambiguous; say what is unclear and lower confidence.",
+      "Treat a caption as context, never as visual evidence. Include only text that is actually legible in ocrText.",
+      context.messageType === "sticker" ? "For a sticker, describe the visible character or artwork and any clearly expressed emotion, but do not assume a meme meaning." : "",
+      caption ? `User caption for context only: ${caption}` : "",
+      "Return only JSON with description, ocrText, and confidence (0..1). Set confidence below 0.5 whenever the visual evidence is uncertain.",
+    ].filter(Boolean).join(" ");
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(this.model)}:generateContent?key=${encodeURIComponent(this.apiKey)}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: instruction }, { inline_data: { mime_type: media.mimeType, data: media.data.toString("base64") } }] }], generationConfig: { responseMimeType: "application/json" } }),
+      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: instruction }, { inline_data: { mime_type: mimeType, data: media.data.toString("base64") } }] }], generationConfig: { responseMimeType: "application/json", temperature: 0.1 } }),
       signal: AbortSignal.timeout(60_000),
     });
     if (!response.ok) throw new Error(await providerError(response, "Gemini vision"));
@@ -133,11 +148,16 @@ export class GeminiVisionProvider implements VisionProvider {
     const text = body.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) throw new Error("Vision provider returned no text");
     const parsed = parseVisionJson(text);
-    if (!parsed) return { description: text.replace(/^```(?:json)?\s*|\s*```$/gi, "").trim().slice(0, 2_000), confidence: 0.5 };
+    if (!parsed) return { description: text.replace(/^```(?:json)?\s*|\s*```$/gi, "").trim().slice(0, 2_000), confidence: 0.25 };
     if (typeof parsed.description !== "string" || !parsed.description.trim()) throw new Error("Vision provider returned no description");
     const confidence = typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence) ? Math.min(1, Math.max(0, parsed.confidence)) : 0.6;
     return { description: parsed.description.trim().slice(0, 2000), ...(typeof parsed.ocrText === "string" && parsed.ocrText.trim() ? { ocrText: parsed.ocrText.trim().slice(0, 2000) } : {}), confidence };
   }
+}
+
+function normalizeVisionMimeType(mimeType: string): string {
+  const normalized = mimeType.split(";", 1)[0]?.trim().toLowerCase() || "image/jpeg";
+  return normalized === "image/jpg" ? "image/jpeg" : normalized;
 }
 
 function parseVisionJson(value: string): { description?: unknown; ocrText?: unknown; confidence?: unknown } | undefined {
@@ -286,7 +306,7 @@ export class MediaProcessor {
     });
   }
 
-  async analyzeImage(loader: () => Promise<DownloadedMedia>, scopeId?: string): Promise<VisionResult> {
+  async analyzeImage(loader: () => Promise<DownloadedMedia>, scopeId?: string, context?: VisionAnalysisContext): Promise<VisionResult> {
     return this.trackActivity("vision", this.vision?.name ?? "none", async () => {
       if (!this.vision?.available) throw new Error("No vision provider is configured");
       this.reserveDownload(scopeId);
@@ -294,7 +314,7 @@ export class MediaProcessor {
       const hash = createHash("sha256").update(media.data).digest("hex");
       const cached = this.visionCache.get(hash);
       if (cached) return cached;
-      const result = await this.vision.analyze(media);
+      const result = await this.vision.analyze(media, context);
       this.visionCache.set(hash, result);
       if (this.visionCache.size > 100) this.visionCache.delete(this.visionCache.keys().next().value as string);
       return result;

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ActionService } from "../src/actions.js";
 import { loadConfig } from "../src/config.js";
 import { FileStore } from "../src/store.js";
+import { nigeriaDateParts } from "../src/time.js";
 import type { CanonicalMessage, GroupRecord } from "../src/types.js";
 
 const tempDirs: string[] = [];
@@ -116,6 +117,33 @@ describe("validated outbound actions", () => {
     expect(sent).toEqual(["234@s.whatsapp.net:Yes."]);
   });
 
+  it("does not apply the group daily reply limit to DMs", async () => {
+    const { store } = await setup();
+    const dm: CanonicalMessage = {
+      id: "dm-limit-source", chatId: "234@s.whatsapp.net", senderId: "234@s.whatsapp.net", timestamp: Date.now(), type: "text",
+      text: "Are you there?", mentionedIds: [], isGroup: false, isStatus: false, isFromBot: false,
+    };
+    await store.storeMessage({ ...dm, storedAt: Date.now() });
+    await store.createAction({ id: "dm-sent", idempotencyKey: "dm-sent", groupId: dm.chatId, sourceMessageId: dm.id, actionType: "REPLY", payload: { text: "Earlier." }, scheduledFor: Date.now(), status: "SENT", executedAt: Date.now() });
+    const config = loadConfig({ NODE_ENV: "test", DATA_DIR: "/tmp/ignored", DRY_RUN: "false", GROUP_ONLY_MODE: "false", DIRECT_MESSAGE_ALLOWLIST: "+234", DAILY_ACTION_LIMIT: "1", GROUP_COOLDOWN_MS: "0" });
+    const sent: string[] = [];
+    const transport = { connected: true, sendText: async (_chatId: string, text: string) => { sent.push(text); }, sendReaction: async () => {}, sendMedia: async () => {} };
+    const service = new ActionService(store, config, transport);
+    const plan = { decision: "REPLY" as const, confidence: 1, reason: "test", text: "Still here.", delayMs: 0, needsWeb: false, needsMedia: false, responseStyle: "short_casual" as const };
+    expect((await service.execute(plan, dm, undefined)).reason).toBe("sent");
+    expect(sent).toEqual(["Still here."]);
+  });
+
+  it("enforces the daily reply limit per group", async () => {
+    const { store } = await setup();
+    await store.createAction({ id: "group-sent", idempotencyKey: "group-sent", groupId: group.id, sourceMessageId: source.id, actionType: "REPLY", payload: { text: "Earlier." }, scheduledFor: Date.now(), status: "SENT", executedAt: Date.now() });
+    const config = loadConfig({ NODE_ENV: "test", DATA_DIR: "/tmp/ignored", DRY_RUN: "false", DAILY_ACTION_LIMIT: "1", GROUP_COOLDOWN_MS: "0" });
+    const transport = { connected: true, sendText: async () => { throw new Error("must not send"); }, sendReaction: async () => {}, sendMedia: async () => {} };
+    const service = new ActionService(store, config, transport);
+    const plan = { decision: "REPLY" as const, confidence: 1, reason: "test", text: "Another.", delayMs: 0, needsWeb: false, needsMedia: false, responseStyle: "short_casual" as const };
+    expect((await service.execute(plan, source, group)).reason).toBe("daily_action_limit");
+  });
+
   it("re-checks the outbound pause after a delayed action waits", async () => {
     const { store, config } = await setup();
     const sent: string[] = [];
@@ -129,7 +157,8 @@ describe("validated outbound actions", () => {
 
   it("holds sends during configured quiet hours", async () => {
     const { store, config } = await setup();
-    const hour = new Date().getHours();
+    const hour = nigeriaDateParts().hour;
+    config.quietHoursEnabled = true;
     config.quietHoursStart = hour;
     config.quietHoursEnd = (hour + 1) % 24;
     const transport = { connected: true, sendText: async () => { throw new Error("must not send"); }, sendReaction: async () => {}, sendMedia: async () => {} };
