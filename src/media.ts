@@ -15,6 +15,7 @@ export interface VisionResult {
   description: string;
   ocrText?: string;
   confidence: number;
+  animalSpecies?: "cat" | "dog" | "other" | "unclear" | "none";
 }
 
 export interface DocumentTextResult {
@@ -132,26 +133,61 @@ export class GeminiVisionProvider implements VisionProvider {
       "First describe only what is visibly present in the pixels: objects, people, colors, layout, and legible text.",
       "Do not invent details, identities, brands, locations, motives, or events that cannot be seen.",
       "Do not guess when the image is blurry, cropped, dark, occluded, or ambiguous; say what is unclear and lower confidence.",
+      "If an animal is present, independently check cat versus dog using visible ears, muzzle, paws, fur, body shape, and tail. Only name cat or dog when at least two distinguishing features are clearly visible; otherwise use animalSpecies=unclear and describe it only as an animal.",
+      "Before returning JSON, perform a second independent check of any animal species. If the two checks disagree, use animalSpecies=unclear.",
       "Treat a caption as context, never as visual evidence. Include only text that is actually legible in ocrText.",
       context.messageType === "sticker" ? "For a sticker, describe the visible character or artwork and any clearly expressed emotion, but do not assume a meme meaning." : "",
       caption ? `User caption for context only: ${caption}` : "",
-      "Return only JSON with description, ocrText, and confidence (0..1). Set confidence below 0.5 whenever the visual evidence is uncertain.",
+      "Return only JSON with description, ocrText, confidence (0..1), animalSpecies (cat, dog, other, unclear, or none), and animalEvidence. Set confidence below 0.5 whenever the visual evidence is uncertain.",
     ].filter(Boolean).join(" ");
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(this.model)}:generateContent?key=${encodeURIComponent(this.apiKey)}`, {
+    const parsed = await this.requestVision(media, mimeType, instruction, "Gemini vision");
+    if (!parsed) throw new Error("Vision provider returned no text");
+    if (typeof parsed.description !== "string" || !parsed.description.trim()) throw new Error("Vision provider returned no description");
+    const confidence = typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence) ? Math.min(1, Math.max(0, parsed.confidence)) : 0.6;
+    const explicitAnimal = normalizeAnimalSpecies(parsed.animalSpecies);
+    const description = parsed.description.trim().slice(0, 2_000);
+    const animalCandidate = explicitAnimal === "cat" || explicitAnimal === "dog" ? explicitAnimal : explicitAnimal ? undefined : animalFromDescription(description);
+    const descriptionAnimal = animalFromDescription(description);
+    const animalMentioned = explicitAnimal !== "none" && (Boolean(descriptionAnimal) || explicitAnimal === "cat" || explicitAnimal === "dog" || explicitAnimal === "unclear");
+    if (animalCandidate) {
+      const verification = await this.verifyAnimalSpecies(media, mimeType);
+      if (verification?.species !== animalCandidate || verification.confidence < 0.75 || confidence < 0.75) {
+        return { description: conservativeAnimalDescription(description), ...(typeof parsed.ocrText === "string" && parsed.ocrText.trim() ? { ocrText: parsed.ocrText.trim().slice(0, 2_000) } : {}), confidence: Math.min(confidence, 0.35), animalSpecies: "unclear" };
+      }
+    } else if (animalMentioned) {
+      return { description: conservativeAnimalDescription(description), ...(typeof parsed.ocrText === "string" && parsed.ocrText.trim() ? { ocrText: parsed.ocrText.trim().slice(0, 2_000) } : {}), confidence: Math.min(confidence, 0.35), animalSpecies: "unclear" };
+    }
+    return { description, ...(typeof parsed.ocrText === "string" && parsed.ocrText.trim() ? { ocrText: parsed.ocrText.trim().slice(0, 2_000) } : {}), confidence, ...(explicitAnimal ? { animalSpecies: explicitAnimal } : {}) };
+  }
+
+  private async requestVision(media: DownloadedMedia, mimeType: string, instruction: string, label: string): Promise<ParsedVision | undefined> {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(this.model)}:generateContent?key=${encodeURIComponent(this.apiKey as string)}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: instruction }, { inline_data: { mime_type: mimeType, data: media.data.toString("base64") } }] }], generationConfig: { responseMimeType: "application/json", temperature: 0.1 } }),
       signal: AbortSignal.timeout(60_000),
     });
-    if (!response.ok) throw new Error(await providerError(response, "Gemini vision"));
+    if (!response.ok) throw new Error(await providerError(response, label));
     const body = await response.json() as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
     const text = body.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) throw new Error("Vision provider returned no text");
-    const parsed = parseVisionJson(text);
-    if (!parsed) return { description: text.replace(/^```(?:json)?\s*|\s*```$/gi, "").trim().slice(0, 2_000), confidence: 0.25 };
-    if (typeof parsed.description !== "string" || !parsed.description.trim()) throw new Error("Vision provider returned no description");
-    const confidence = typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence) ? Math.min(1, Math.max(0, parsed.confidence)) : 0.6;
-    return { description: parsed.description.trim().slice(0, 2000), ...(typeof parsed.ocrText === "string" && parsed.ocrText.trim() ? { ocrText: parsed.ocrText.trim().slice(0, 2000) } : {}), confidence };
+    return text ? parseVisionJson(text) : undefined;
+  }
+
+  private async verifyAnimalSpecies(media: DownloadedMedia, mimeType: string): Promise<{ species: "cat" | "dog"; confidence: number } | undefined> {
+    try {
+      const parsed = await this.requestVision(media, mimeType, [
+        "Independently verify the animal species in this image.",
+        "Ignore any caption and do not rely on a previous description.",
+        "Return only JSON: {\"animalSpecies\":\"cat\"|\"dog\"|\"other\"|\"unclear\",\"animalEvidence\":\"two visible distinguishing features or empty\",\"confidence\":0..1}.",
+        "Use cat or dog only when at least two distinguishing features are clearly visible. Otherwise use unclear.",
+      ].join(" "), "Gemini animal verification");
+      const species = normalizeAnimalSpecies(parsed?.animalSpecies);
+      const confidence = typeof parsed?.confidence === "number" && Number.isFinite(parsed.confidence) ? Math.min(1, Math.max(0, parsed.confidence)) : 0;
+      const evidence = typeof parsed?.animalEvidence === "string" ? parsed.animalEvidence.trim() : "";
+      return (species === "cat" || species === "dog") && evidence.length >= 10 ? { species, confidence } : undefined;
+    } catch {
+      return undefined;
+    }
   }
 }
 
@@ -160,20 +196,44 @@ function normalizeVisionMimeType(mimeType: string): string {
   return normalized === "image/jpg" ? "image/jpeg" : normalized;
 }
 
-function parseVisionJson(value: string): { description?: unknown; ocrText?: unknown; confidence?: unknown } | undefined {
+type ParsedVision = { description?: unknown; ocrText?: unknown; confidence?: unknown; animalSpecies?: unknown; animalEvidence?: unknown };
+
+function parseVisionJson(value: string): ParsedVision | undefined {
   const cleaned = value.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
   try {
-    return JSON.parse(cleaned) as { description?: unknown; ocrText?: unknown; confidence?: unknown };
+    return JSON.parse(cleaned) as ParsedVision;
   } catch {
     const start = cleaned.indexOf("{");
     const end = cleaned.lastIndexOf("}");
     if (start < 0 || end <= start) return undefined;
     try {
-      return JSON.parse(cleaned.slice(start, end + 1)) as { description?: unknown; ocrText?: unknown; confidence?: unknown };
+      return JSON.parse(cleaned.slice(start, end + 1)) as ParsedVision;
     } catch {
       return undefined;
     }
   }
+}
+
+function normalizeAnimalSpecies(value: unknown): "cat" | "dog" | "other" | "unclear" | "none" | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (/^(cat|kitten|feline)$/.test(normalized)) return "cat";
+  if (/^(dog|puppy|canine)$/.test(normalized)) return "dog";
+  if (/^(other|animal)$/.test(normalized)) return "other";
+  if (/^(unclear|unknown|uncertain|ambiguous)$/.test(normalized)) return "unclear";
+  if (/^(none|no animal|not present)$/.test(normalized)) return "none";
+  return undefined;
+}
+
+function animalFromDescription(description: string): "cat" | "dog" | undefined {
+  if (/\b(?:cat|kitten|feline)\b/i.test(description)) return "cat";
+  if (/\b(?:dog|puppy|canine)\b/i.test(description)) return "dog";
+  return undefined;
+}
+
+function conservativeAnimalDescription(description: string): string {
+  const withoutSpecies = description.replace(/\b(?:cat|kitten|feline|dog|puppy|canine)\b/gi, "animal").replace(/\s+/g, " ").trim();
+  return `${withoutSpecies || "An animal is visible"}. The animal species is unclear, so I will not guess.`.slice(0, 2_000);
 }
 
 async function providerError(response: Response, label: string): Promise<string> {

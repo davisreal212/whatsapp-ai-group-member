@@ -79,6 +79,22 @@ describe("media processing", () => {
     }
   });
 
+  it("does not pass through a disputed cat-or-dog label", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"description":"A person is holding a dog","animalSpecies":"dog","confidence":0.94}' }] } }] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"animalSpecies":"cat","animalEvidence":"pointed ears and feline muzzle","confidence":0.92}' }] } }] }), { status: 200 }));
+    try {
+      const result = await new GeminiVisionProvider("test-key").analyze({ data: Buffer.from("animal"), mimeType: "image/jpeg" });
+      expect(result).toMatchObject({ animalSpecies: "unclear", confidence: 0.35 });
+      expect(result.description).not.toMatch(/\b(?:cat|dog)\b/i);
+      expect(result.description).toContain("species is unclear");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(String(fetchMock.mock.calls[1]?.[1]?.body)).toContain("Ignore any caption and do not rely on a previous description");
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   it("generates audio only when a TTS provider is available", async () => {
     const tts: TextToSpeechProvider = { name: "test-tts", available: true, synthesize: async () => media };
     await expect(new MediaProcessor({ name: "unused", available: false, transcribe: async () => ({ text: "", confidence: 0 }) }, undefined, tts).synthesizeSpeech("Hello"))
