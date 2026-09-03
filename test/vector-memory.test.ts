@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GeminiEmbeddingProvider, QdrantVectorMemoryProvider } from "../src/vector-memory.js";
+import { GeminiEmbeddingProvider, QdrantCloudInferenceEmbeddingProvider, QdrantVectorMemoryProvider } from "../src/vector-memory.js";
 import type { MemoryRecord } from "../src/types.js";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -81,5 +81,26 @@ describe("vector memory adapters", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ embedding: { values: [0.1, 0.2, 0.3] } }), { status: 200 })));
     const provider = new GeminiEmbeddingProvider("secret", "gemini-embedding-001", 3);
     expect(await provider.embed("hello")).toEqual([0.1, 0.2, 0.3]);
+  });
+
+  it("creates Qdrant Cloud Inference documents without calling Gemini", async () => {
+    const provider = new QdrantCloudInferenceEmbeddingProvider("https://qdrant.example", "secret");
+    expect(provider.available).toBe(true);
+    await expect(provider.embed("  multilingual memory text  ")).resolves.toEqual({ text: "multilingual memory text", model: "intfloat/multilingual-e5-small" });
+    expect(provider.dimensions).toBe(384);
+  });
+
+  it("sends Cloud Inference documents directly to Qdrant", async () => {
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(input), init });
+      return new Response(JSON.stringify({ result: [] }), { status: 200 });
+    }));
+    const provider = new QdrantVectorMemoryProvider("https://qdrant.example", "secret", "memories-e5-small", 384);
+    const document = { text: "group topic: cooking", model: "intfloat/multilingual-e5-small" };
+    await provider.upsert(memory, document);
+    await provider.search(document, { scopeId: memory.scopeId }, 1);
+    expect(JSON.parse(String(requests[0]?.init?.body)).points[0].vector).toEqual(document);
+    expect(JSON.parse(String(requests[1]?.init?.body)).query).toEqual(document);
   });
 });

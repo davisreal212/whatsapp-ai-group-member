@@ -17,15 +17,22 @@ export interface EmbeddingProvider {
   readonly name: string;
   readonly dimensions: number;
   readonly available: boolean;
-  embed(text: string): Promise<number[]>;
+  embed(text: string): Promise<EmbeddingVector>;
 }
+
+export interface QdrantDocument {
+  text: string;
+  model: string;
+}
+
+export type EmbeddingVector = number[] | QdrantDocument;
 
 export interface VectorMemoryProvider {
   readonly name: string;
   readonly available: boolean;
   ensureCollection(): Promise<void>;
-  upsert(memory: MemoryRecord, vector: number[]): Promise<void>;
-  search(vector: number[], filters?: MemoryFilters, limit?: number): Promise<VectorMemoryHit[]>;
+  upsert(memory: MemoryRecord, vector: EmbeddingVector): Promise<void>;
+  search(vector: EmbeddingVector, filters?: MemoryFilters, limit?: number): Promise<VectorMemoryHit[]>;
   delete(memoryId: string): Promise<void>;
   health(): Promise<boolean>;
 }
@@ -53,6 +60,22 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
       throw new Error("Gemini embeddings returned an invalid vector");
     }
     return values;
+  }
+}
+
+export class QdrantCloudInferenceEmbeddingProvider implements EmbeddingProvider {
+  readonly name = "qdrant-cloud-inference";
+  readonly available: boolean;
+
+  constructor(private readonly qdrantUrl: string | undefined, private readonly apiKey: string | undefined, private readonly model = "intfloat/multilingual-e5-small", readonly dimensions = 384) {
+    this.available = Boolean(qdrantUrl && apiKey);
+  }
+
+  async embed(text: string): Promise<QdrantDocument> {
+    if (!this.qdrantUrl || !this.apiKey) throw new Error("Qdrant Cloud Inference is not configured");
+    const normalized = text.trim();
+    if (!normalized) throw new Error("Cannot embed empty text");
+    return { text: normalized.slice(0, 2_000), model: this.model };
   }
 }
 
@@ -86,7 +109,7 @@ export class QdrantVectorMemoryProvider implements VectorMemoryProvider {
     }
   }
 
-  async upsert(memory: MemoryRecord, vector: number[]): Promise<void> {
+  async upsert(memory: MemoryRecord, vector: EmbeddingVector): Promise<void> {
     validateVector(vector, this.dimensions);
     const response = await this.request(`/collections/${encodeURIComponent(this.collection)}/points?wait=true`, {
       method: "PUT",
@@ -95,7 +118,7 @@ export class QdrantVectorMemoryProvider implements VectorMemoryProvider {
     if (!response.ok) throw await qdrantError(response, "Qdrant upsert");
   }
 
-  async search(vector: number[], filters: MemoryFilters = {}, limit = 10): Promise<VectorMemoryHit[]> {
+  async search(vector: EmbeddingVector, filters: MemoryFilters = {}, limit = 10): Promise<VectorMemoryHit[]> {
     validateVector(vector, this.dimensions);
     const filter = qdrantFilter(filters);
     let response = await this.request(`/collections/${encodeURIComponent(this.collection)}/points/query`, {
@@ -155,8 +178,12 @@ export class QdrantVectorMemoryProvider implements VectorMemoryProvider {
   }
 }
 
-function validateVector(vector: number[], dimensions: number): void {
-  if (vector.length !== dimensions || !vector.every((value) => Number.isFinite(value))) throw new Error(`Embedding vector must contain ${dimensions} finite values`);
+function validateVector(vector: EmbeddingVector, dimensions: number): void {
+  if (Array.isArray(vector)) {
+    if (vector.length !== dimensions || !vector.every((value) => Number.isFinite(value))) throw new Error(`Embedding vector must contain ${dimensions} finite values`);
+    return;
+  }
+  if (!vector || typeof vector.text !== "string" || !vector.text.trim() || typeof vector.model !== "string" || !vector.model.trim()) throw new Error("Embedding document must contain text and model");
 }
 
 async function qdrantError(response: Response, operation: string): Promise<Error> {

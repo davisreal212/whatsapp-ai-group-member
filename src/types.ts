@@ -126,7 +126,7 @@ export interface AppConfig {
   qdrantUrl?: string;
   qdrantApiKey?: string;
   qdrantCollection: string;
-  embeddingProvider: "none" | "gemini";
+  embeddingProvider: "none" | "gemini" | "qdrant";
   embeddingModel: string;
   embeddingDimensions: number;
   memoryRecentMessageLimit: number;

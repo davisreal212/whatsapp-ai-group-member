@@ -18,7 +18,7 @@ import { formatNigeriaDateTime, NIGERIA_TIME_ZONE } from "./time.js";
 import { groupActivityState, groupParticipation } from "./participation.js";
 import type { ParticipationSettings } from "./types.js";
 import { extractHttpsUrls, isSafeHttpsUrl } from "./network.js";
-import { GeminiEmbeddingProvider, QdrantVectorMemoryProvider } from "./vector-memory.js";
+import { GeminiEmbeddingProvider, QdrantCloudInferenceEmbeddingProvider, QdrantVectorMemoryProvider } from "./vector-memory.js";
 import { MemoryVectorWorker } from "./memory-vector-worker.js";
 import { applyLanguagePreference, languageLabel, migrateLegacyPersonality, parseLanguageCommand, parseLanguageTask, previewPersonality, resolvePersonality } from "./persona.js";
 import { createCoreSkillRegistry, SkillExecutor, SkillRegistry } from "./skills.js";
@@ -49,7 +49,11 @@ export class BotRuntime {
     readonly config: AppConfig,
     private readonly transport: OutboundTransport,
   ) {
-    const embedding = config.embeddingProvider === "gemini" ? new GeminiEmbeddingProvider(config.geminiApiKey, config.embeddingModel, config.embeddingDimensions) : undefined;
+    const embedding = config.embeddingProvider === "gemini"
+      ? new GeminiEmbeddingProvider(config.geminiApiKey, config.embeddingModel, config.embeddingDimensions)
+      : config.embeddingProvider === "qdrant"
+        ? new QdrantCloudInferenceEmbeddingProvider(config.qdrantUrl, config.qdrantApiKey, config.embeddingModel, config.embeddingDimensions)
+        : undefined;
     const vector = new QdrantVectorMemoryProvider(config.qdrantUrl, config.qdrantApiKey, config.qdrantCollection, config.embeddingDimensions);
     this.memoryVector = new MemoryVectorWorker(store, embedding, vector);
     this.memory = new MemoryService(
