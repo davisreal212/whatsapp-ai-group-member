@@ -69,7 +69,7 @@
     async function refresh() { try { render(await api('/api/status')); } catch (error) { if (error.message === 'Authentication required' || error.message === 'Not signed in') showLanding(); else message(error.message, 'error'); } }
     async function toggleGroup(group) { try { await api('/api/groups/' + encodeURIComponent(group.id) + '/enabled', { method: 'POST', body: JSON.stringify({ enabled: !group.enabled }) }); refresh(); } catch (error) { message(error.message, 'error'); } }
     async function togglePause(group) { try { await api('/api/groups/' + encodeURIComponent(group.id) + '/paused', { method: 'POST', body: JSON.stringify({ aiPaused: !group.aiPaused }) }); refresh(); } catch (error) { message(error.message, 'error'); } }
-    async function control(name, value) { try { await api('/api/controls', { method: 'POST', body: JSON.stringify({ [name]: value }) }); refresh(); } catch (error) { message(error.message, 'error'); } }
+    async function control(name, value) { try { await api('/api/controls', { method: 'POST', body: JSON.stringify({ [name]: value }) }); await refresh(); } catch (error) { message(error.message, 'error'); } }
     async function saveAllowlist(values) { try { await api('/api/dm-allowlist', { method: 'POST', body: JSON.stringify({ contacts: values }) }); refresh(); } catch (error) { message(error.message, 'error'); } }
     function formatDate(value) { return value ? new Intl.DateTimeFormat('en-NG', { timeZone: 'Africa/Lagos', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(value)) + ' WAT' : '-'; }
     function escapeHtml(value) { return value.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[char])); }
@@ -420,6 +420,24 @@
               : 'No active WhatsApp session.';
         pairing.style.fontWeight = runtime.pairingCode ? '800' : '';
       };
+    })();
+  </script>
+  <script>
+    (() => {
+      const previousRender = render;
+      const updateOutboundControls = (paused) => {
+        const label = paused ? 'Resume sending' : 'Pause sending';
+        $('overviewPause').textContent = label;
+        $('outbound').textContent = label;
+        $('overviewPause').setAttribute('aria-pressed', String(paused));
+        $('outbound').setAttribute('aria-pressed', String(paused));
+      };
+      render = (data) => {
+        previousRender(data);
+        updateOutboundControls(data.safety?.outboundPaused === true);
+      };
+      $('overviewPause').onclick = () => control('outboundPaused', !(appState?.safety?.outboundPaused === true));
+      $('outbound').onclick = () => control('outboundPaused', !(appState?.safety?.outboundPaused === true));
     })();
   </script>
 </body>
