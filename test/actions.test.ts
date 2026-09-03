@@ -155,6 +155,18 @@ describe("validated outbound actions", () => {
     expect(sent).toEqual([]);
   });
 
+  it("skips a group reply when a newer message arrived during its delay", async () => {
+    const { store, config } = await setup();
+    const sent: string[] = [];
+    const transport = { connected: true, sendText: async (_chatId: string, text: string) => { sent.push(text); }, sendReaction: async () => {}, sendMedia: async () => {} };
+    const service = new ActionService(store, config, transport);
+    service.noteIncoming(source);
+    service.noteIncoming({ ...source, id: "newer-message", timestamp: source.timestamp + 1, text: "New topic" });
+    const plan = { decision: "REPLY" as const, confidence: 1, reason: "test", text: "Stale reply", delayMs: 0, needsWeb: false, needsMedia: false, responseStyle: "short_casual" as const };
+    expect((await service.execute(plan, source, group)).reason).toBe("stale_conversation");
+    expect(sent).toEqual([]);
+  });
+
   it("holds sends during configured quiet hours", async () => {
     const { store, config } = await setup();
     const hour = nigeriaDateParts().hour;

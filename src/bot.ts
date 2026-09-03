@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { WACallEvent, WAMessage } from "@whiskeysockets/baileys";
 import { ActionService, type OutboundTransport } from "./actions.js";
-import { DecisionEngine, isLinkAnalysisRequestText } from "./decision.js";
+import { DecisionEngine, isLinkAnalysisRequestText, localRelevance } from "./decision.js";
 import type { AppConfig, CanonicalMessage, GroupRecord, InboundJobRecord, LanguagePreference, Personality, TaskRecord } from "./types.js";
 import { MemoryService } from "./memory.js";
 import { isCurrentInformationQuestion, evaluateInboundPolicy } from "./policy.js";
@@ -41,6 +41,7 @@ export class BotRuntime {
   readonly voiceCalls: ElevenLabsWhatsAppCallService;
   private readonly inboundQueue = new KeyedJobQueue(4);
   private readonly personaCache = new Map<string, Personality>();
+  private readonly suppressedGroupTopics = new Map<string, { terms: string[]; expiresAt: number }>();
   private lastDecisionDiagnostics?: Record<string, unknown>;
   private memoryMaintenanceTimer?: ReturnType<typeof setInterval>;
 
@@ -217,6 +218,7 @@ export class BotRuntime {
       await this.log("message.invalid", "warn", { reason: "normalization_failed" });
       return;
     }
+    this.actions.noteIncoming(message);
     await this.inboundQueue.enqueueAndWait(message.chatId, () => this.processInboundMessage(message, loadMedia));
   }
 
@@ -282,7 +284,7 @@ export class BotRuntime {
     } else if (message.type === "audio") {
       message = { ...message, transcriptConfidence: 0 };
     }
-    if (["image", "sticker"].includes(message.type) && message.media?.hasDownloadableContent && loadMedia) {
+    if (["image", "sticker"].includes(message.type) && message.media?.hasDownloadableContent && loadMedia && this.shouldAnalyzeMedia(message)) {
       try {
         const vision = await this.media.analyzeImage(loadMedia, message.chatId, { messageType: message.type as "image" | "sticker", ...(message.media?.caption ? { caption: message.media.caption } : {}) });
         message = { ...message, text: [message.text, vision.description, vision.ocrText].filter(Boolean).join("\n"), media: { ...message.media, description: vision.description, ...(vision.ocrText ? { ocrText: vision.ocrText } : {}) } };
@@ -305,6 +307,16 @@ export class BotRuntime {
     if (!stored) {
       await this.log("message.duplicate", "info", { reason: "event_id_already_seen" }, message);
       return;
+    }
+    if (message.isGroup) {
+      if (this.isSuppressedGroupTopic(message)) {
+        await this.log("message.filtered", "info", { reason: "topic_suppressed" }, message);
+        return;
+      }
+      if (this.rememberTopicStop(message)) {
+        await this.log("message.filtered", "info", { reason: "topic_stop_request" }, message);
+        return;
+      }
     }
     if (!message.isGroup) {
       const languageCommand = parseLanguageCommand(message.text ?? "");
@@ -764,6 +776,35 @@ export class BotRuntime {
     await this.actions.execute({ decision: "REPLY_QUOTED", confidence: 1, reason: "task_command", targetMessageId: message.id, text: result.reply, delayMs: 0, needsWeb: false, needsMedia: false, priority: "CRITICAL", bypassCooldown: true, responseStyle: "short_casual" }, message, group);
   }
 
+  private shouldAnalyzeMedia(message: CanonicalMessage): boolean {
+    if (!message.isGroup) return true;
+    return localRelevance(message, this.config.botName, this.config.botJid, this.config.personality.talkativeness, this.config.botJids, false, this.config.personality).relevant;
+  }
+
+  private rememberTopicStop(message: CanonicalMessage): boolean {
+    const text = message.text ?? "";
+    if (!isTopicStopRequest(text)) return false;
+    const previous = this.store.recentMessages(message.groupId as string, 8).reverse().find((item) => item.id !== message.id && !isTopicStopRequest(item.text ?? "") && (item.text ?? "").trim());
+    const terms = topicTerms(text);
+    const inheritedTerms = terms.length ? terms : topicTerms(previous?.text ?? "");
+    if (inheritedTerms.length) this.suppressedGroupTopics.set(message.groupId as string, { terms: inheritedTerms, expiresAt: Date.now() + 24 * 60 * 60_000 });
+    return true;
+  }
+
+  private isSuppressedGroupTopic(message: CanonicalMessage): boolean {
+    const groupId = message.groupId;
+    if (!groupId) return false;
+    const suppression = this.suppressedGroupTopics.get(groupId);
+    if (!suppression) return false;
+    if (suppression.expiresAt <= Date.now()) {
+      this.suppressedGroupTopics.delete(groupId);
+      return false;
+    }
+    const currentTerms = new Set(topicTerms(message.text ?? ""));
+    const matches = suppression.terms.filter((term) => currentTerms.has(term)).length;
+    return matches >= (suppression.terms.length >= 3 ? 2 : 1);
+  }
+
   private async log(
     event: string,
     level: "info" | "warn" | "error",
@@ -795,6 +836,17 @@ function directMessageContext(chatId: string): GroupRecord {
     learningEnabled: true,
     lastSeenAt: Date.now(),
   };
+}
+
+export function isTopicStopRequest(text: string): boolean {
+  return /\b(?:stop|don't|do not|no more|enough|quit|leave off|tired of)\b[\s\S]{0,100}\b(?:mention|talk|discuss|repeat|bring up|continue|promot)/i.test(text)
+    || /\b(?:stop|don't|do not|no more|enough)\b[\s\S]{0,60}\b(?:with|about|on|this|that|it)\b/i.test(text)
+    || /^\s*(?:please\s+)?(?:stop|enough|no more)(?:\s+(?:it|that))?\s*[.!?]*\s*$/i.test(text);
+}
+
+export function topicTerms(text: string): string[] {
+  const ignored = new Set(["about", "again", "also", "and", "anymore", "are", "bring", "continue", "do", "dont", "enough", "for", "from", "it", "mention", "mentioning", "more", "no", "off", "on", "please", "repeat", "stop", "talk", "that", "the", "this", "to", "up", "with"]);
+  return [...new Set((text.toLowerCase().match(/[\p{L}\p{N}]{2,}/gu) ?? []).filter((term) => !ignored.has(term)))].slice(0, 12);
 }
 
 function isTextDocument(mimeType?: string): boolean {

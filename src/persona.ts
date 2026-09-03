@@ -63,19 +63,19 @@ export function defaultPersonality(displayName: string): Personality {
     displayName,
     genderPresentation: "neutral",
     tone: "casual",
-    talkativeness: 0.35,
+    talkativeness: 0.2,
     confidence: 0.7,
     formality: 0.25,
     languageMix: "english",
-    emojiFrequency: 0.15,
-    initiative: 0.3,
+    emojiFrequency: 0.05,
+    initiative: 0.15,
     responseLength: "short",
     personalityPresets: [],
-    humorLevel: 0.45,
+    humorLevel: 0.2,
     languages: ["english"],
     respondToMentions: true,
     respondToReplies: true,
-    joinRelevantConversations: true,
+    joinRelevantConversations: false,
     initiateConversations: false,
     initiationIntervalMs: 6 * 60 * 60 * 1_000,
     maxDailyInitiations: 2,
@@ -178,7 +178,7 @@ export function responsePolicy(personality: Personality, message: CanonicalMessa
   const directlyAddressed = signals.directed;
   const shouldReply = !message.isGroup || (
     relevant &&
-    (directlyAddressed || personality.joinRelevantConversations) &&
+    (directlyAddressed || personality.joinRelevantConversations || message.type === "audio" || message.type === "image" || message.type === "sticker") &&
     (!signals.directMention || personality.respondToMentions) &&
     (!signals.directReply || personality.respondToReplies)
   );

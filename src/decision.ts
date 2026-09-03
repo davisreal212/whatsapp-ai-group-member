@@ -80,14 +80,12 @@ export function localRelevance(message: CanonicalMessage, botName: string, botJi
   const signals = participationSignals(message, botName, botJid, botJids);
   if (signals.directMention && !signals.directReply && personality?.respondToMentions === false) return { relevant: false, reason: "mentions_disabled", ...signals };
   if (signals.directReply && personality?.respondToReplies === false) return { relevant: false, reason: "replies_disabled", ...signals };
-  if (message.isGroup && !signals.directed && personality?.joinRelevantConversations === false) return { relevant: false, reason: "conversation_joining_disabled", ...signals };
   if (isMediaRequestText(text)) return { relevant: true, reason: "media_request", ...signals, directed: true, priority: "HIGH" };
   if (isStickerRequestText(text)) return { relevant: true, reason: "sticker_request", ...signals, directed: true, priority: "HIGH" };
   if (isLinkAnalysisRequestText(text)) return { relevant: true, reason: "link_analysis_request", ...signals, directed: true, priority: "HIGH" };
   if (isMusicRequestText(text)) return { relevant: true, reason: "music_request", ...signals, directed: true, priority: "NORMAL" };
   if (signals.directed) return { relevant: true, reason: "directed_to_bot", ...signals };
   if (message.quotedMessageId) return { relevant: true, reason: "reply_or_quote", ...signals };
-  if (message.isGroup && recentBotFollowUp(text, recentBotActions)) return { relevant: true, reason: "recent_bot_reply", ...signals };
   if (/[?؟]\s*$/.test(text) || /\b(can|could|should|would|what|when|where|why|how|is|are|do|does)\b/i.test(text)) {
     return { relevant: true, reason: "explicit_question", ...signals };
   }
@@ -95,17 +93,13 @@ export function localRelevance(message: CanonicalMessage, botName: string, botJi
     return { relevant: true, reason: "current_information", ...signals };
   }
   if (message.type === "audio") return { relevant: true, reason: "audio_message", ...signals };
-  if (message.type === "image") return { relevant: true, reason: "image_message", ...signals };
-  if (message.type === "sticker") return { relevant: true, reason: "sticker_message", ...signals };
-  if (message.isGroup && /\b(?:good\s+(?:morning|afternoon|evening|night)|morning\s+(?:all|everyone|y['’]?all)|hello|hi)\b/i.test(text)) {
-    return { relevant: true, reason: "group_greeting", ...signals };
-  }
-  if (message.isGroup && talkativeness >= 0.35 && text.trim().length >= 10) {
+  if (message.isGroup && ["image", "sticker"].includes(message.type) && !text.trim()) return { relevant: false, reason: "standalone_media", ...signals };
+  if (message.isGroup && !signals.directed && personality?.joinRelevantConversations === false) return { relevant: false, reason: "conversation_joining_disabled", ...signals };
+  if (message.isGroup && talkativeness >= 0.65 && text.trim().length >= 20) {
     return { relevant: true, reason: "group_conversation", ...signals };
   }
-  return text.trim()
-    ? { relevant: true, reason: "conversation_message", ...signals }
-    : { relevant: false, reason: "empty_message", ...signals };
+  if (!message.isGroup && text.trim()) return { relevant: true, reason: "conversation_message", ...signals };
+  return { relevant: false, reason: text.trim() ? "unaddressed_group_message" : "empty_message", ...signals };
 }
 
 export class DecisionEngine {
@@ -182,11 +176,12 @@ export class DecisionEngine {
     const directReply = local.directReply === true;
     const directMention = local.directMention === true;
     const bypassCooldown = shouldBypassCooldown({ directReply, directMention }, participation);
-    const delayMs = directReply
+    const requestedDelayMs = directReply
       ? Math.max(safeResponsePlan.delayMs, naturalDelay(participation.directReplyDelayMinMs, participation.directReplyDelayMaxMs))
       : directMention
         ? Math.max(safeResponsePlan.delayMs, naturalDelay(participation.directMentionDelayMinMs, participation.directMentionDelayMaxMs))
         : safeResponsePlan.delayMs;
+    const delayMs = Math.min(message.isGroup ? 3_000 : 5_000, requestedDelayMs);
     return {
       plan: {
         ...safeResponsePlan,
@@ -261,18 +256,4 @@ function normalizeResponseStyle(value: unknown): unknown {
   if (["playful", "fun", "humorous"].includes(normalized)) return "playful";
   if (["uncertain", "unsure", "cautious"].includes(normalized)) return "uncertain";
   return "short_casual";
-}
-
-function recentBotFollowUp(text: string, actions: ContextSnapshot["recentActions"]): boolean {
-  const recentReply = actions?.find((action) => action.role === "bot" && action.text.trim() && Date.now() - action.timestamp <= 10 * 60_000);
-  if (!recentReply) return false;
-  const normalized = text.trim();
-  if (/^(?:lol|lmao|haha|exactly|true|same|nice|thanks|thank you|yes|no|okay|ok)\b/i.test(normalized)) return true;
-  if (/^[\p{Extended_Pictographic}\s!?.,😂🤣😭]+$/u.test(normalized)) return true;
-  const queryWords = new Set(normalized.toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}-]{2,}/gu) ?? []);
-  const replyWords = new Set(recentReply.text.toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}-]{2,}/gu) ?? []);
-  if (!queryWords.size || !replyWords.size) return false;
-  let matches = 0;
-  for (const word of queryWords) if (replyWords.has(word)) matches += 1;
-  return matches / queryWords.size >= 0.25;
 }

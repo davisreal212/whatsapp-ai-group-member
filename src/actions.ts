@@ -93,6 +93,7 @@ export class ActionService {
   // Admission is serialized per conversation before a cooldown check and insert.
   private readonly admissionQueue = new KeyedJobQueue(1);
   private readonly retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly latestIncoming = new Map<string, { id: string; timestamp: number }>();
   private started = false;
   private readonly generatedAudio = new Map<string, { data: Buffer; mimeType: string }>();
 
@@ -123,6 +124,13 @@ export class ActionService {
 
   health(): { running: boolean; queue: QueueStats } {
     return { running: this.started, queue: this.queue.stats() };
+  }
+
+  noteIncoming(message: CanonicalMessage): void {
+    const key = message.groupId ?? message.chatId;
+    const current = this.latestIncoming.get(key);
+    if (!current || message.timestamp >= current.timestamp) this.latestIncoming.set(key, { id: message.id, timestamp: message.timestamp });
+    if (this.latestIncoming.size > 1_000) this.latestIncoming.delete(this.latestIncoming.keys().next().value as string);
   }
 
   async execute(plan: DecisionPlan, sourceMessage: CanonicalMessage, group: GroupRecord | undefined, generatedAudio?: { data: Buffer; mimeType: string }): Promise<ActionValidation> {
@@ -234,6 +242,10 @@ export class ActionService {
       await this.store.addLog({ id: randomUUID(), event: "action.recovery_failed", level: "error", details: { actionId: id, reason: "source_message_missing" }, createdAt: Date.now() });
       return;
     }
+    if (sourceMessage.isGroup && this.hasNewerIncoming(sourceMessage)) {
+      await this.skipAction(id, sourceMessage, planFromAction(action), "stale_conversation");
+      return;
+    }
     const group = sourceMessage.groupId ? this.store.group(sourceMessage.groupId) : undefined;
     const plan = planFromAction(action);
     const generatedAudio = this.generatedAudio.get(id);
@@ -249,6 +261,10 @@ export class ActionService {
     }
     const waitMs = action.scheduledFor - Date.now();
     if (waitMs > 0) await wait(waitMs);
+    if (sourceMessage.isGroup && this.hasNewerIncoming(sourceMessage)) {
+      await this.skipAction(id, sourceMessage, plan, "stale_conversation");
+      return;
+    }
     const delayedUnavailable = this.outboundSkipReason();
     if (delayedUnavailable) {
       await this.skipAction(id, sourceMessage, plan, delayedUnavailable);
@@ -325,6 +341,11 @@ export class ActionService {
     if (isQuietHours(this.config.quietHoursStart, this.config.quietHoursEnd, new Date(), this.config.quietHoursEnabled)) return "quiet_hours";
     if (!this.transport.connected) return "transport_disconnected";
     return undefined;
+  }
+
+  private hasNewerIncoming(message: CanonicalMessage): boolean {
+    const latest = this.latestIncoming.get(message.groupId ?? message.chatId);
+    return Boolean(latest && latest.id !== message.id && latest.timestamp >= message.timestamp);
   }
 
   private async skipAction(actionId: string, message: CanonicalMessage, plan: DecisionPlan, reason: string): Promise<ActionValidation> {

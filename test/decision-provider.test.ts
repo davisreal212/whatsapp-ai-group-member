@@ -7,6 +7,7 @@ import { FileStore } from "../src/store.js";
 import type { ContextSnapshot } from "../src/memory.js";
 import type { DecisionPlan, GroupRecord } from "../src/types.js";
 import { normalizePairingPhoneNumber } from "../src/whatsapp.js";
+import { isTopicStopRequest, topicTerms } from "../src/bot.js";
 
 class ProviderProbe extends OpenAICompatibleProvider {
   run(): Promise<string> {
@@ -72,9 +73,9 @@ describe("decision safety helpers", () => {
     expect(isCurrentInformationQuestion(message.text)).toBe(true);
   });
 
-  it("treats an unquoted short follow-up as relevant after a recent bot reply", () => {
+  it("does not treat an unquoted short follow-up as a bot request", () => {
     const message = { id: "bot-follow-up", chatId: "g@g.us", groupId: "g@g.us", senderId: "member", timestamp: Date.now(), type: "text" as const, text: "lol", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
-    expect(localRelevance(message, "Kola", undefined, 0.1, [], false, undefined, [{ id: "action", type: "REPLY", text: "That was funny", timestamp: Date.now() - 1_000, sourceMessageId: "prior", role: "bot" }])).toMatchObject({ relevant: true, reason: "recent_bot_reply" });
+    expect(localRelevance(message, "Kola", undefined, 0.1, [], false, undefined, [{ id: "action", type: "REPLY", text: "That was funny", timestamp: Date.now() - 1_000, sourceMessageId: "prior", role: "bot" }])).toMatchObject({ relevant: false, reason: "unaddressed_group_message" });
   });
 
   it("keeps explicit image requests relevant and high priority", () => {
@@ -110,9 +111,11 @@ describe("decision safety helpers", () => {
     expect(result.plan).toMatchObject({ decision: "SEND_IMAGE", needsMedia: true, reason: "local_media_request" });
   });
 
-  it("treats inbound stickers as relevant media", () => {
+  it("ignores standalone inbound stickers and images", () => {
     const message = { id: "sticker-1", chatId: "g@g.us", groupId: "g@g.us", senderId: "u", timestamp: Date.now(), type: "sticker" as const, mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
-    expect(localRelevance(message, "Kola")).toMatchObject({ relevant: true, reason: "sticker_message" });
+    const image = { ...message, id: "image-1", type: "image" as const };
+    expect(localRelevance(message, "Kola")).toMatchObject({ relevant: false, reason: "standalone_media" });
+    expect(localRelevance(image, "Kola")).toMatchObject({ relevant: false, reason: "standalone_media" });
   });
 
   it("recognizes plain-name and LID-based direct addressing", () => {
@@ -127,17 +130,23 @@ describe("decision safety helpers", () => {
 
   it("lets substantive group conversation reach the classifier", () => {
     const message = { id: "3", chatId: "g@g.us", groupId: "g@g.us", senderId: "u", timestamp: Date.now(), type: "text" as const, text: "The meeting starts at eight tonight", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
-    expect(localRelevance(message, "Kola", undefined, 0.35).reason).toBe("group_conversation");
+    expect(localRelevance(message, "Kola", undefined, 0.65).reason).toBe("group_conversation");
   });
 
-  it("lets group greetings reach the classifier", () => {
+  it("ignores unaddressed group greetings", () => {
     const message = { id: "greeting", chatId: "g@g.us", groupId: "g@g.us", senderId: "u", timestamp: Date.now(), type: "text" as const, text: "Good morning y'all", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
-    expect(localRelevance(message, "Kola", undefined, 0.1).reason).toBe("group_greeting");
+    expect(localRelevance(message, "Kola", undefined, 0.1)).toMatchObject({ relevant: false, reason: "unaddressed_group_message" });
   });
 
-  it("lets short unrelated group messages reach the classifier", () => {
+  it("ignores short unrelated group messages", () => {
     const message = { id: "short-message", chatId: "g@g.us", groupId: "g@g.us", senderId: "u", timestamp: Date.now(), type: "text" as const, text: "okay", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
-    expect(localRelevance(message, "Kola", undefined, 0.1)).toMatchObject({ relevant: true, reason: "conversation_message", directed: false });
+    expect(localRelevance(message, "Kola", undefined, 0.1)).toMatchObject({ relevant: false, reason: "unaddressed_group_message", directed: false });
+  });
+
+  it("recognizes a request to stop repeating a topic", () => {
+    expect(isTopicStopRequest("Please stop mentioning the 5k to 68k plan")).toBe(true);
+    expect(isTopicStopRequest("Please stop")).toBe(true);
+    expect(topicTerms("stop mentioning the 5k-to-68k plan")).toEqual(expect.arrayContaining(["5k", "68k", "plan"]));
   });
 
   it("turns a provider ignore into a response plan for a direct address", async () => {
