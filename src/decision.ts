@@ -94,10 +94,8 @@ export function localRelevance(message: CanonicalMessage, botName: string, botJi
   }
   if (message.type === "audio") return { relevant: true, reason: "audio_message", ...signals };
   if (message.isGroup && ["image", "sticker"].includes(message.type) && !text.trim()) return { relevant: false, reason: "standalone_media", ...signals };
-  if (message.isGroup && !signals.directed && personality?.joinRelevantConversations === false) return { relevant: false, reason: "conversation_joining_disabled", ...signals };
-  if (message.isGroup && talkativeness >= 0.65 && text.trim().length >= 20) {
-    return { relevant: true, reason: "group_conversation", ...signals };
-  }
+  if (message.isGroup && isLowSignalGroupMessage(text)) return { relevant: false, reason: "unaddressed_group_message", ...signals };
+  if (message.isGroup && text.trim()) return { relevant: true, reason: "group_message_candidate", ...signals };
   if (!message.isGroup && text.trim()) return { relevant: true, reason: "conversation_message", ...signals };
   return { relevant: false, reason: text.trim() ? "unaddressed_group_message" : "empty_message", ...signals };
 }
@@ -141,9 +139,14 @@ export class DecisionEngine {
     }
 
     const input: ProviderInput = {
+      messageId: message.id,
+      senderId: message.senderId,
       messageText: message.text ?? message.media?.caption ?? "",
       messageType: message.type,
       directed: local.directed,
+      ...(message.quotedMessageId ? { quotedMessageId: message.quotedMessageId } : {}),
+      ...(message.quotedSenderId ? { quotedSenderId: message.quotedSenderId } : {}),
+      ...(message.mentionedIds.length ? { mentionedIds: message.mentionedIds } : {}),
       ...(message.transcriptConfidence !== undefined ? { transcriptConfidence: message.transcriptConfidence } : {}),
       ...(message.transcriptLanguage ? { transcriptLanguage: message.transcriptLanguage } : {}),
       ...(message.senderName ? { senderName: message.senderName } : {}),
@@ -256,4 +259,15 @@ function normalizeResponseStyle(value: unknown): unknown {
   if (["playful", "fun", "humorous"].includes(normalized)) return "playful";
   if (["uncertain", "unsure", "cautious"].includes(normalized)) return "uncertain";
   return "short_casual";
+}
+
+function isLowSignalGroupMessage(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) return true;
+  if (/^[\p{Extended_Pictographic}\s!?.,😂🤣😭]+$/u.test(normalized)) return true;
+  if (/^(?:o{2,}|h+a+h+a+|l+m+a+o+)\s*[!?.,😂🤣😭]*$/i.test(normalized)) return true;
+  if (/^(?:good\s+(?:morning|afternoon|evening)|(?:hi|hello|hey))(?:[\s,]*(?:everyone|everybody|guys|y'all|all|folks))?\s*[.!?]*$/i.test(normalized)) return true;
+  const words = normalized.match(/[\p{L}\p{N}]+/gu) ?? [];
+  const lowSignalWords = new Set(["afternoon", "evening", "good", "hello", "hey", "hi", "lol", "lmao", "morning", "no", "ok", "okay", "omo", "please", "same", "sha", "thanks", "thank", "true", "wow", "yeah", "yes", "yo"]);
+  return normalized.length <= 12 && words.length <= 2 && words.every((word) => lowSignalWords.has(word));
 }

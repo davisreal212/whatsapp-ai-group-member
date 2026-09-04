@@ -3,7 +3,7 @@ import type { WACallEvent, WAMessage } from "@whiskeysockets/baileys";
 import { ActionService, type OutboundTransport } from "./actions.js";
 import { DecisionEngine, isLinkAnalysisRequestText, localRelevance } from "./decision.js";
 import type { AppConfig, CanonicalMessage, GroupRecord, InboundJobRecord, LanguagePreference, Personality, TaskRecord } from "./types.js";
-import { MemoryService } from "./memory.js";
+import { MemoryService, type ContextSnapshot } from "./memory.js";
 import { isCurrentInformationQuestion, evaluateInboundPolicy } from "./policy.js";
 import { ProviderRouter, type ProviderInput } from "./providers.js";
 import { DuckDuckGoImageProvider, DuckDuckGoProvider, ResearchService, TavilyProvider, WikimediaImageProvider } from "./research.js";
@@ -16,7 +16,7 @@ import { BackupService } from "./backup.js";
 import { KeyedJobQueue } from "./queue.js";
 import { formatNigeriaDateTime, NIGERIA_TIME_ZONE } from "./time.js";
 import { groupActivityState, groupParticipation } from "./participation.js";
-import type { ParticipationSettings } from "./types.js";
+import type { ParticipationSettings, TopicBoundaryContext } from "./types.js";
 import { extractHttpsUrls, isSafeHttpsUrl } from "./network.js";
 import { GeminiEmbeddingProvider, QdrantCloudInferenceEmbeddingProvider, QdrantVectorMemoryProvider } from "./vector-memory.js";
 import { MemoryVectorWorker } from "./memory-vector-worker.js";
@@ -41,7 +41,6 @@ export class BotRuntime {
   readonly voiceCalls: ElevenLabsWhatsAppCallService;
   private readonly inboundQueue = new KeyedJobQueue(4);
   private readonly personaCache = new Map<string, Personality>();
-  private readonly suppressedGroupTopics = new Map<string, { terms: string[]; expiresAt: number }>();
   private lastDecisionDiagnostics?: Record<string, unknown>;
   private memoryMaintenanceTimer?: ReturnType<typeof setInterval>;
 
@@ -308,16 +307,6 @@ export class BotRuntime {
       await this.log("message.duplicate", "info", { reason: "event_id_already_seen" }, message);
       return;
     }
-    if (message.isGroup) {
-      if (this.isSuppressedGroupTopic(message)) {
-        await this.log("message.filtered", "info", { reason: "topic_suppressed" }, message);
-        return;
-      }
-      if (this.rememberTopicStop(message)) {
-        await this.log("message.filtered", "info", { reason: "topic_stop_request" }, message);
-        return;
-      }
-    }
     if (!message.isGroup) {
       const languageCommand = parseLanguageCommand(message.text ?? "");
       if (languageCommand) {
@@ -332,17 +321,29 @@ export class BotRuntime {
     const contextGroup = group ?? directMessageContext(message.chatId);
     const personality = this.personality(contextGroup, message.isGroup ? undefined : this.dmLanguagePreference(message.chatId));
     if (personality.memoryEnabled) await this.memory.observe(message);
-    const context = personality.memoryEnabled
-      ? await this.memory.contextWithSemantic(contextGroup, message.senderId, personality, message.text ?? message.media?.caption ?? "", message.id)
+    const query = message.text ?? message.media?.caption ?? "";
+    const baseContext = personality.memoryEnabled
+      ? this.memory.context(contextGroup, message.senderId, personality, query, message.id)
       : { ...this.memory.context(contextGroup, message.senderId, personality, "", message.id), memories: [], member: undefined };
+    const preliminaryRelevance = localRelevance(message, personality.displayName, this.config.botJid, personality.talkativeness, this.config.botJids, !message.isGroup, personality, baseContext.recentActions);
+    let context: ContextSnapshot = personality.memoryEnabled && shouldRetrieveSemanticMemory(message, preliminaryRelevance)
+      ? await this.memory.contextWithSemantic(contextGroup, message.senderId, personality, query, message.id)
+      : baseContext;
+    const topicBoundary = message.groupId ? recentTopicBoundary(this.store, message.groupId, message.timestamp) : undefined;
+    if (topicBoundary) context = { ...context, topicBoundary };
     context.skillHints = this.skills.discover(message.text ?? "").slice(0, 8).map(({ skillId, name, description, category, scope, skillFile }) => ({ skillId, name, description, category, scope, ...(skillFile ? { skillFile } : {}) }));
     const languageTask = parseLanguageTask(message.text ?? "");
     if (languageTask && (!message.isGroup || message.text?.toLowerCase().includes(this.config.botName.toLowerCase()))) {
       const taskText = languageTask.text || message.text || "";
       const response = await this.providers.generateResponse({
+        messageId: message.id,
+        senderId: message.senderId,
         messageText: taskText,
         messageType: message.type,
         directed: true,
+        ...(message.quotedMessageId ? { quotedMessageId: message.quotedMessageId } : {}),
+        ...(message.quotedSenderId ? { quotedSenderId: message.quotedSenderId } : {}),
+        ...(message.mentionedIds.length ? { mentionedIds: message.mentionedIds } : {}),
         ...(message.senderName ? { senderName: message.senderName } : {}),
         context,
         task: languageTask.kind,
@@ -461,10 +462,15 @@ export class BotRuntime {
     }
     if (plan.decision !== "IGNORE" && !["REACT", "SEND_IMAGE", "SEND_STICKER"].includes(plan.decision) && (!plan.text || Boolean(evidence))) {
       const input: ProviderInput = {
+        messageId: message.id,
+        senderId: message.senderId,
         messageText: message.text ?? message.media?.caption ?? "",
         messageType: message.type,
         ...(message.senderName ? { senderName: message.senderName } : {}),
         directed: result.local.directed,
+        ...(message.quotedMessageId ? { quotedMessageId: message.quotedMessageId } : {}),
+        ...(message.quotedSenderId ? { quotedSenderId: message.quotedSenderId } : {}),
+        ...(message.mentionedIds.length ? { mentionedIds: message.mentionedIds } : {}),
         ...(message.transcriptConfidence !== undefined ? { transcriptConfidence: message.transcriptConfidence } : {}),
         ...(message.transcriptLanguage ? { transcriptLanguage: message.transcriptLanguage } : {}),
         context,
@@ -781,30 +787,6 @@ export class BotRuntime {
     return localRelevance(message, this.config.botName, this.config.botJid, this.config.personality.talkativeness, this.config.botJids, false, this.config.personality).relevant;
   }
 
-  private rememberTopicStop(message: CanonicalMessage): boolean {
-    const text = message.text ?? "";
-    if (!isTopicStopRequest(text)) return false;
-    const previous = this.store.recentMessages(message.groupId as string, 8).reverse().find((item) => item.id !== message.id && !isTopicStopRequest(item.text ?? "") && (item.text ?? "").trim());
-    const terms = topicTerms(text);
-    const inheritedTerms = terms.length ? terms : topicTerms(previous?.text ?? "");
-    if (inheritedTerms.length) this.suppressedGroupTopics.set(message.groupId as string, { terms: inheritedTerms, expiresAt: Date.now() + 24 * 60 * 60_000 });
-    return true;
-  }
-
-  private isSuppressedGroupTopic(message: CanonicalMessage): boolean {
-    const groupId = message.groupId;
-    if (!groupId) return false;
-    const suppression = this.suppressedGroupTopics.get(groupId);
-    if (!suppression) return false;
-    if (suppression.expiresAt <= Date.now()) {
-      this.suppressedGroupTopics.delete(groupId);
-      return false;
-    }
-    const currentTerms = new Set(topicTerms(message.text ?? ""));
-    const matches = suppression.terms.filter((term) => currentTerms.has(term)).length;
-    return matches >= (suppression.terms.length >= 3 ? 2 : 1);
-  }
-
   private async log(
     event: string,
     level: "info" | "warn" | "error",
@@ -847,6 +829,26 @@ export function isTopicStopRequest(text: string): boolean {
 export function topicTerms(text: string): string[] {
   const ignored = new Set(["about", "again", "also", "and", "anymore", "are", "bring", "continue", "do", "dont", "enough", "for", "from", "it", "mention", "mentioning", "more", "no", "off", "on", "please", "repeat", "stop", "talk", "that", "the", "this", "to", "up", "with"]);
   return [...new Set((text.toLowerCase().match(/[\p{L}\p{N}]{2,}/gu) ?? []).filter((term) => !ignored.has(term)))].slice(0, 12);
+}
+
+function recentTopicBoundary(store: Store, groupId: string, now: number): TopicBoundaryContext | undefined {
+  const messages = store.recentMessages(groupId, 40);
+  const stopIndex = [...messages].reverse().findIndex((message) => isTopicStopRequest(message.text ?? ""));
+  if (stopIndex < 0) return undefined;
+  const index = messages.length - 1 - stopIndex;
+  const stop = messages[index];
+  if (!stop || now - stop.timestamp > 24 * 60 * 60_000) return undefined;
+  const previous = messages.slice(0, index).reverse().find((message) => (message.text ?? "").trim() && !isTopicStopRequest(message.text ?? ""));
+  const terms = topicTerms(stop.text ?? "").length ? topicTerms(stop.text ?? "") : topicTerms(previous?.text ?? "");
+  return { messageId: stop.id, stoppedAt: stop.timestamp, terms };
+}
+
+function shouldRetrieveSemanticMemory(message: CanonicalMessage, local: ReturnType<typeof localRelevance>): boolean {
+  const text = message.text?.trim() ?? "";
+  if (!message.isGroup) return true;
+  if (local.directed || message.quotedMessageId) return true;
+  if (!text) return false;
+  return text.length >= 24 || /[?؟]\s*$/.test(text) || isCurrentInformationQuestion(text) || isLinkAnalysisRequestText(text);
 }
 
 function isTextDocument(mimeType?: string): boolean {

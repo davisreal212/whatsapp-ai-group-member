@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ActionRecord, CanonicalMessage, GroupRecord, MemberRecord, MemoryDeleteHook, MemoryRecord, MemoryRetriever, MemoryStatus, MemoryUpsertHook, Personality, StoredMessage } from "./types.js";
+import type { ActionRecord, CanonicalMessage, GroupRecord, MemberRecord, MemoryDeleteHook, MemoryRecord, MemoryRetriever, MemoryStatus, MemoryUpsertHook, Personality, StoredMessage, TopicBoundaryContext } from "./types.js";
 import type { Store } from "./store.js";
 
 export interface ContextSnapshot {
@@ -11,6 +11,7 @@ export interface ContextSnapshot {
   personality: Personality;
   skillHints?: Array<{ skillId: string; name: string; description: string; category: string; scope: string; skillFile?: string }>;
   thread?: ThreadContext;
+  topicBoundary?: TopicBoundaryContext;
 }
 
 export interface ContextMessage {

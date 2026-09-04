@@ -57,6 +57,25 @@ describe("decision safety helpers", () => {
     }
   });
 
+  it("passes current sender and reply metadata into the classifier prompt", async () => {
+    const originalFetch = globalThis.fetch;
+    let requestBody = "";
+    globalThis.fetch = (async (_input, init) => {
+      requestBody = String(init?.body);
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"decision":"IGNORE","confidence":1,"reason":"other member"}' } }] }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    try {
+      const provider = new ProviderProbe("groq", "https://api.groq.com/openai/v1", "test-model", "test-key");
+      await provider.classify({ messageId: "current", senderId: "member-2", messageText: "That chart looks good", messageType: "text", directed: false, quotedMessageId: "chart", quotedSenderId: "member-1", mentionedIds: [], context: { personality: loadConfig({ NODE_ENV: "test" }).personality } as ContextSnapshot });
+      const prompt = JSON.parse(requestBody).messages[0].content as string;
+      expect(prompt).toContain("Current message ID: current");
+      expect(prompt).toContain("Current sender ID: member-2");
+      expect(prompt).toContain("Reply target sender ID: member-1");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("anchors provider-selected targets to the current message", async () => {
     const message = { id: "current-message", chatId: "g@g.us", groupId: "g@g.us", senderId: "member", timestamp: Date.now(), type: "text" as const, text: "@Kola reply", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
     const plan: DecisionPlan = { decision: "REPLY_QUOTED", confidence: 1, reason: "reply", targetMessageId: "invented-id", text: "Reply", delayMs: 0, needsWeb: false, needsMedia: false, responseStyle: "short_casual" };
@@ -130,7 +149,18 @@ describe("decision safety helpers", () => {
 
   it("lets substantive group conversation reach the classifier", () => {
     const message = { id: "3", chatId: "g@g.us", groupId: "g@g.us", senderId: "u", timestamp: Date.now(), type: "text" as const, text: "The meeting starts at eight tonight", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
-    expect(localRelevance(message, "Kola", undefined, 0.65).reason).toBe("group_conversation");
+    expect(localRelevance(message, "Kola", undefined, 0.1).reason).toBe("group_message_candidate");
+  });
+
+  it("lets the classifier decide whether an unaddressed substantive group message matters", async () => {
+    const message = { id: "candidate", chatId: "g@g.us", groupId: "g@g.us", senderId: "u", timestamp: Date.now(), type: "text" as const, text: "The meeting starts at eight tonight", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+    const group: GroupRecord = { id: "g@g.us", whatsappGroupId: "g@g.us", subject: "Test", participantCount: 2, isAdmin: true, enabled: true, aiPaused: false, lastSeenAt: Date.now() };
+    let calls = 0;
+    const result = await new DecisionEngine({ classify: async () => { calls += 1; return { decision: "IGNORE", confidence: 1, reason: "not useful", delayMs: 0, needsWeb: false, needsMedia: false, responseStyle: "short_casual" as const }; } } as unknown as ProviderRouter).decide(message, group, { group, recentMessages: [], memories: [], personality: loadConfig({ NODE_ENV: "test" }).personality }, { botName: "Kola" });
+    expect(calls).toBe(1);
+    expect(result.usedAi).toBe(true);
+    expect(result.local.reason).toBe("group_message_candidate");
+    expect(result.plan.decision).toBe("IGNORE");
   });
 
   it("ignores unaddressed group greetings", () => {
@@ -195,6 +225,41 @@ describe("decision safety helpers", () => {
     await router.classify(input);
     expect(calls).toBe(1);
     expect(router.statuses()[0]?.healthy).toBe(false);
+  });
+
+  it("bounds a provider operation and records the timeout without removing fallback providers", async () => {
+    const pending: AIProvider = {
+      name: "phoenix-deepseek",
+      model: "deepseek-v4-flash",
+      available: true,
+      classify: async () => new Promise<DecisionPlan>(() => {}),
+      generateResponse: async () => undefined,
+    };
+    const config = loadConfig({ NODE_ENV: "test", AI_OPERATION_TIMEOUT_MS: "5000", PROVIDER_COOLDOWN_MS: "60000" });
+    config.aiOperationTimeoutMs = 20;
+    const router = new ProviderRouter(new FileStore(`/tmp/provider-operation-timeout-${Date.now()}`), config, [pending]);
+    const input = { messageText: "hello", messageType: "text", directed: true, context: {} as ContextSnapshot };
+    const startedAt = Date.now();
+    await expect(router.classify(input)).resolves.toBeUndefined();
+    expect(Date.now() - startedAt).toBeLessThan(250);
+    expect(router.statuses()[0]).toMatchObject({ healthy: false, lastError: expect.stringMatching(/timed out/) });
+  });
+
+  it("keeps every configured response provider in the router", () => {
+    const router = new ProviderRouter(new FileStore(`/tmp/provider-models-${Date.now()}`), loadConfig({
+      NODE_ENV: "test",
+      PHOENIX_API_KEY: "phoenix",
+      GROQ_API_KEY: "groq",
+      GEMINI_API_KEY: "gemini",
+      OPENROUTER_API_KEY: "openrouter",
+    }));
+    expect(router.statuses().map((provider) => `${provider.name}:${provider.model}`)).toEqual([
+      "phoenix-deepseek:deepseek-v4-flash",
+      "phoenix-glm:glm-5.3",
+      "groq:openai/gpt-oss-20b",
+      "gemini:gemini-3.6-flash",
+      "openrouter:z-ai/glm-5.2:free",
+    ]);
   });
 
   it("asks for a resend when a voice transcript is unreliable", async () => {

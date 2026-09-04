@@ -55,6 +55,12 @@ export interface Personality {
   voiceSkillsEnabled: boolean;
 }
 
+export interface TopicBoundaryContext {
+  messageId: string;
+  stoppedAt: number;
+  terms: string[];
+}
+
 export interface ParticipationSettings {
   groupCooldownMs: number;
   directReplyBypass: boolean;
@@ -123,6 +129,8 @@ export interface AppConfig {
   phoenixApiBaseUrl: string;
   phoenixPrimaryModel: string;
   phoenixSecondaryModel: string;
+  aiRequestTimeoutMs: number;
+  aiOperationTimeoutMs: number;
   qdrantUrl?: string;
   qdrantApiKey?: string;
   qdrantCollection: string;

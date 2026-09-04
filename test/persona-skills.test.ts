@@ -59,6 +59,13 @@ describe("persona behavior", () => {
     expect(responsePolicy(persona, message, { directed: true, directReply: false, directMention: true, mentionAll: false, priority: "HIGH" }, true).shouldReply).toBe(false);
   });
 
+  it("leaves substantive group relevance to the classifier instead of the join toggle", () => {
+    const persona = defaultPersonality("Kola");
+    const message = { id: "message", chatId: "group@g.us", groupId: "group@g.us", senderId: "member", timestamp: Date.now(), type: "text" as const, text: "The meeting starts at eight tonight", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
+    expect(responsePolicy(persona, message, { directed: false, directReply: false, directMention: false, mentionAll: false, priority: "NORMAL" }, true).shouldReply).toBe(true);
+    expect(responsePolicy(persona, message, { directed: false, directReply: false, directMention: false, mentionAll: false, priority: "NORMAL" }, false).shouldReply).toBe(false);
+  });
+
   it("previews a configured persona in first person", () => {
     const preview = previewPersonality("What are you doing?", { ...defaultPersonality("Sarah"), tone: "playful", languageMix: "pidgin", humorLevel: 0.8 });
     expect(preview).toContain("I");
