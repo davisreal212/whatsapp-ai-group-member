@@ -15,6 +15,7 @@ export interface ProviderInput {
   quotedSenderId?: string;
   mentionedIds?: string[];
   transcriptConfidence?: number;
+  visionConfidence?: number;
   transcriptLanguage?: string;
   senderName?: string;
   context: ContextSnapshot;
@@ -97,6 +98,7 @@ abstract class BaseProvider implements AIProvider {
       ...(input.mentionedIds?.length ? [`Mentioned IDs: ${input.mentionedIds.join(", ")}`] : ["Mentioned IDs: none"]),
       ...(input.transcriptConfidence !== undefined ? [`Transcript confidence: ${input.transcriptConfidence}`] : []),
       ...(input.transcriptLanguage ? [`Transcript language: ${input.transcriptLanguage}`] : []),
+      ...(input.visionConfidence !== undefined ? [`Image analysis confidence: ${input.visionConfidence}${input.visionConfidence < 0.5 ? " (LOW: the image analysis was uncertain; do not assert what the image shows, hedge plainly or ask what it is)" : ""}`] : []),
       `Sender: ${input.senderName ?? "unknown"}`,
       ...personaInstructions(input.context.personality).map((instruction) => `Persona policy: ${instruction}`),
       `Current local time: ${formatNigeriaDateTime()} (${NIGERIA_TIME_ZONE}). Interpret today, tomorrow, morning, and evening using Nigeria time.`,

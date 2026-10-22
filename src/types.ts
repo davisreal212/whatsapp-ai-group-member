@@ -173,6 +173,7 @@ export interface CanonicalMessage {
   quotedMessageId?: string;
   quotedSenderId?: string;
   mentionedIds: string[];
+  visionConfidence?: number;
   media?: MediaMetadata;
   isGroup: boolean;
   isStatus: boolean;

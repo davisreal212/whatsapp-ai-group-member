@@ -286,7 +286,7 @@ export class BotRuntime {
     if (["image", "sticker"].includes(message.type) && message.media?.hasDownloadableContent && loadMedia && this.shouldAnalyzeMedia(message)) {
       try {
         const vision = await this.media.analyzeImage(loadMedia, message.chatId, { messageType: message.type as "image" | "sticker", ...(message.media?.caption ? { caption: message.media.caption } : {}) });
-        message = { ...message, text: [message.text, vision.description, vision.ocrText].filter(Boolean).join("\n"), media: { ...message.media, description: vision.description, ...(vision.ocrText ? { ocrText: vision.ocrText } : {}) } };
+        message = { ...message, text: [message.text, vision.description, vision.ocrText].filter(Boolean).join("\n"), visionConfidence: vision.confidence, media: { ...message.media, description: vision.description, ...(vision.ocrText ? { ocrText: vision.ocrText } : {}) } };
         await this.log("media.image_analyzed", "info", { type: message.type, confidence: vision.confidence, ocr: Boolean(vision.ocrText) }, message);
       } catch (error) {
         await this.log("media.image_analysis_failed", "warn", { type: "image", error: error instanceof Error ? error.message : "unknown" }, message);
@@ -473,6 +473,7 @@ export class BotRuntime {
         ...(message.mentionedIds.length ? { mentionedIds: message.mentionedIds } : {}),
         ...(message.transcriptConfidence !== undefined ? { transcriptConfidence: message.transcriptConfidence } : {}),
         ...(message.transcriptLanguage ? { transcriptLanguage: message.transcriptLanguage } : {}),
+        ...(message.visionConfidence !== undefined ? { visionConfidence: message.visionConfidence } : {}),
         context,
         ...(evidence ? { evidence } : {}),
         ...(linkAnalysis ? { task: "analyze" as const } : {}),

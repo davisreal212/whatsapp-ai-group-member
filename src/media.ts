@@ -136,6 +136,7 @@ export class GeminiVisionProvider implements VisionProvider {
       "If an animal is present, independently check cat versus dog using visible ears, muzzle, paws, fur, body shape, and tail. Only name cat or dog when at least two distinguishing features are clearly visible; otherwise use animalSpecies=unclear and describe it only as an animal.",
       "Before returning JSON, perform a second independent check of any animal species. If the two checks disagree, use animalSpecies=unclear.",
       "Treat a caption as context, never as visual evidence. Include only text that is actually legible in ocrText.",
+      "Recognize common chat image types and say which one it looks like: chat screenshot, price/trading chart, payment receipt or transfer proof, meme, flyer, personal photo. For a chart, only report tickers, prices and dates that are clearly legible; never infer a trend or an outcome the pixels do not show. For a receipt, read amounts and names only from legible text. For a meme, describe the visible joke elements but mark the intended meaning as uncertain unless it is unambiguous.",
       context.messageType === "sticker" ? "For a sticker, describe the visible character or artwork and any clearly expressed emotion, but do not assume a meme meaning." : "",
       caption ? `User caption for context only: ${caption}` : "",
       "Return only JSON with description, ocrText, confidence (0..1), animalSpecies (cat, dog, other, unclear, or none), and animalEvidence. Set confidence below 0.5 whenever the visual evidence is uncertain.",
