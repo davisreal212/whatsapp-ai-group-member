@@ -93,7 +93,7 @@ export class BotRuntime {
       },
       text_to_speech: async (input) => {
         if (typeof input.text !== "string" || !input.text.trim()) return { success: false, error: "missing_input:text" };
-        const audio = await this.media.synthesizeSpeech(input.text);
+        const audio = await this.media.synthesizeSpeech(input.text, this.dailyMood());
         return { success: true, data: audio };
       },
       voice_call_status: () => ({ success: true, data: this.voiceCalls.status() }),
@@ -772,6 +772,13 @@ export class BotRuntime {
     for (const job of this.store.inboundJobs().filter((item) => (item.status === "PENDING" || item.status === "FAILED") && item.attempts < 3)) {
       await this.inboundQueue.enqueueAndWait(job.chatId, () => this.processInboundMessage(job.message)).catch(() => undefined);
     }
+  }
+
+  private dailyMood(): string {
+    // Deterministic per day: same mood all day, drifts across days. Weighted so dry/neutral are common, hyped rare.
+    const day = Math.floor(Date.now() / 86_400_000);
+    const pool = ["neutral", "neutral", "dry", "playful", "tired", "neutral", "dry", "playful", "hyped", "tired"];
+    return pool[day % pool.length] ?? "neutral";
   }
 
   private shouldUseAudioReply(message: CanonicalMessage, personality = this.config.personality): boolean {

@@ -43,7 +43,7 @@ export interface VisionAnalysisContext {
 export interface TextToSpeechProvider {
   readonly name: string;
   readonly available: boolean;
-  synthesize(text: string): Promise<DownloadedMedia>;
+  synthesize(text: string, mood?: string): Promise<DownloadedMedia>;
 }
 
 export interface MediaActivity {
@@ -237,6 +237,25 @@ function conservativeAnimalDescription(description: string): string {
   return `${withoutSpecies || "An animal is visible"}. The animal species is unclear, so I will not guess.`.slice(0, 2_000);
 }
 
+// Voice delivery moods: matched to Kola's daily energy.
+export type TtsMood = "neutral" | "dry" | "hyped" | "tired" | "playful";
+
+export const TTS_MOOD_INSTRUCTIONS: Record<string, string> = {
+  neutral: "Speak like a young Nigerian guy chatting casually with friends. Relaxed, natural, conversational.",
+  dry: "Speak flat, unhurried and unimpressed, like someone replying before their first cup of tea. Still warm underneath.",
+  hyped: "Speak energetic and excited, like someone whose coin just pumped. Fast, animated, grinning while talking.",
+  tired: "Speak slow and low-energy, like someone up at 3am watching charts. Slightly worn, still friendly.",
+  playful: "Speak with a smile in the voice, lightly teasing, like someone about to drop a joke on the group.",
+};
+
+export const TTS_MOOD_VOICE_SETTINGS: Record<string, { stability: number; similarity_boost: number; style: number }> = {
+  neutral: { stability: 0.5, similarity_boost: 0.75, style: 0.2 },
+  dry: { stability: 0.75, similarity_boost: 0.7, style: 0.1 },
+  hyped: { stability: 0.3, similarity_boost: 0.75, style: 0.6 },
+  tired: { stability: 0.7, similarity_boost: 0.7, style: 0.1 },
+  playful: { stability: 0.4, similarity_boost: 0.75, style: 0.45 },
+};
+
 async function providerError(response: Response, label: string): Promise<string> {
   const detail = (await response.text().catch(() => "")).replace(/\s+/g, " ").trim().slice(0, 240);
   return `${label} returned HTTP ${response.status}${detail ? `: ${detail}` : ""}`;
@@ -255,12 +274,12 @@ export class OpenAITextToSpeechProvider implements TextToSpeechProvider {
     this.available = Boolean(apiKey);
   }
 
-  async synthesize(text: string): Promise<DownloadedMedia> {
+  async synthesize(text: string, mood?: string): Promise<DownloadedMedia> {
     if (!this.apiKey) throw new Error("TTS API key is not configured");
     const response = await fetch(`${this.baseUrl.replace(/\/$/, "")}/audio/speech`, {
       method: "POST",
       headers: { authorization: `Bearer ${this.apiKey}`, "content-type": "application/json" },
-      body: JSON.stringify({ model: this.model, voice: this.voice, input: text.slice(0, 4000), response_format: "opus" }),
+      body: JSON.stringify({ model: this.model, voice: this.voice, input: text.slice(0, 4000), response_format: "opus", ...(mood ? { instructions: TTS_MOOD_INSTRUCTIONS[mood] ?? TTS_MOOD_INSTRUCTIONS.neutral } : {}) }),
       signal: AbortSignal.timeout(60_000),
     });
     if (!response.ok) throw new Error(await providerError(response, "TTS provider"));
@@ -283,14 +302,14 @@ export class ElevenLabsTextToSpeechProvider implements TextToSpeechProvider {
     this.available = Boolean(apiKey);
   }
 
-  async synthesize(text: string): Promise<DownloadedMedia> {
+  async synthesize(text: string, mood?: string): Promise<DownloadedMedia> {
     if (!this.apiKey) throw new Error("ElevenLabs API key is not configured");
     const url = new URL(`${this.apiBaseUrl.replace(/\/$/, "")}/v1/text-to-speech/${encodeURIComponent(this.voiceId)}`);
     url.searchParams.set("output_format", "opus_48000_128");
     const response = await fetch(url, {
       method: "POST",
       headers: { "xi-api-key": this.apiKey, "content-type": "application/json", accept: "audio/ogg" },
-      body: JSON.stringify({ text: text.slice(0, 4000), model_id: this.model }),
+      body: JSON.stringify({ text: text.slice(0, 4000), model_id: this.model, ...(mood ? { voice_settings: TTS_MOOD_VOICE_SETTINGS[mood] ?? TTS_MOOD_VOICE_SETTINGS.neutral } : {}) }),
       signal: AbortSignal.timeout(60_000),
     });
     if (!response.ok) throw new Error(await providerError(response, "ElevenLabs TTS"));
@@ -382,10 +401,10 @@ export class MediaProcessor {
     });
   }
 
-  async synthesizeSpeech(text: string): Promise<DownloadedMedia> {
+  async synthesizeSpeech(text: string, mood?: string): Promise<DownloadedMedia> {
     return this.trackActivity("text_to_speech", this.tts?.name ?? "none", async () => {
       if (!this.tts?.available) throw new Error("No TTS provider is configured");
-      return this.tts.synthesize(text);
+      return this.tts.synthesize(text, mood);
     });
   }
 
