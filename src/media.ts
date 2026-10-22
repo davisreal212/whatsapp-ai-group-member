@@ -33,6 +33,7 @@ export interface VisionProvider {
   readonly name: string;
   readonly available: boolean;
   analyze(media: DownloadedMedia, context?: VisionAnalysisContext): Promise<VisionResult>;
+  verifyMatch?(media: DownloadedMedia, query: string): Promise<{ match: boolean; confidence: number }>;
 }
 
 export interface VisionAnalysisContext {
@@ -161,6 +162,18 @@ export class GeminiVisionProvider implements VisionProvider {
     return { description, ...(typeof parsed.ocrText === "string" && parsed.ocrText.trim() ? { ocrText: parsed.ocrText.trim().slice(0, 2_000) } : {}), confidence, ...(explicitAnimal ? { animalSpecies: explicitAnimal } : {}) };
   }
 
+  async verifyMatch(media: DownloadedMedia, query: string): Promise<{ match: boolean; confidence: number }> {
+    const parsed = await this.requestVision(media, normalizeVisionMimeType(media.mimeType), [
+      "You are a relevance judge for an image that is about to be sent in a group chat.",
+      `The sender intended to send an image matching this description: "${query.slice(0, 200)}".`,
+      "Decide whether the image genuinely matches that description (right subject, right vibe). A loosely related image does NOT count.",
+      "Return only JSON: { match: boolean, confidence: number (0..1) }.",
+    ].join(" "), "Gemini vision verify");
+    const match = parsed?.match === true || parsed?.match === "true";
+    const confidence = typeof parsed?.confidence === "number" ? parsed.confidence : 0.5;
+    return { match, confidence };
+  }
+
   private async requestVision(media: DownloadedMedia, mimeType: string, instruction: string, label: string): Promise<ParsedVision | undefined> {
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(this.model)}:generateContent?key=${encodeURIComponent(this.apiKey as string)}`, {
       method: "POST",
@@ -197,7 +210,7 @@ function normalizeVisionMimeType(mimeType: string): string {
   return normalized === "image/jpg" ? "image/jpeg" : normalized;
 }
 
-type ParsedVision = { description?: unknown; ocrText?: unknown; confidence?: unknown; animalSpecies?: unknown; animalEvidence?: unknown };
+type ParsedVision = { description?: unknown; ocrText?: unknown; confidence?: unknown; animalSpecies?: unknown; animalEvidence?: unknown; match?: unknown };
 
 function parseVisionJson(value: string): ParsedVision | undefined {
   const cleaned = value.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
@@ -451,6 +464,20 @@ export class MediaProcessor {
       throw error;
     } finally {
       this.activeOperations.delete(id);
+    }
+  }
+
+  // Verify a candidate image actually matches what the model asked for before sending it to a group.
+  async verifyImageMatch(loader: () => Promise<DownloadedMedia>, scopeId: string, query: string): Promise<{ match: boolean; confidence: number }> {
+    this.reserveDownload(scopeId);
+    const media = await loader();
+    if (!this.vision?.available || !this.vision.verifyMatch) return { match: true, confidence: 0.5 };
+    try {
+      const result = await this.vision.verifyMatch(media, query);
+      return { match: result.match && result.confidence >= 0.55, confidence: result.confidence };
+    } catch {
+      // Verification is a safety net; a provider error should not break sending entirely.
+      return { match: true, confidence: 0.5 };
     }
   }
 

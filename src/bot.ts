@@ -442,12 +442,32 @@ export class BotRuntime {
       const mediaQuery = `${plan.mediaQuery ?? mediaSearchQuery(message.text ?? message.media?.caption ?? "")}${sticker ? " sticker webp" : ""}`;
       const explicitStickerUrl = sticker ? extractHttpsUrls(message.text ?? "").find((url) => /\.webp(?:[?#]|$)/i.test(url)) : undefined;
       const media = explicitStickerUrl ? [] : await this.research.searchMedia(mediaQuery, this.config.tavilyMaxResults);
-      const candidate = explicitStickerUrl
-        ? { url: explicitStickerUrl, mimeType: "image/webp" }
-        : sticker ? media.find((item) => item.mimeType === "image/webp" || /\.webp(?:[?#]|$)/i.test(item.url)) : media[0];
+      const candidates: Array<{ url: string; mimeType?: string }> = explicitStickerUrl
+        ? [{ url: explicitStickerUrl, mimeType: "image/webp" }]
+        : sticker ? media.filter((item) => item.mimeType === "image/webp" || /\.webp(?:[?#]|$)/i.test(item.url)) : media;
+      // Verify candidates with vision before sending: never ship a random first result.
+      let candidate: { url: string; mimeType?: string } | undefined;
+      for (const item of candidates.slice(0, 3)) {
+        try {
+          const verdict = await this.media.verifyImageMatch(async () => {
+            const response = await fetch(item.url, { signal: AbortSignal.timeout(30_000) });
+            if (!response.ok) throw new Error(`candidate fetch HTTP ${response.status}`);
+            const data = Buffer.from(await response.arrayBuffer());
+            if (!data.length) throw new Error("candidate is empty");
+            return { data, mimeType: response.headers.get("content-type")?.split(";", 1)[0] || item.mimeType || "image/jpeg" };
+          }, message.chatId, mediaQuery);
+          if (verdict.match) {
+            candidate = item;
+            break;
+          }
+          await this.log("media.candidate_rejected", "info", { query: mediaQuery, providerUrl: item.url, confidence: verdict.confidence }, message);
+        } catch (error) {
+          await this.log("media.candidate_check_failed", "warn", { providerUrl: item.url, error: error instanceof Error ? error.message : "unknown" }, message);
+        }
+      }
       if (candidate) {
         plan = { ...plan, mediaUrl: candidate.url, mediaMimeType: sticker ? "image/webp" : candidate.mimeType ?? "image/jpeg", needsMedia: true };
-        await this.log(sticker ? "sticker.search_succeeded" : "media.search_succeeded", "info", { query: mediaQuery, providerUrl: candidate.url }, message);
+        await this.log(sticker ? "sticker.search_succeeded" : "media.search_succeeded", "info", { query: mediaQuery, providerUrl: candidate.url, verified: !explicitStickerUrl }, message);
       } else {
         plan = {
           ...plan,
