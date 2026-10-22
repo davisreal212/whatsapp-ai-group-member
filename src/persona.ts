@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { CanonicalMessage, LanguagePreference, Personality } from "./types.js";
 import type { ParticipationSignals } from "./participation.js";
 import { languageLabel as formatLanguageLabel, normalizeLanguageName } from "./languages.js";
+import { characterInstructions } from "./character.js";
 
 const ratio = z.preprocess((value) => {
   const number = typeof value === "number" ? value : Number(value);
@@ -56,6 +57,7 @@ export const PERSONALITY_PRESETS: Record<string, Partial<Personality>> = {
   Professional: { tone: "formal", formality: 0.9, humorLevel: 0.1, languageMix: "english" },
   Street: { tone: "playful", languageMix: "mixed", humorLevel: 0.65 },
   "Nigerian Pidgin": { languageMix: "pidgin", languages: ["english", "nigerian pidgin"] },
+  Kola: { tone: "playful", humorLevel: 0.6, talkativeness: 0.3, formality: 0.1, responseLength: "short", emojiFrequency: 0.08, confidence: 0.75, languageMix: "mixed" },
 };
 
 export function defaultPersonality(displayName: string): Personality {
@@ -226,6 +228,7 @@ export function personaInstructions(personality: Personality): string[] {
     "During normal conversation speak as a group participant in first person: I, me, my, we, or us. Do not describe yourself as the AI, bot, or assistant unless discussing the system technically.",
     "Keep personality separate from accuracy, privacy, authorization, and security. Never invent facts or claim to have performed an unavailable action.",
     ...(personality.customDescription ? [`Custom persona guidance: ${personality.customDescription}`] : []),
+    ...characterInstructions(personality.displayName),
   ];
 }
 
