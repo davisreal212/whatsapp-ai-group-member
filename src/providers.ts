@@ -26,7 +26,8 @@ export interface ProviderInput {
 }
 
 export const DEFAULT_AI_REQUEST_TIMEOUT_MS = 12_000;
-export const DEFAULT_AI_OPERATION_TIMEOUT_MS = 20_000;
+export const DEFAULT_AI_OPERATION_TIMEOUT_MS = 45_000;
+export const DEFAULT_PHOENIX_ATTEMPT_TIMEOUT_MS = 10_000;
 
 export interface AIProvider {
   readonly name: string;
@@ -256,12 +257,12 @@ export class PhoenixPoolProvider extends BaseProvider {
   private readonly health: ModelHealth;
   private readonly attemptTimeoutMs: number;
 
-  constructor(baseUrl: string, pool: readonly string[], apiKey: string | undefined, cooldownMs: number, requestTimeoutMs = DEFAULT_AI_REQUEST_TIMEOUT_MS) {
+  constructor(baseUrl: string, pool: readonly string[], apiKey: string | undefined, cooldownMs: number, requestTimeoutMs = DEFAULT_AI_REQUEST_TIMEOUT_MS, attemptTimeoutMs = DEFAULT_PHOENIX_ATTEMPT_TIMEOUT_MS) {
     super(pool[0] ?? "phoenix", apiKey, undefined, requestTimeoutMs);
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.pool = [...pool];
     this.health = new ModelHealth(cooldownMs);
-    this.attemptTimeoutMs = Math.max(4_000, Math.floor(requestTimeoutMs / 2));
+    this.attemptTimeoutMs = Math.max(3_000, attemptTimeoutMs);
     this.available = Boolean(apiKey) && this.pool.length > 0;
   }
 
@@ -339,7 +340,7 @@ export class ProviderRouter {
     this.cooldownMs = config.providerCooldownMs;
     this.operationTimeoutMs = config.aiOperationTimeoutMs;
     this.providers = providers ?? [
-      new PhoenixPoolProvider(config.phoenixApiBaseUrl, config.phoenixTextModelPool ?? PHOENIX_TEXT_MODEL_POOL, config.phoenixApiKey, config.providerCooldownMs, config.aiRequestTimeoutMs),
+      new PhoenixPoolProvider(config.phoenixApiBaseUrl, config.phoenixTextModelPool ?? PHOENIX_TEXT_MODEL_POOL, config.phoenixApiKey, config.providerCooldownMs, config.aiRequestTimeoutMs, config.phoenixAttemptTimeoutMs),
       new OpenAICompatibleProvider("groq", "https://api.groq.com/openai/v1", config.groqModel, config.groqApiKey, undefined, config.aiRequestTimeoutMs),
       new GeminiProvider(config.geminiModel, config.geminiApiKey, config.aiRequestTimeoutMs),
       new OpenAICompatibleProvider("openrouter", "https://openrouter.ai/api/v1", config.openRouterModel, config.openRouterApiKey, "z-ai/glm-5.2:free", config.aiRequestTimeoutMs),
