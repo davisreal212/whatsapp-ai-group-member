@@ -8,7 +8,7 @@ import { isCurrentInformationQuestion, evaluateInboundPolicy } from "./policy.js
 import { ProviderRouter, type ProviderInput } from "./providers.js";
 import { DuckDuckGoImageProvider, DuckDuckGoProvider, ResearchService, TavilyProvider, WikimediaImageProvider } from "./research.js";
 import type { Store } from "./store.js";
-import { normalizeMessage } from "./normalize.js";
+import { normalizeFailureReason, normalizeMessage } from "./normalize.js";
 import type { DiscoveredDirectMessage, DiscoveredGroup } from "./whatsapp.js";
 import { TaskService } from "./tasks.js";
 import { ElevenLabsSpeechToTextProvider, ElevenLabsTextToSpeechProvider, FallbackSpeechToTextProvider, FallbackTextToSpeechProvider, FallbackVisionProvider, GeminiVisionProvider, GroqSpeechToTextProvider, MediaProcessor, PhoenixVisionProvider, OpenAITextToSpeechProvider } from "./media.js";
@@ -212,9 +212,18 @@ export class BotRuntime {
   }
 
   async handleRawMessage(raw: WAMessage, loadMedia?: () => Promise<import("./media.js").DownloadedMedia>, resolvePhone?: import("./normalize.js").PhoneIdentityResolver): Promise<void> {
-    const message = normalizeMessage(raw as unknown as Parameters<typeof normalizeMessage>[0], this.config.botJid, resolvePhone);
+    let message: CanonicalMessage | undefined;
+    try {
+      message = normalizeMessage(raw as unknown as Parameters<typeof normalizeMessage>[0], this.config.botJid, resolvePhone);
+    } catch {
+      message = undefined;
+    }
     if (!message) {
-      await this.log("message.invalid", "warn", { reason: "normalization_failed" });
+      const cause = normalizeFailureReason(raw as unknown as Parameters<typeof normalizeFailureReason>[0]) ?? "unparseable_content";
+      await this.log("message.invalid", "warn", { reason: "normalization_failed", cause });
+      if (process.env.LOG_LEVEL === "debug" || process.env.DEBUG_NORMALIZE === "1") {
+        console.debug(`[normalize] failed cause=${cause} sample=${JSON.stringify(redactRawSample(raw))}`);
+      }
       return;
     }
     this.actions.noteIncoming(message);
@@ -914,4 +923,20 @@ function skillAudio(value: unknown): { data: Buffer; mimeType: string } | undefi
   const audio = value as { data?: unknown; mimeType?: unknown };
   if (!Buffer.isBuffer(audio.data) || typeof audio.mimeType !== "string" || !audio.mimeType.startsWith("audio/")) return undefined;
   return { data: audio.data, mimeType: audio.mimeType };
+}
+
+// Debug-only payload sample: keys and shapes, never message text, names, or raw jids/numbers.
+function redactRawSample(raw: unknown): Record<string, unknown> {
+  const shape = (value: unknown, depth = 0): unknown => {
+    if (value === null) return "null";
+    if (value === undefined) return "undefined";
+    if (Array.isArray(value)) return `array(${value.length})`;
+    if (typeof value === "string") return value.endsWith("@lid") ? "lid-jid" : value.includes("@") ? "jid" : `string(${value.length})`;
+    if (typeof value === "object") {
+      if (depth > 3) return "object";
+      return Object.fromEntries(Object.keys(value as Record<string, unknown>).slice(0, 30).map((k) => [k, shape((value as Record<string, unknown>)[k], depth + 1)]));
+    }
+    return typeof value;
+  };
+  return shape(raw) as Record<string, unknown>;
 }
