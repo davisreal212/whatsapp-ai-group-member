@@ -220,7 +220,10 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
         this.socket = undefined;
         this.isOpen = false;
         socket?.end(undefined);
-      }).catch(() => undefined);
+      }).catch((error: unknown) => {
+        // A transient DB error must not be silent: the lease can expire while this copy keeps its socket.
+        console.error(`[whatsapp] lease renewal failed: ${error instanceof Error ? error.message : "unknown"}`);
+      });
     }, 60_000);
   }
 
