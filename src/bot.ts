@@ -21,7 +21,7 @@ import type { ParticipationSettings, TopicBoundaryContext } from "./types.js";
 import { extractHttpsUrls, isSafeHttpsUrl } from "./network.js";
 import { GeminiEmbeddingProvider, QdrantCloudInferenceEmbeddingProvider, QdrantVectorMemoryProvider } from "./vector-memory.js";
 import { MemoryVectorWorker } from "./memory-vector-worker.js";
-import { applyLanguagePreference, languageLabel, migrateLegacyPersonality, parseLanguageCommand, parseLanguageTask, previewPersonality, resolvePersonality } from "./persona.js";
+import { applyLanguagePreference, languageLabel, migrateLegacyPersonality, parseLanguageCommand, parseLanguageTask, previewPersonality, resolvePersonality, skillHintsForMode } from "./persona.js";
 import { createCoreSkillRegistry, SkillExecutor, SkillRegistry } from "./skills.js";
 import { ElevenLabsWhatsAppCallService, parseVoiceCallCommand } from "./voice.js";
 import { normalizeLanguageName } from "./languages.js";
@@ -346,7 +346,7 @@ export class BotRuntime {
       : baseContext;
     const topicBoundary = message.groupId ? recentTopicBoundary(this.store, message.groupId, message.timestamp) : undefined;
     if (topicBoundary) context = { ...context, topicBoundary };
-    context.skillHints = this.skills.discover(message.text ?? "").slice(0, 8).map(({ skillId, name, description, category, scope, skillFile }) => ({ skillId, name, description, category, scope, ...(skillFile ? { skillFile } : {}) }));
+    context.skillHints = skillHintsForMode(personality.personaMode, this.skills.discover(message.text ?? ""), this.skills.list());
     const languageTask = parseLanguageTask(message.text ?? "");
     if (languageTask && (!message.isGroup || message.text?.toLowerCase().includes(this.config.botName.toLowerCase()))) {
       const taskText = languageTask.text || message.text || "";

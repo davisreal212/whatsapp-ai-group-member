@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { CanonicalMessage, LanguagePreference, Personality } from "./types.js";
+import type { CanonicalMessage, LanguagePreference, PersonaMode, Personality } from "./types.js";
 import type { ParticipationSignals } from "./participation.js";
 import { languageLabel as formatLanguageLabel, normalizeLanguageName } from "./languages.js";
 import { characterInstructions, DEFAULT_PERSONA_MODE } from "./character.js";
@@ -255,4 +255,15 @@ function languageList(preference: LanguagePreference): string[] {
   if (preference === "mixed") return ["english", "nigerian pidgin"];
   if (preference === "auto") return ["auto"];
   return [preference];
+}
+
+// Folk mode ships with every catalog skill on as a hint, regardless of the per-skill toggles.
+// Kola keeps the toggle-driven top-8 discovery. Execution still goes through the skill executor.
+export function skillHintsForMode<T extends { skillId: string; name: string; description: string; category: string; scope: string; skillFile?: string; enabled: boolean }>(
+  personaMode: PersonaMode | undefined,
+  discovered: T[],
+  allSkills: T[],
+): Array<Pick<T, "skillId" | "name" | "description" | "category" | "scope" | "skillFile">> {
+  const source = personaMode === "folk" ? allSkills : discovered.slice(0, 8);
+  return source.map(({ skillId, name, description, category, scope, skillFile }) => ({ skillId, name, description, category, scope, ...(skillFile ? { skillFile } : {}) }));
 }
