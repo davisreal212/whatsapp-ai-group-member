@@ -52,7 +52,7 @@ export class PostgresStore implements Store {
       this.sql`SELECT id, event, level, message_id, group_id, details_json, created_at FROM audit_logs ORDER BY created_at DESC LIMIT 500`,
       this.sql`SELECT provider, operation, group_id, units, success, latency_ms, created_at FROM provider_usage ORDER BY created_at DESC LIMIT 1000`,
       this.sql`SELECT connection_status, pairing_code, last_connected_at, metrics_json FROM runtime_state WHERE id = 1`,
-        this.sql`SELECT outbound_paused, ai_processing_paused, daily_action_limit, quiet_hours_enabled, quiet_hours_start, quiet_hours_end, direct_message_allowlist_json, personality_json, participation_json, skill_overrides_json, dm_language_preferences_json, language_preference_configured FROM app_settings WHERE id = 1`,
+        this.sql`SELECT outbound_paused, ai_processing_paused, daily_action_limit, quiet_hours_enabled, quiet_hours_start, quiet_hours_end, direct_message_allowlist_json, dm_policy, group_policy, personality_json, participation_json, skill_overrides_json, dm_language_preferences_json, language_preference_configured FROM app_settings WHERE id = 1`,
       this.sql`SELECT id, email, password_hash, role, created_at FROM users`,
       this.sql`SELECT token_hash, user_id, created_at, expires_at FROM sessions WHERE expires_at > ${Date.now()}`,
     ]);
@@ -85,6 +85,8 @@ export class PostgresStore implements Store {
         quietHoursStart: Number(settingsRow.quiet_hours_start),
         quietHoursEnd: Number(settingsRow.quiet_hours_end),
         directMessageAllowlist: jsonArray(settingsRow.direct_message_allowlist_json),
+        dmPolicy: settingsRow.dm_policy === "all" ? "all" : "allowlist",
+        groupPolicy: settingsRow.group_policy === "all" ? "all" : "allowlisted",
         personality: jsonObject(settingsRow.personality_json, {}),
         participation: jsonObject(settingsRow.participation_json, {}),
         skillOverrides: jsonObject(settingsRow.skill_overrides_json, {}) as Record<string, boolean>,
@@ -120,9 +122,9 @@ export class PostgresStore implements Store {
       ...(update.personality ? { personality: { ...this.state.settings?.personality, ...update.personality } } : {}),
       ...(update.participation ? { participation: { ...this.state.settings?.participation, ...update.participation } } : {}),
     };
-    await this.sql`INSERT INTO app_settings (id, outbound_paused, ai_processing_paused, daily_action_limit, quiet_hours_enabled, quiet_hours_start, quiet_hours_end, direct_message_allowlist_json, personality_json, participation_json, skill_overrides_json, dm_language_preferences_json, language_preference_configured)
-      VALUES (1, ${this.state.settings.outboundPaused ?? false}, ${this.state.settings.aiProcessingPaused ?? false}, ${this.state.settings.dailyActionLimit ?? 50}, ${this.state.settings.quietHoursEnabled ?? true}, ${this.state.settings.quietHoursStart ?? 22}, ${this.state.settings.quietHoursEnd ?? 7}, ${JSON.stringify(this.state.settings.directMessageAllowlist ?? [])}::jsonb, ${JSON.stringify(this.state.settings.personality ?? {})}::jsonb, ${JSON.stringify(this.state.settings.participation ?? {})}::jsonb, ${JSON.stringify(this.state.settings.skillOverrides ?? {})}::jsonb, ${JSON.stringify(this.state.settings.dmLanguagePreferences ?? {})}::jsonb, ${this.state.settings.languagePreferenceConfigured ?? false})
-      ON CONFLICT (id) DO UPDATE SET outbound_paused = EXCLUDED.outbound_paused, ai_processing_paused = EXCLUDED.ai_processing_paused, daily_action_limit = EXCLUDED.daily_action_limit, quiet_hours_enabled = EXCLUDED.quiet_hours_enabled, quiet_hours_start = EXCLUDED.quiet_hours_start, quiet_hours_end = EXCLUDED.quiet_hours_end, direct_message_allowlist_json = EXCLUDED.direct_message_allowlist_json, personality_json = EXCLUDED.personality_json, participation_json = EXCLUDED.participation_json, skill_overrides_json = EXCLUDED.skill_overrides_json, dm_language_preferences_json = EXCLUDED.dm_language_preferences_json, language_preference_configured = EXCLUDED.language_preference_configured`;
+    await this.sql`INSERT INTO app_settings (id, outbound_paused, ai_processing_paused, daily_action_limit, quiet_hours_enabled, quiet_hours_start, quiet_hours_end, direct_message_allowlist_json, dm_policy, group_policy, personality_json, participation_json, skill_overrides_json, dm_language_preferences_json, language_preference_configured)
+      VALUES (1, ${this.state.settings.outboundPaused ?? false}, ${this.state.settings.aiProcessingPaused ?? false}, ${this.state.settings.dailyActionLimit ?? 50}, ${this.state.settings.quietHoursEnabled ?? true}, ${this.state.settings.quietHoursStart ?? 22}, ${this.state.settings.quietHoursEnd ?? 7}, ${JSON.stringify(this.state.settings.directMessageAllowlist ?? [])}::jsonb, ${this.state.settings.dmPolicy ?? "allowlist"}, ${this.state.settings.groupPolicy ?? "allowlisted"}, ${JSON.stringify(this.state.settings.personality ?? {})}::jsonb, ${JSON.stringify(this.state.settings.participation ?? {})}::jsonb, ${JSON.stringify(this.state.settings.skillOverrides ?? {})}::jsonb, ${JSON.stringify(this.state.settings.dmLanguagePreferences ?? {})}::jsonb, ${this.state.settings.languagePreferenceConfigured ?? false})
+      ON CONFLICT (id) DO UPDATE SET outbound_paused = EXCLUDED.outbound_paused, ai_processing_paused = EXCLUDED.ai_processing_paused, daily_action_limit = EXCLUDED.daily_action_limit, quiet_hours_enabled = EXCLUDED.quiet_hours_enabled, quiet_hours_start = EXCLUDED.quiet_hours_start, quiet_hours_end = EXCLUDED.quiet_hours_end, direct_message_allowlist_json = EXCLUDED.direct_message_allowlist_json, dm_policy = EXCLUDED.dm_policy, group_policy = EXCLUDED.group_policy, personality_json = EXCLUDED.personality_json, participation_json = EXCLUDED.participation_json, skill_overrides_json = EXCLUDED.skill_overrides_json, dm_language_preferences_json = EXCLUDED.dm_language_preferences_json, language_preference_configured = EXCLUDED.language_preference_configured`;
   }
 
   async updateMetrics(update: Partial<AppMetrics>): Promise<void> {
@@ -476,6 +478,8 @@ export class PostgresStore implements Store {
       await this.sql`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS quiet_hours_start integer NOT NULL DEFAULT 22`;
       await this.sql`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS quiet_hours_end integer NOT NULL DEFAULT 7`;
       await this.sql`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS direct_message_allowlist_json jsonb NOT NULL DEFAULT '[]'::jsonb`;
+      await this.sql`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS dm_policy text NOT NULL DEFAULT 'allowlist'`;
+      await this.sql`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS group_policy text NOT NULL DEFAULT 'allowlisted'`;
       await this.sql`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS participation_json jsonb NOT NULL DEFAULT '{}'::jsonb`;
       await this.sql`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS skill_overrides_json jsonb NOT NULL DEFAULT '{}'::jsonb`;
       await this.sql`ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS dm_language_preferences_json jsonb NOT NULL DEFAULT '{}'::jsonb`;

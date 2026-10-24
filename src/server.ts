@@ -293,6 +293,17 @@ export function createApp(runtime: BotRuntime, config: AppConfig) {
       next(error);
     }
   });
+  app.get("/api/policy", (_request, response) => {
+    response.json({ dmPolicy: runtime.config.dmPolicy, groupPolicy: runtime.config.groupPolicy });
+  });
+  app.put("/api/policy", async (request, response, next) => {
+    try {
+      const body = z.object({ dmPolicy: z.enum(["allowlist", "all"]), groupPolicy: z.enum(["allowlisted", "all"]) }).parse(request.body);
+      response.json(await runtime.setPolicy(body));
+    } catch (error) {
+      next(error);
+    }
+  });
   app.post("/api/whatsapp/connect", async (request, response, next) => {
     try {
       const body = z.object({ phoneNumber: z.string().trim().regex(/^\+?[\d\s().-]{7,25}$/).optional() }).parse(request.body);

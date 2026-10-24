@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import type { AppConfig, CanonicalMessage, DecisionPlan, GroupRecord } from "./types.js";
+import type { AppConfig, CanonicalMessage, DecisionPlan, DmPolicy, GroupPolicy, GroupRecord } from "./types.js";
 import type { Store } from "./store.js";
-import { isDirectMessageAllowed, isQuietHours } from "./policy.js";
+import { dmPolicyOf, groupPolicyOf, isDirectMessageAllowed, isQuietHours } from "./policy.js";
 import { isSafeHttpsUrl } from "./network.js";
 import { KeyedJobQueue, type QueueStats } from "./queue.js";
 import { groupActivityState, groupParticipation, type ActionPriority } from "./participation.js";
@@ -56,17 +56,19 @@ export function validateActionPlan(
   quietHoursEnd = -1,
   allowGeneratedAudio = false,
   quietHoursEnabled = true,
+  policy: { dmPolicy?: DmPolicy; groupPolicy?: GroupPolicy } = {},
 ): ActionValidation {
   const parsed = planSchema.safeParse(plan);
   if (!parsed.success) return { valid: false, reason: "malformed_action_plan" };
   if (plan.decision === "IGNORE") return { valid: true, reason: "ignore", plan };
   if (!sourceMessage.isGroup) {
-    if (!isDirectMessageAllowed(sourceMessage, directMessageAllowlist)) {
+    if (dmPolicyOf(policy) !== "all" && !isDirectMessageAllowed(sourceMessage, directMessageAllowlist)) {
       return { valid: false, reason: "direct_message_not_allowlisted" };
     }
   } else {
     if (!sourceMessage.groupId || !group) return { valid: false, reason: "group_not_authorized" };
-    if (!group.enabled || group.aiPaused) return { valid: false, reason: "group_not_enabled" };
+    if (groupPolicyOf(policy) !== "all" && !group.enabled) return { valid: false, reason: "group_not_enabled" };
+    if (group.aiPaused) return { valid: false, reason: "group_not_enabled" };
   }
   if (outboundPaused) return { valid: false, reason: "outbound_paused" };
   if (isQuietHours(quietHoursStart, quietHoursEnd, new Date(), quietHoursEnabled)) return { valid: false, reason: "quiet_hours" };
@@ -154,7 +156,7 @@ export class ActionService {
 
   private async admit(plan: DecisionPlan, sourceMessage: CanonicalMessage, group: GroupRecord | undefined, conversationId: string, generatedAudio?: { data: Buffer; mimeType: string }): Promise<{ validation: ActionValidation; actionId?: string }> {
     const hasGeneratedAudio = Boolean(generatedAudio);
-    const validation = validateActionPlan(plan, sourceMessage, group, this.store, this.config.outboundPaused, this.config.groupOnlyMode, this.config.directMessageAllowlist, this.config.quietHoursStart, this.config.quietHoursEnd, hasGeneratedAudio, this.config.quietHoursEnabled);
+    const validation = validateActionPlan(plan, sourceMessage, group, this.store, this.config.outboundPaused, this.config.groupOnlyMode, this.config.directMessageAllowlist, this.config.quietHoursStart, this.config.quietHoursEnd, hasGeneratedAudio, this.config.quietHoursEnabled, { dmPolicy: this.config.dmPolicy, groupPolicy: this.config.groupPolicy });
     if (!validation.valid || plan.decision === "IGNORE") {
       await this.store.incrementMetric("actionsSkipped");
       await this.store.addLog({
@@ -249,7 +251,7 @@ export class ActionService {
     const group = sourceMessage.groupId ? this.store.group(sourceMessage.groupId) : undefined;
     const plan = planFromAction(action);
     const generatedAudio = this.generatedAudio.get(id);
-    const validation = validateActionPlan(plan, sourceMessage, group, this.store, this.config.outboundPaused, this.config.groupOnlyMode, this.config.directMessageAllowlist, this.config.quietHoursStart, this.config.quietHoursEnd, Boolean(generatedAudio), this.config.quietHoursEnabled);
+    const validation = validateActionPlan(plan, sourceMessage, group, this.store, this.config.outboundPaused, this.config.groupOnlyMode, this.config.directMessageAllowlist, this.config.quietHoursStart, this.config.quietHoursEnd, Boolean(generatedAudio), this.config.quietHoursEnabled, { dmPolicy: this.config.dmPolicy, groupPolicy: this.config.groupPolicy });
     if (!validation.valid) {
       await this.skipAction(id, sourceMessage, plan, validation.reason);
       return;

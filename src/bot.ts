@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { WACallEvent, WAMessage } from "@whiskeysockets/baileys";
 import { ActionService, type OutboundTransport } from "./actions.js";
 import { DecisionEngine, isLinkAnalysisRequestText, localRelevance } from "./decision.js";
-import type { AppConfig, CanonicalMessage, GroupRecord, InboundJobRecord, LanguagePreference, Personality, TaskRecord } from "./types.js";
+import type { AppConfig, CanonicalMessage, DmPolicy, GroupPolicy, GroupRecord, InboundJobRecord, LanguagePreference, Personality, TaskRecord } from "./types.js";
 import { MemoryService, type ContextSnapshot } from "./memory.js";
 import { isCurrentInformationQuestion, evaluateInboundPolicy } from "./policy.js";
 import { ProviderRouter, type ProviderInput } from "./providers.js";
@@ -135,6 +135,8 @@ export class BotRuntime {
     if (settings?.quietHoursStart !== undefined) this.config.quietHoursStart = settings.quietHoursStart;
     if (settings?.quietHoursEnd !== undefined) this.config.quietHoursEnd = settings.quietHoursEnd;
     if (settings?.directMessageAllowlist !== undefined) this.config.directMessageAllowlist = [...settings.directMessageAllowlist];
+    if (settings?.dmPolicy !== undefined) this.config.dmPolicy = settings.dmPolicy;
+    if (settings?.groupPolicy !== undefined) this.config.groupPolicy = settings.groupPolicy;
     if (settings?.participation) this.config.participation = { ...this.config.participation, ...settings.participation };
     for (const [skillId, enabled] of Object.entries(settings?.skillOverrides ?? {})) {
       if (this.skills.get(skillId)) this.skills.setEnabled(skillId, enabled);
@@ -715,6 +717,14 @@ export class BotRuntime {
     });
   }
 
+  async setPolicy(update: { dmPolicy: DmPolicy; groupPolicy: GroupPolicy }): Promise<{ dmPolicy: DmPolicy; groupPolicy: GroupPolicy }> {
+    this.config.dmPolicy = update.dmPolicy;
+    this.config.groupPolicy = update.groupPolicy;
+    await this.store.updateSettings({ dmPolicy: update.dmPolicy, groupPolicy: update.groupPolicy });
+    await this.log("policy.changed", "info", update);
+    return { dmPolicy: update.dmPolicy, groupPolicy: update.groupPolicy };
+  }
+
   async setQuietHours(update: { enabled: boolean; start: number; end: number }): Promise<{ enabled: boolean; start: number; end: number }> {
     this.config.quietHoursEnabled = update.enabled;
     this.config.quietHoursStart = update.start;
@@ -733,6 +743,8 @@ export class BotRuntime {
       time: { timeZone: NIGERIA_TIME_ZONE, current: formatNigeriaDateTime() },
       safety: {
         groupOnlyMode: this.config.groupOnlyMode,
+        dmPolicy: this.config.dmPolicy,
+        groupPolicy: this.config.groupPolicy,
         directMessageAllowlist: this.config.directMessageAllowlist,
         outboundPaused: this.config.outboundPaused,
         aiProcessingPaused: this.config.aiProcessingPaused,

@@ -1,3 +1,6 @@
+export type DmPolicy = "allowlist" | "all";
+export type GroupPolicy = "allowlisted" | "all";
+
 export type ConnectionStatus =
   | "DISCONNECTED"
   | "CONNECTING"
@@ -84,6 +87,8 @@ export interface AppConfig {
   botJid?: string;
   botJids: string[];
   groupOnlyMode: boolean;
+  dmPolicy: DmPolicy;
+  groupPolicy: GroupPolicy;
   directMessageAllowlist: string[];
   dryRun: boolean;
   outboundPaused: boolean;
@@ -435,6 +440,8 @@ export interface PersistedState {
     quietHoursStart?: number;
     quietHoursEnd?: number;
     directMessageAllowlist?: string[];
+    dmPolicy?: DmPolicy;
+    groupPolicy?: GroupPolicy;
     personality?: Partial<Personality>;
     languagePreferenceConfigured?: boolean;
     participation?: Partial<ParticipationSettings>;

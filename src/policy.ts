@@ -1,4 +1,4 @@
-import type { AppConfig, CanonicalMessage, GroupRecord } from "./types.js";
+import type { AppConfig, CanonicalMessage, DmPolicy, GroupPolicy, GroupRecord } from "./types.js";
 import { matchesWhatsAppIdentity } from "./identity.js";
 import { nigeriaDateParts } from "./time.js";
 
@@ -23,24 +23,33 @@ export interface InboundPolicyDecision {
 export function evaluateInboundPolicy(
   message: CanonicalMessage,
   group: GroupRecord | undefined,
-  config: Pick<AppConfig, "groupOnlyMode" | "directMessageAllowlist" | "aiProcessingPaused">,
+  config: Pick<AppConfig, "groupOnlyMode" | "directMessageAllowlist" | "aiProcessingPaused"> & { dmPolicy?: DmPolicy; groupPolicy?: GroupPolicy },
 ): InboundPolicyDecision {
   if (config.aiProcessingPaused) return { allowed: false, reason: "AI_PROCESSING_PAUSED" };
   if (message.isStatus) return { allowed: false, reason: "STATUS_MESSAGE" };
   if (!message.isGroup) {
-    // Hard rule: an allowlisted sender always gets through, even in group-only mode.
-    if (!isDirectMessageAllowed(message, config.directMessageAllowlist)) {
+    // dmPolicy=all replies to everyone (overrides group-only). dmPolicy=allowlist (default) keeps the allowlist rules.
+    if (dmPolicyOf(config) !== "all" && !isDirectMessageAllowed(message, config.directMessageAllowlist)) {
       if (config.groupOnlyMode) return { allowed: false, reason: "DIRECT_MESSAGE" };
       return { allowed: false, reason: "DIRECT_MESSAGE_NOT_ALLOWLISTED" };
     }
   }
   if (message.isGroup) {
     if (!group) return { allowed: false, reason: "UNAUTHORIZED_GROUP" };
-    if (!group.enabled) return { allowed: false, reason: "DISABLED_GROUP" };
+    // groupPolicy=all replies in every synced group, ignoring the per-group enabled toggle. Pause still applies.
+    if (groupPolicyOf(config) !== "all" && !group.enabled) return { allowed: false, reason: "DISABLED_GROUP" };
     if (group.aiPaused) return { allowed: false, reason: "GROUP_PAUSED" };
   }
   if (message.isFromBot) return { allowed: false, reason: "BOT_OWN_MESSAGE" };
   return { allowed: true, reason: "ALLOWED" };
+}
+
+export function dmPolicyOf(config: { dmPolicy?: DmPolicy }): DmPolicy {
+  return config.dmPolicy === "all" ? "all" : "allowlist";
+}
+
+export function groupPolicyOf(config: { groupPolicy?: GroupPolicy }): GroupPolicy {
+  return config.groupPolicy === "all" ? "all" : "allowlisted";
 }
 
 export function isDirectMessageAllowed(message: CanonicalMessage, allowlist: string[]): boolean {
