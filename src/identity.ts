@@ -6,16 +6,24 @@ export function normalizeWhatsAppJid(value: string): string {
 }
 
 export function normalizePhoneNumber(value: string): string | undefined {
-  const digits = value.split("@")[0]?.split(":", 1)[0]?.replace(/\D/g, "") ?? "";
+  const digits = value.trim().split("@")[0]?.split(":", 1)[0]?.replace(/\D/g, "") ?? "";
   return digits || undefined;
+}
+
+// A phone-number-ish identity: a bare number (with +, spaces, dashes), or a
+// phone JID (@s.whatsapp.net / legacy @c.us). LIDs are opaque ids, not numbers.
+function phoneOf(value: string): string | undefined {
+  const jid = normalizeWhatsAppJid(value);
+  if (jid.includes("@")) {
+    return /@(s\.whatsapp\.net|c\.us)$/.test(jid) ? normalizePhoneNumber(jid) : undefined;
+  }
+  return normalizePhoneNumber(jid);
 }
 
 export function sameWhatsAppIdentity(left: string, right: string): boolean {
   if (normalizeWhatsAppJid(left) === normalizeWhatsAppJid(right)) return true;
-  const leftJid = normalizeWhatsAppJid(left);
-  const rightJid = normalizeWhatsAppJid(right);
-  const leftPhone = leftJid.endsWith("@s.whatsapp.net") ? normalizePhoneNumber(leftJid) : !leftJid.includes("@") ? normalizePhoneNumber(leftJid) : undefined;
-  const rightPhone = rightJid.endsWith("@s.whatsapp.net") ? normalizePhoneNumber(rightJid) : !rightJid.includes("@") ? normalizePhoneNumber(rightJid) : undefined;
+  const leftPhone = phoneOf(left);
+  const rightPhone = phoneOf(right);
   return Boolean(leftPhone && rightPhone && leftPhone === rightPhone);
 }
 

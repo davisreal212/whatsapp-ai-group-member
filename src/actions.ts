@@ -61,7 +61,7 @@ export function validateActionPlan(
   if (!parsed.success) return { valid: false, reason: "malformed_action_plan" };
   if (plan.decision === "IGNORE") return { valid: true, reason: "ignore", plan };
   if (!sourceMessage.isGroup) {
-    if (groupOnlyMode || !isDirectMessageAllowed(sourceMessage, directMessageAllowlist)) {
+    if (!isDirectMessageAllowed(sourceMessage, directMessageAllowlist)) {
       return { valid: false, reason: "direct_message_not_allowlisted" };
     }
   } else {

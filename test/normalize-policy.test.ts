@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { normalizeMessage } from "../src/normalize.js";
 import { evaluateInboundPolicy, isQuietHours } from "../src/policy.js";
-import { normalizeWhatsAppJid, sameWhatsAppIdentity } from "../src/identity.js";
+import { matchesWhatsAppIdentity, normalizeWhatsAppJid, sameWhatsAppIdentity } from "../src/identity.js";
 import { nigeriaLocalTimeToTimestamp } from "../src/time.js";
 import type { AppConfig, GroupRecord } from "../src/types.js";
 
@@ -22,6 +22,27 @@ describe("message normalization and inbound policy", () => {
     expect(normalizeWhatsAppJid("234:7@S.WHATSAPP.NET")).toBe("234@s.whatsapp.net");
     expect(sameWhatsAppIdentity("234:7@s.whatsapp.net", "234@s.whatsapp.net")).toBe(true);
     expect(sameWhatsAppIdentity("234@lid", "234@s.whatsapp.net")).toBe(false);
+  });
+
+  it("matches a bare number, an s.whatsapp.net JID, and a device-suffixed JID against one allowlisted number", () => {
+    const allow = ["+2349071419245"];
+    expect(matchesWhatsAppIdentity("2349071419245", allow)).toBe(true);
+    expect(matchesWhatsAppIdentity("2349071419245@s.whatsapp.net", allow)).toBe(true);
+    expect(matchesWhatsAppIdentity("2349071419245:12@s.whatsapp.net", allow)).toBe(true);
+    expect(matchesWhatsAppIdentity("2349071419245@c.us", allow)).toBe(true);
+    expect(matchesWhatsAppIdentity("2349071419245@s.whatsapp.net", ["2349071419245@s.whatsapp.net"])).toBe(true);
+    expect(matchesWhatsAppIdentity("2349071419245", ["+234 907 141 9245"])).toBe(true);
+    expect(matchesWhatsAppIdentity("2349071419246@s.whatsapp.net", allow)).toBe(false);
+  });
+
+  it("never matches an opaque LID against a phone number unless a phone is supplied", () => {
+    expect(matchesWhatsAppIdentity("98765432101234@lid", ["+2349071419245"])).toBe(false);
+    expect(matchesWhatsAppIdentity("98765432101234@lid", ["98765432101234@lid"])).toBe(true);
+  });
+
+  it("does not filter an allowlisted DM sent from a LID when the phone is resolved", () => {
+    const message = { id: "lid-dm", chatId: "98765432101234@lid", senderId: "98765432101234@lid", senderPhone: "2349071419245@s.whatsapp.net", timestamp: Date.now(), type: "text" as const, mentionedIds: [], isGroup: false, isStatus: false, isFromBot: false };
+    expect(evaluateInboundPolicy(message, undefined, { ...config, groupOnlyMode: true, directMessageAllowlist: ["+2349071419245"] })).toEqual({ allowed: true, reason: "ALLOWED" });
   });
 
   it("handles overnight quiet-hour windows", () => {

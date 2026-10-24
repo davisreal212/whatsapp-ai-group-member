@@ -28,8 +28,9 @@ export function evaluateInboundPolicy(
   if (config.aiProcessingPaused) return { allowed: false, reason: "AI_PROCESSING_PAUSED" };
   if (message.isStatus) return { allowed: false, reason: "STATUS_MESSAGE" };
   if (!message.isGroup) {
-    if (config.groupOnlyMode) return { allowed: false, reason: "DIRECT_MESSAGE" };
+    // Hard rule: an allowlisted sender always gets through, even in group-only mode.
     if (!isDirectMessageAllowed(message, config.directMessageAllowlist)) {
+      if (config.groupOnlyMode) return { allowed: false, reason: "DIRECT_MESSAGE" };
       return { allowed: false, reason: "DIRECT_MESSAGE_NOT_ALLOWLISTED" };
     }
   }

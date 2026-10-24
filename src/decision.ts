@@ -94,7 +94,6 @@ export function localRelevance(message: CanonicalMessage, botName: string, botJi
   }
   if (message.type === "audio") return { relevant: true, reason: "audio_message", ...signals };
   if (message.isGroup && ["image", "sticker"].includes(message.type) && !text.trim()) return { relevant: false, reason: "standalone_media", ...signals };
-  if (message.isGroup && isLowSignalGroupMessage(text)) return { relevant: false, reason: "unaddressed_group_message", ...signals };
   if (message.isGroup && text.trim()) return { relevant: true, reason: "group_message_candidate", ...signals };
   if (!message.isGroup && text.trim()) return { relevant: true, reason: "conversation_message", ...signals };
   return { relevant: false, reason: text.trim() ? "unaddressed_group_message" : "empty_message", ...signals };
@@ -162,8 +161,10 @@ export class DecisionEngine {
       ? { ...safePlan, decision: "REPLY" as const, reason: "Directly addressed; generate a safe response." }
       : safePlan;
     if (!responsePlan) {
+      // Allowlisted DMs always get a reply: classification decides how, never whether.
+      const allowlistedFallback = !message.isGroup && local.reason === "allowlisted_dm";
       return {
-        plan: mediaRequest ? mediaRequestPlan() : stickerRequest ? stickerRequestPlan() : ignorePlan("No healthy AI provider is configured; choosing silence."),
+        plan: mediaRequest ? mediaRequestPlan() : stickerRequest ? stickerRequestPlan() : allowlistedFallback ? dmFallbackPlan() : ignorePlan("No healthy AI provider is configured; choosing silence."),
         local,
         usedAi: false,
       };
@@ -270,4 +271,17 @@ function isLowSignalGroupMessage(text: string): boolean {
   const words = normalized.match(/[\p{L}\p{N}]+/gu) ?? [];
   const lowSignalWords = new Set(["afternoon", "evening", "good", "hello", "hey", "hi", "lol", "lmao", "morning", "no", "ok", "okay", "omo", "please", "same", "sha", "thanks", "thank", "true", "wow", "yeah", "yes", "yo"]);
   return normalized.length <= 12 && words.length <= 2 && words.every((word) => lowSignalWords.has(word));
+}
+
+function dmFallbackPlan(): DecisionPlan {
+  return {
+    decision: "REPLY",
+    confidence: 1,
+    reason: "allowlisted_dm_fallback",
+    text: "hey, my brain lagged for a sec. send that again?",
+    delayMs: 0,
+    needsWeb: false,
+    needsMedia: false,
+    responseStyle: "short_casual",
+  } as DecisionPlan;
 }
