@@ -74,3 +74,48 @@ export const fallbackRotator = new FallbackRotator();
 export function pickFallbackLine(kind: FallbackKind, personKey: string): string {
   return fallbackRotator.pick(kind, personKey);
 }
+
+// Plain-text "hold up" line for when the AI walk fails on a normal text message.
+// Media fallbacks above are for real media failures only; this is never used for text.
+export const HOLD_UP_VARIANTS: readonly string[] = [
+  "hold up, thinking",
+  "hold up, one sec",
+  "give me a sec, thinking",
+];
+
+export const EXCUSE_MAX_PER_HOUR = 1;
+export const EXCUSE_MAX_IN_A_ROW = 2;
+const HOUR_MS = 3_600_000;
+
+/** Rate-limits fallback excuses per sender: max 1 per hour, never more than 2 in a row without a real AI reply. */
+export class ExcuseLimiter {
+  private readonly state = new Map<string, { lastAt: number; inRow: number }>();
+
+  constructor(private readonly now: () => number = Date.now) {}
+
+  /** Returns true if an excuse may be sent to this sender now, and records it. */
+  tryUse(senderKey: string): boolean {
+    const t = this.now();
+    const s = this.state.get(senderKey) ?? { lastAt: -Infinity, inRow: 0 };
+    if (t - s.lastAt < HOUR_MS) return false;
+    if (s.inRow >= EXCUSE_MAX_IN_A_ROW) return false;
+    this.state.set(senderKey, { lastAt: t, inRow: s.inRow + 1 });
+    return true;
+  }
+
+  /** Call when a real AI reply goes out to this sender: resets the in-a-row streak. */
+  noteRealReply(senderKey: string): void {
+    const s = this.state.get(senderKey);
+    if (s) s.inRow = 0;
+  }
+
+  reset(): void {
+    this.state.clear();
+  }
+}
+
+export const excuseLimiter = new ExcuseLimiter();
+
+export function pickHoldUpLine(personKey: string): string {
+  return HOLD_UP_VARIANTS[Math.floor(Math.random() * HOLD_UP_VARIANTS.length)] ?? HOLD_UP_VARIANTS[0]!;
+}

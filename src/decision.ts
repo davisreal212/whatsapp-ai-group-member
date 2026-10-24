@@ -1,4 +1,4 @@
-import { pickFallbackLine } from "./fallback-lines.js";
+import { excuseLimiter, pickFallbackLine, pickHoldUpLine } from "./fallback-lines.js";
 import { z } from "zod";
 import type { AppConfig, CanonicalMessage, DecisionPlan, GroupRecord, Personality } from "./types.js";
 import type { ContextSnapshot } from "./memory.js";
@@ -153,7 +153,9 @@ export class DecisionEngine {
       ...(message.senderName ? { senderName: message.senderName } : {}),
       context,
     };
-    const plan = await this.router.classify(input, group.id);
+    // One more walk through the pool before giving up on the AI for this message.
+    const plan = (await this.router.classify(input, group.id)) ?? (await this.router.classify(input, group.id));
+    if (plan) excuseLimiter.noteRealReply(message.senderId);
     const safePlan = plan && plan.targetMessageId && plan.targetMessageId !== message.id
       ? { ...plan, targetMessageId: message.id }
       : plan;
@@ -275,13 +277,17 @@ function isLowSignalGroupMessage(text: string): boolean {
   return normalized.length <= 12 && words.length <= 2 && words.every((word) => lowSignalWords.has(word));
 }
 
+// AI walk failed on a normal text DM. Never a media-failure line here. At most one plain
+// "hold up" per sender per hour and never more than 2 in a row; otherwise stay quiet.
 function dmFallbackPlan(message: CanonicalMessage): DecisionPlan {
-  const isVoice = message.type === "audio";
+  if (!excuseLimiter.tryUse(message.senderId)) {
+    return ignorePlan("AI unavailable; excuse rate-limited, choosing silence.");
+  }
   return {
     decision: "REPLY",
     confidence: 1,
     reason: "allowlisted_dm_fallback",
-    text: pickFallbackLine(isVoice ? "voice" : "generic", message.senderId),
+    text: pickHoldUpLine(message.senderId),
     delayMs: 0,
     needsWeb: false,
     needsMedia: false,

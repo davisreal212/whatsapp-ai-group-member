@@ -89,3 +89,50 @@ describe("voice-specific fallback", () => {
     expect(voiceLines).not.toContain(plan.plan.text);
   });
 });
+
+import { ExcuseLimiter, HOLD_UP_VARIANTS, pickHoldUpLine } from "../src/fallback-lines.js";
+
+describe("excuse rate limit", () => {
+  const H = 3_600_000;
+  it("allows at most one excuse per sender per hour", () => {
+    let t = 0;
+    const lim = new ExcuseLimiter(() => t);
+    expect(lim.tryUse("dami")).toBe(true);
+    t += 10 * 60_000;
+    expect(lim.tryUse("dami")).toBe(false);
+    t += H;
+    expect(lim.tryUse("dami")).toBe(true);
+  });
+  it("never more than 2 excuses in a row without a real reply", () => {
+    let t = 0;
+    const lim = new ExcuseLimiter(() => t);
+    expect(lim.tryUse("dami")).toBe(true);
+    t += H; expect(lim.tryUse("dami")).toBe(true);
+    t += H; expect(lim.tryUse("dami")).toBe(false);
+    lim.noteRealReply("dami");
+    t += H; expect(lim.tryUse("dami")).toBe(true);
+  });
+  it("tracks senders independently", () => {
+    const lim = new ExcuseLimiter(() => 0);
+    expect(lim.tryUse("a")).toBe(true);
+    expect(lim.tryUse("b")).toBe(true);
+  });
+});
+
+describe("text-message failure does not use media-fallback lines", () => {
+  it("hold-up lines contain no media/brain wording", () => {
+    for (const line of HOLD_UP_VARIANTS) expect(line).not.toMatch(/brain|glitch|lagged|buffer|resend|voice|pic|image|eyes|screen/i);
+    expect(HOLD_UP_VARIANTS).toContain(pickHoldUpLine("dami"));
+  });
+  it("an allowlisted text DM with no AI plan never gets a media-failure line", async () => {
+    const { DecisionEngine } = await import("../src/decision.js");
+    const router = { classify: async () => undefined, generateResponse: async () => undefined } as any;
+    const engine = new DecisionEngine(router);
+    const cfg: any = { botName: "kola", botJid: "bot@x", alwaysReplyToAllowedDm: true, participation: undefined };
+    const ctx: any = { personality: { talkativeness: 0.35, respondToMentions: true, respondToReplies: true, joinRelevantConversations: true, languageMix: "english", languages: ["english"] }, recentActions: [] };
+    const msg: any = { id: "m1", chatId: "c1", senderId: "dami-text", isGroup: false, type: "text", text: "Hello", mentionedIds: [] };
+    const group: any = { id: "dm" };
+    const out = await engine.decide(msg, group, ctx, cfg);
+    expect(out.plan.text ?? "").not.toMatch(/brain|glitch|lagged|buffer|resend|voice|eyes|screen/i);
+  });
+});
