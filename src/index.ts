@@ -9,7 +9,7 @@ import type { WACallEvent } from "@whiskeysockets/baileys";
 
 async function main(): Promise<void> {
   const config = loadConfig();
-  const vectorJobsEnabled = config.embeddingProvider === "gemini" && Boolean(config.qdrantUrl);
+  const vectorJobsEnabled = (config.embeddingProvider === "gemini" || config.embeddingProvider === "qdrant") && Boolean(config.qdrantUrl);
   const store = config.databaseUrl ? new PostgresStore(config.databaseUrl, vectorJobsEnabled) : new FileStore(config.dataDir, vectorJobsEnabled);
   let runtime: BotRuntime;
   const whatsapp = new BaileysWhatsAppAdapter(config.whatsappAuthDir, store, {
