@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { CanonicalMessage, LanguagePreference, Personality } from "./types.js";
 import type { ParticipationSignals } from "./participation.js";
 import { languageLabel as formatLanguageLabel, normalizeLanguageName } from "./languages.js";
-import { characterInstructions } from "./character.js";
+import { characterInstructions, DEFAULT_PERSONA_MODE } from "./character.js";
 
 const ratio = z.preprocess((value) => {
   const number = typeof value === "number" ? value : Number(value);
@@ -25,6 +25,8 @@ export const personalityPatchSchema = z.object({
   initiative: ratio,
   responseLength: z.enum(["short", "medium", "long"]),
   customDescription: z.string().trim().max(1_000),
+  personaMode: z.enum(["kola", "folk", "custom"]),
+  customPersonaPrompt: z.string().trim().max(2_000),
   personalityPresets: z.array(z.string().trim().min(1).max(40)).max(8),
   humorLevel: ratio,
   languages: z.array(language).min(1).max(8),
@@ -73,6 +75,8 @@ export function defaultPersonality(displayName: string): Personality {
     initiative: 0.15,
     responseLength: "short",
     personalityPresets: [],
+    personaMode: "kola",
+    customPersonaPrompt: "",
     humorLevel: 0.2,
     languages: ["english"],
     respondToMentions: true,
@@ -228,7 +232,7 @@ export function personaInstructions(personality: Personality): string[] {
     "During normal conversation speak as a group participant in first person: I, me, my, we, or us. Do not describe yourself as the AI, bot, or assistant unless discussing the system technically.",
     "Keep personality separate from accuracy, privacy, authorization, and security. Never invent facts or claim to have performed an unavailable action.",
     ...(personality.customDescription ? [`Custom persona guidance: ${personality.customDescription}`] : []),
-    ...characterInstructions(personality.displayName),
+    ...characterInstructions(personality.displayName, personality.personaMode ?? DEFAULT_PERSONA_MODE, personality.customPersonaPrompt),
   ];
 }
 

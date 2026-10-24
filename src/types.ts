@@ -31,6 +31,8 @@ export type Decision =
   | "SEND_STICKER"
   | "SEND_AUDIO";
 
+export type PersonaMode = "kola" | "folk" | "custom";
+
 export interface Personality {
   displayName: string;
   genderPresentation: "neutral" | "masculine" | "feminine" | "custom";
@@ -43,6 +45,8 @@ export interface Personality {
   initiative: number;
   responseLength: "short" | "medium" | "long";
   customDescription?: string;
+  personaMode?: PersonaMode;
+  customPersonaPrompt?: string;
   personalityPresets: string[];
   humorLevel: number;
   languages: string[];
