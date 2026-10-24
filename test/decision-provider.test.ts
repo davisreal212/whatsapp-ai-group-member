@@ -254,8 +254,7 @@ describe("decision safety helpers", () => {
       OPENROUTER_API_KEY: "openrouter",
     }));
     expect(router.statuses().map((provider) => `${provider.name}:${provider.model}`)).toEqual([
-      "phoenix-deepseek:gpt-6-astra",
-      "phoenix-glm:gpt-5.6-sol",
+      "phoenix-pool:gpt-6-astra",
       "groq:openai/gpt-oss-20b",
       "gemini:gemini-3.6-flash",
       "openrouter:z-ai/glm-5.2:free",

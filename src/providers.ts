@@ -4,6 +4,7 @@ import type { Store } from "./store.js";
 import { parseDecisionPlan } from "./decision.js";
 import { formatNigeriaDateTime, NIGERIA_TIME_ZONE } from "./time.js";
 import { personaInstructions } from "./persona.js";
+import { ModelHealth, PHOENIX_TEXT_MODEL_POOL } from "./model-pool.js";
 
 export interface ProviderInput {
   messageId?: string;
@@ -245,6 +246,58 @@ export class OpenAICompatibleProvider extends BaseProvider {
   }
 }
 
+// One Phoenix provider over a whole model pool. Any failure (429, 5xx, timeout, empty text)
+// marks that model down for a cooldown and instantly tries the next model in the pool.
+export class PhoenixPoolProvider extends BaseProvider {
+  readonly name = "phoenix-pool";
+  readonly available: boolean;
+  private readonly baseUrl: string;
+  private readonly pool: string[];
+  private readonly health: ModelHealth;
+  private readonly attemptTimeoutMs: number;
+
+  constructor(baseUrl: string, pool: readonly string[], apiKey: string | undefined, cooldownMs: number, requestTimeoutMs = DEFAULT_AI_REQUEST_TIMEOUT_MS) {
+    super(pool[0] ?? "phoenix", apiKey, undefined, requestTimeoutMs);
+    this.baseUrl = baseUrl.replace(/\/$/, "");
+    this.pool = [...pool];
+    this.health = new ModelHealth(cooldownMs);
+    this.attemptTimeoutMs = Math.max(4_000, Math.floor(requestTimeoutMs / 2));
+    this.available = Boolean(apiKey) && this.pool.length > 0;
+  }
+
+  protected async complete(prompt: string, json: boolean): Promise<string> {
+    if (!this.apiKey) throw new Error("Phoenix API key is not configured");
+    const now = Date.now();
+    const up = this.pool.filter((model) => this.health.isUp(model, now));
+    // If every model is down, still try the pool in order so a recovering model gets a chance.
+    const order = up.length ? up : this.pool;
+    const failures: string[] = [];
+    for (const model of order) {
+      try {
+        const response = await fetch(`${this.baseUrl}/chat`, {
+          method: "POST",
+          headers: { "content-type": "application/json", "X-API-Key": this.apiKey },
+          body: JSON.stringify({ model, message: prompt, temperature: json ? 0.1 : 0.65 }),
+          signal: AbortSignal.timeout(this.attemptTimeoutMs),
+        });
+        if (!response.ok) throw new Error(`Phoenix ${model} returned HTTP ${response.status}`);
+        const body = await response.json() as { response?: unknown };
+        if (typeof body.response !== "string" || !body.response.trim()) throw new Error(`Phoenix ${model} returned no text`);
+        this.health.markUp(model);
+        return body.response;
+      } catch (error) {
+        this.health.markDown(model);
+        failures.push(error instanceof Error ? error.message : `Phoenix ${model} failed`);
+      }
+    }
+    throw new Error(failures.join("; ").slice(0, 500) || "Phoenix pool has no models");
+  }
+
+  healthyModels(): string[] {
+    return this.pool.filter((model) => this.health.isUp(model));
+  }
+}
+
 export class PhoenixProvider extends BaseProvider {
   readonly available: boolean;
 
@@ -286,8 +339,7 @@ export class ProviderRouter {
     this.cooldownMs = config.providerCooldownMs;
     this.operationTimeoutMs = config.aiOperationTimeoutMs;
     this.providers = providers ?? [
-      new PhoenixProvider("phoenix-deepseek", config.phoenixApiBaseUrl, config.phoenixPrimaryModel, config.phoenixApiKey, config.aiRequestTimeoutMs),
-      new PhoenixProvider("phoenix-glm", config.phoenixApiBaseUrl, config.phoenixSecondaryModel, config.phoenixApiKey, config.aiRequestTimeoutMs),
+      new PhoenixPoolProvider(config.phoenixApiBaseUrl, config.phoenixTextModelPool ?? PHOENIX_TEXT_MODEL_POOL, config.phoenixApiKey, config.providerCooldownMs, config.aiRequestTimeoutMs),
       new OpenAICompatibleProvider("groq", "https://api.groq.com/openai/v1", config.groqModel, config.groqApiKey, undefined, config.aiRequestTimeoutMs),
       new GeminiProvider(config.geminiModel, config.geminiApiKey, config.aiRequestTimeoutMs),
       new OpenAICompatibleProvider("openrouter", "https://openrouter.ai/api/v1", config.openRouterModel, config.openRouterApiKey, "z-ai/glm-5.2:free", config.aiRequestTimeoutMs),

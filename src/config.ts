@@ -1,3 +1,4 @@
+import { parseModelList, PHOENIX_TEXT_MODEL_POOL, PHOENIX_VISION_MODEL_POOL } from "./model-pool.js";
 import "dotenv/config";
 import { isAbsolute } from "node:path";
 import { z } from "zod";
@@ -89,6 +90,8 @@ const envSchema = z.object({
   PHOENIX_API_KEY: optionalString,
   PHOENIX_API_BASE_URL: z.string().url().default("https://concerned-swordfish-suhailtechlnfo-01fd2de0.koyeb.app"),
   PHOENIX_VISION_MODEL: z.string().min(1).max(100).default("gpt-5.6-sol"),
+  PHOENIX_TEXT_MODEL_POOL: z.string().max(4000).optional(),
+  PHOENIX_VISION_MODEL_POOL: z.string().max(4000).optional(),
   PHOENIX_PRIMARY_MODEL: z.string().min(1).max(100).default("gpt-6-astra"),
   PHOENIX_SECONDARY_MODEL: z.string().min(1).max(100).default("gpt-5.6-sol"),
   AI_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(3_000).max(60_000).default(12_000),
@@ -192,6 +195,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     phoenixPrimaryModel: values.PHOENIX_PRIMARY_MODEL,
     phoenixSecondaryModel: values.PHOENIX_SECONDARY_MODEL,
     phoenixVisionModel: values.PHOENIX_VISION_MODEL,
+    phoenixTextModelPool: parseModelList(values.PHOENIX_TEXT_MODEL_POOL, PHOENIX_TEXT_MODEL_POOL),
+    phoenixVisionModelPool: parseModelList(values.PHOENIX_VISION_MODEL_POOL, PHOENIX_VISION_MODEL_POOL),
     aiRequestTimeoutMs: values.AI_REQUEST_TIMEOUT_MS,
     aiOperationTimeoutMs: values.AI_OPERATION_TIMEOUT_MS,
     qdrantUrl: values.QDRANT_URL,

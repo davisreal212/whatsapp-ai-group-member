@@ -130,6 +130,8 @@ export interface AppConfig {
   phoenixPrimaryModel: string;
   phoenixSecondaryModel: string;
   phoenixVisionModel: string;
+  phoenixTextModelPool?: readonly string[];
+  phoenixVisionModelPool?: readonly string[];
   aiRequestTimeoutMs: number;
   aiOperationTimeoutMs: number;
   qdrantUrl?: string;
