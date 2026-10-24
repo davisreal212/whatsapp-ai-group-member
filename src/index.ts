@@ -5,6 +5,7 @@ import { createApp } from "./server.js";
 import { FileStore } from "./store.js";
 import { PostgresStore } from "./postgres-store.js";
 import { BaileysWhatsAppAdapter } from "./whatsapp.js";
+import { createNeonAuthPersistence } from "./auth-persistence.js";
 import type { WACallEvent } from "@whiskeysockets/baileys";
 
 async function main(): Promise<void> {
@@ -17,7 +18,7 @@ async function main(): Promise<void> {
     onGroups: async (groups) => runtime.syncGroups(groups),
     onIncomingCalls: async (calls: WACallEvent[]) => runtime.handleIncomingCalls(calls),
     onIdentity: async (identities) => runtime.setBotIdentities(identities),
-  }, config.maxMediaBytes, config.maxVideoDurationSeconds);
+  }, config.maxMediaBytes, config.maxVideoDurationSeconds, config.databaseUrl ? createNeonAuthPersistence(config.databaseUrl) : undefined);
   runtime = new BotRuntime(store, config, whatsapp);
   await runtime.init();
   runtime.startBackgroundWorkers();

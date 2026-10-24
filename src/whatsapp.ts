@@ -19,6 +19,7 @@ import { KeyedJobQueue, type QueueStats } from "./queue.js";
 import type { DownloadedMedia } from "./media.js";
 import { normalizePhoneNumber, normalizeWhatsAppJid, sameWhatsAppIdentity } from "./identity.js";
 import type { PhoneIdentityResolver } from "./normalize.js";
+import type { AuthPersistence } from "./auth-persistence.js";
 
 export interface DiscoveredGroup {
   id: string;
@@ -59,7 +60,18 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     private readonly events: WhatsAppEvents,
     private readonly maxMediaBytes = 10 * 1024 * 1024,
     private readonly maxVideoDurationSeconds = 300,
+    private readonly authPersistence?: AuthPersistence,
   ) {}
+
+  // Mirrors the auth dir into the database. Failures are logged, never thrown into the socket path.
+  private async persistAuth(): Promise<void> {
+    if (!this.authPersistence) return;
+    try {
+      await this.authPersistence.save(this.authDir);
+    } catch (error) {
+      console.error(`[whatsapp] auth save failed: ${error instanceof Error ? error.message : "unknown"}`);
+    }
+  }
 
   get connected(): boolean {
     return this.isOpen;
@@ -77,8 +89,20 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
       }
       return;
     }
+    if (this.authPersistence) {
+      try {
+        const restored = await this.authPersistence.restore(this.authDir);
+        console.log(`[whatsapp] auth restore from database=${restored}`);
+      } catch (error) {
+        console.error(`[whatsapp] auth restore failed: ${error instanceof Error ? error.message : "unknown"}`);
+      }
+    }
     await mkdir(this.authDir, { recursive: true });
-    const { state, saveCreds } = await useMultiFileAuthState(this.authDir);
+    const { state, saveCreds: saveDiskCreds } = await useMultiFileAuthState(this.authDir);
+    const saveCreds = async () => {
+      await saveDiskCreds();
+      await this.persistAuth();
+    };
     this.authRegistered = state.creds.registered;
     console.log(`[whatsapp] auth loaded registered=${this.authRegistered} pairingRequested=${Boolean(this.pairingPhoneNumber)}`);
     if (!this.authRegistered && !this.pairingPhoneNumber) {
@@ -211,6 +235,8 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     this.pairingPhoneNumber = undefined;
     this.rawMessages.clear();
     socket?.end(undefined);
+    await this.credentialsSave.catch(() => undefined);
+    await this.persistAuth();
     await this.messageQueue.waitForIdle();
     await this.credentialsSave.catch(() => undefined);
     await this.store.setConnection("DISCONNECTED");
@@ -448,6 +474,7 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
   private async clearAuthState(): Promise<void> {
     await this.credentialsSave.catch(() => undefined);
     await rm(this.authDir, { recursive: true, force: true });
+    await this.authPersistence?.clear().catch((error) => console.error(`[whatsapp] auth clear failed: ${error instanceof Error ? error.message : "unknown"}`));
   }
 
   private rememberPhoneIdentity(lid: string | undefined, jid: string | undefined): void {
