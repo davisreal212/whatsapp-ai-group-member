@@ -10,6 +10,8 @@ import { LANGUAGE_LABELS, SUPPORTED_LANGUAGE_COUNT } from "./languages.js";
 
 export function createApp(runtime: BotRuntime, config: AppConfig) {
   const app = express();
+  // Render sits in front of the app: trust one proxy hop so request.ip is the real client, not the shared proxy.
+  app.set("trust proxy", 1);
   app.disable("x-powered-by");
   app.use(express.json({ limit: "100kb" }));
   app.use(express.static(join(process.cwd(), "public")));
