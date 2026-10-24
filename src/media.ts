@@ -1,3 +1,4 @@
+import sharp from "sharp";
 import { createHash } from "node:crypto";
 
 export interface DownloadedMedia {
@@ -491,7 +492,7 @@ export class MediaProcessor {
       const hash = createHash("sha256").update(media.data).digest("hex");
       const cached = this.visionCache.get(hash);
       if (cached) return cached;
-      const result = await this.vision.analyze(media, context);
+      const result = await this.vision.analyze(await downscaleForVision(media), context);
       this.visionCache.set(hash, result);
       if (this.visionCache.size > 100) this.visionCache.delete(this.visionCache.keys().next().value as string);
       return result;
@@ -573,5 +574,21 @@ export class MediaProcessor {
     if (recent.length >= this.downloadsPerHour) throw new Error("media_download_rate_limit");
     recent.push(now);
     this.downloadTimes.set(scopeId, recent);
+  }
+}
+
+// WhatsApp images can be large; Phoenix vision rejects big base64 payloads with HTTP 413.
+// Downscale to max 1280px JPEG q80 before upload. Falls back to the original on failure.
+export async function downscaleForVision(media: DownloadedMedia): Promise<DownloadedMedia> {
+  try {
+    const data = await sharp(media.data, { animated: false, failOn: "none" })
+      .rotate()
+      .resize({ width: 1280, height: 1280, fit: "inside", withoutEnlargement: true })
+      .flatten({ background: "#ffffff" })
+      .jpeg({ quality: 80, mozjpeg: true })
+      .toBuffer();
+    return { data, mimeType: "image/jpeg" };
+  } catch {
+    return media;
   }
 }

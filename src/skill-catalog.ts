@@ -201,4 +201,12 @@ export const BLUEPRINT_SKILL_CATALOG: SkillCatalogEntry[] = [
   entry("event_trigger", "Event trigger", "Trigger a skill when a configured event occurs.", "automation", "GROUP", true),
   entry("conditional_action", "Conditional action", "Execute an action only when conditions are satisfied.", "automation", "MESSAGE", true),
   entry("monitoring_trigger", "Monitoring trigger", "Notify when a monitored condition changes.", "automation", "GLOBAL", true),
+  entry("banter_roasting", "Banter and roasting", "Trade light roasts with members who are already trading jabs, within hard limits.", "personalization", "MEMBER"),
+  entry("opinionated_takes", "Opinionated takes", "Give real opinions on crypto, web3, football, and music instead of neutral summaries.", "personalization", "GLOBAL"),
+  entry("status_story_response", "Status and story responses", "React to WhatsApp statuses and stories the way a friend would, briefly and only when it fits.", "human_behavior", "MESSAGE"),
+  entry("curious_follow_up", "Curious follow-up questions", "Ask the one follow-up a curious friend would ask, not a survey.", "human_behavior", "MESSAGE"),
+  entry("personal_detail_recall", "Personal detail recall", "Remember details people share about their lives and bring them back naturally later.", "memory", "MEMBER"),
+  entry("close_member_teasing", "Close member teasing", "Tease close members with affection, using what the group already knows about them.", "personalization", "MEMBER"),
+  entry("brevity_control", "Brevity and yapping", "Know when to send one line and when a longer reply is actually needed.", "human_behavior", "MESSAGE"),
+  entry("group_admin_awareness", "Group admin awareness", "Respect the group's pinned rules and admin decisions.", "administration", "GROUP"),
 ];
