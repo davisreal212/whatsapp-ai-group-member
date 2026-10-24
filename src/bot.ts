@@ -229,7 +229,9 @@ export class BotRuntime {
       }
       return;
     }
-    this.actions.noteIncoming(message);
+    // Only policy-passing messages may suppress older pending replies; dropped messages must not.
+    const incomingGroup = message.groupId ? this.store.group(message.groupId) : undefined;
+    if (evaluateInboundPolicy(message, incomingGroup, this.config).allowed) this.actions.noteIncoming(message);
     await this.inboundQueue.enqueueAndWait(message.chatId, () => this.processInboundMessage(message, loadMedia));
   }
 

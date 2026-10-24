@@ -163,4 +163,22 @@ describe("message normalization and inbound policy", () => {
     };
     expect(evaluateInboundPolicy(message, group, config)).toEqual({ allowed: true, reason: "ALLOWED" });
   });
+
+  it("drops a group message sent by any known bot identity, including a LID alias not in the single botJid", () => {
+    const message = {
+      id: "group-lid-1", chatId: group.id, groupId: group.id, senderId: "99887766@lid", timestamp: Date.now(), type: "text" as const,
+      mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false,
+    };
+    const aliasConfig = { ...config, botJids: ["234@s.whatsapp.net", "99887766@lid"] };
+    expect(evaluateInboundPolicy(message, group, aliasConfig)).toEqual({ allowed: false, reason: "BOT_OWN_MESSAGE" });
+    expect(evaluateInboundPolicy(message, group, { ...config, botJids: ["234@s.whatsapp.net"] })).toEqual({ allowed: true, reason: "ALLOWED" });
+  });
+
+  it("still drops a bot's own group message via fromMe when botJids is empty", () => {
+    const message = {
+      id: "group-own-1", chatId: group.id, groupId: group.id, senderId: "member", timestamp: Date.now(), type: "text" as const,
+      mentionedIds: [], isGroup: true, isStatus: false, isFromBot: true,
+    };
+    expect(evaluateInboundPolicy(message, group, { ...config, botJids: [] })).toEqual({ allowed: false, reason: "BOT_OWN_MESSAGE" });
+  });
 });

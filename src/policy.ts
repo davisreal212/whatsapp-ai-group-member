@@ -1,5 +1,5 @@
 import type { AppConfig, CanonicalMessage, DmPolicy, GroupPolicy, GroupRecord } from "./types.js";
-import { matchesWhatsAppIdentity } from "./identity.js";
+import { matchesWhatsAppIdentity, sameWhatsAppIdentity } from "./identity.js";
 import { nigeriaDateParts } from "./time.js";
 
 export type PolicyReason =
@@ -23,7 +23,7 @@ export interface InboundPolicyDecision {
 export function evaluateInboundPolicy(
   message: CanonicalMessage,
   group: GroupRecord | undefined,
-  config: Pick<AppConfig, "groupOnlyMode" | "directMessageAllowlist" | "aiProcessingPaused"> & { dmPolicy?: DmPolicy; groupPolicy?: GroupPolicy },
+  config: Pick<AppConfig, "groupOnlyMode" | "directMessageAllowlist" | "aiProcessingPaused"> & { dmPolicy?: DmPolicy; groupPolicy?: GroupPolicy; botJids?: string[] },
 ): InboundPolicyDecision {
   if (config.aiProcessingPaused) return { allowed: false, reason: "AI_PROCESSING_PAUSED" };
   if (message.isStatus) return { allowed: false, reason: "STATUS_MESSAGE" };
@@ -40,7 +40,7 @@ export function evaluateInboundPolicy(
     if (groupPolicyOf(config) !== "all" && !group.enabled) return { allowed: false, reason: "DISABLED_GROUP" };
     if (group.aiPaused) return { allowed: false, reason: "GROUP_PAUSED" };
   }
-  if (message.isFromBot) return { allowed: false, reason: "BOT_OWN_MESSAGE" };
+  if (message.isFromBot || isOwnBotSender(message, config.botJids)) return { allowed: false, reason: "BOT_OWN_MESSAGE" };
   return { allowed: true, reason: "ALLOWED" };
 }
 
@@ -50,6 +50,12 @@ export function dmPolicyOf(config: { dmPolicy?: DmPolicy }): DmPolicy {
 
 export function groupPolicyOf(config: { groupPolicy?: GroupPolicy }): GroupPolicy {
   return config.groupPolicy === "all" ? "all" : "allowlisted";
+}
+
+// LID-aliased group messages can carry a sender id that differs from the single configured botJid,
+// so check every known bot identity, not just one.
+function isOwnBotSender(message: CanonicalMessage, botJids: string[] | undefined): boolean {
+  return (botJids ?? []).some((jid) => sameWhatsAppIdentity(message.senderId, jid));
 }
 
 export function isDirectMessageAllowed(message: CanonicalMessage, allowlist: string[]): boolean {
