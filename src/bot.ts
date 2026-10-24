@@ -1,3 +1,4 @@
+import { pickFallbackLine } from "./fallback-lines.js";
 import { randomUUID } from "node:crypto";
 import type { WACallEvent, WAMessage } from "@whiskeysockets/baileys";
 import { ActionService, type OutboundTransport } from "./actions.js";
@@ -299,7 +300,7 @@ export class BotRuntime {
         await this.log("media.image_analyzed", "info", { type: message.type, confidence: vision.confidence, ocr: Boolean(vision.ocrText) }, message);
       } catch (error) {
         await this.log("media.image_analysis_failed", "warn", { type: "image", error: error instanceof Error ? error.message : "unknown" }, message);
-        await this.executeTaskResult({ reply: "my eyes glitched, send that again" }, message, group).catch(() => undefined);
+        await this.executeTaskResult({ reply: pickFallbackLine("image", message.senderId) }, message, group).catch(() => undefined);
       }
     }
     if (message.type === "document" && message.media?.hasDownloadableContent && loadMedia && isTextDocument(message.media.mimeType)) {

@@ -1,3 +1,4 @@
+import { pickFallbackLine } from "./fallback-lines.js";
 import { z } from "zod";
 import type { AppConfig, CanonicalMessage, DecisionPlan, GroupRecord, Personality } from "./types.js";
 import type { ContextSnapshot } from "./memory.js";
@@ -121,12 +122,13 @@ export class DecisionEngine {
     }, local.relevant);
     if (!policy.shouldReply) return { plan: ignorePlan("Persona response policy chose silence."), local, usedAi: false };
     if (message.transcriptConfidence !== undefined && message.transcriptConfidence < 0.45) {
+      const voice = message.type === "audio";
       return {
         plan: {
           decision: "REPLY",
           confidence: 1,
           reason: "low_transcript_confidence",
-          text: "I couldn't make that out clearly. Send the voice note again?",
+          text: pickFallbackLine(voice ? "voice" : "generic", message.senderId),
           delayMs: 0,
           needsWeb: false,
           needsMedia: false,
@@ -164,7 +166,7 @@ export class DecisionEngine {
       // Allowlisted DMs always get a reply: classification decides how, never whether.
       const allowlistedFallback = !message.isGroup && local.reason === "allowlisted_dm";
       return {
-        plan: mediaRequest ? mediaRequestPlan() : stickerRequest ? stickerRequestPlan() : allowlistedFallback ? dmFallbackPlan() : ignorePlan("No healthy AI provider is configured; choosing silence."),
+        plan: mediaRequest ? mediaRequestPlan() : stickerRequest ? stickerRequestPlan() : allowlistedFallback ? dmFallbackPlan(message) : ignorePlan("No healthy AI provider is configured; choosing silence."),
         local,
         usedAi: false,
       };
@@ -273,12 +275,13 @@ function isLowSignalGroupMessage(text: string): boolean {
   return normalized.length <= 12 && words.length <= 2 && words.every((word) => lowSignalWords.has(word));
 }
 
-function dmFallbackPlan(): DecisionPlan {
+function dmFallbackPlan(message: CanonicalMessage): DecisionPlan {
+  const isVoice = message.type === "audio";
   return {
     decision: "REPLY",
     confidence: 1,
     reason: "allowlisted_dm_fallback",
-    text: "hey, my brain lagged for a sec. send that again?",
+    text: pickFallbackLine(isVoice ? "voice" : "generic", message.senderId),
     delayMs: 0,
     needsWeb: false,
     needsMedia: false,
