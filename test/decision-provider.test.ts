@@ -94,7 +94,7 @@ describe("decision safety helpers", () => {
 
   it("does not treat an unquoted short follow-up as a bot request", () => {
     const message = { id: "bot-follow-up", chatId: "g@g.us", groupId: "g@g.us", senderId: "member", timestamp: Date.now(), type: "text" as const, text: "lol", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
-    expect(localRelevance(message, "Kola", undefined, 0.1, [], false, undefined, [{ id: "action", type: "REPLY", text: "That was funny", timestamp: Date.now() - 1_000, sourceMessageId: "prior", role: "bot" }])).toMatchObject({ relevant: false, reason: "unaddressed_group_message" });
+    expect(localRelevance(message, "Kola", undefined, 0.1, [], false, undefined, [{ id: "action", type: "REPLY", text: "That was funny", timestamp: Date.now() - 1_000, sourceMessageId: "prior", role: "bot" }])).toMatchObject({ relevant: true, reason: "group_message_candidate" });
   });
 
   it("keeps explicit image requests relevant and high priority", () => {
@@ -163,14 +163,21 @@ describe("decision safety helpers", () => {
     expect(result.plan.decision).toBe("IGNORE");
   });
 
-  it("ignores unaddressed group greetings", () => {
+  it("sends unaddressed group greetings to the classifier instead of dropping them locally", () => {
     const message = { id: "greeting", chatId: "g@g.us", groupId: "g@g.us", senderId: "u", timestamp: Date.now(), type: "text" as const, text: "Good morning y'all", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
-    expect(localRelevance(message, "Kola", undefined, 0.1)).toMatchObject({ relevant: false, reason: "unaddressed_group_message" });
+    expect(localRelevance(message, "Kola", undefined, 0.1)).toMatchObject({ relevant: true, reason: "group_message_candidate" });
   });
 
-  it("ignores short unrelated group messages", () => {
+  it("sends short unrelated group messages to the classifier instead of dropping them locally", () => {
     const message = { id: "short-message", chatId: "g@g.us", groupId: "g@g.us", senderId: "u", timestamp: Date.now(), type: "text" as const, text: "okay", mentionedIds: [], isGroup: true, isStatus: false, isFromBot: false };
-    expect(localRelevance(message, "Kola", undefined, 0.1)).toMatchObject({ relevant: false, reason: "unaddressed_group_message", directed: false });
+    expect(localRelevance(message, "Kola", undefined, 0.1)).toMatchObject({ relevant: true, reason: "group_message_candidate", directed: false });
+  });
+
+  it("never lets the classifier silence an allowlisted DM", async () => {
+    const message = { id: "dm-allow", chatId: "2349071419245@s.whatsapp.net", senderId: "2349071419245@s.whatsapp.net", timestamp: Date.now(), type: "text" as const, text: "yo", mentionedIds: [], isGroup: false, isStatus: false, isFromBot: false };
+    const group: GroupRecord = { id: "2349071419245@s.whatsapp.net", whatsappGroupId: "2349071419245@s.whatsapp.net", subject: "dm", participantCount: 1, isAdmin: false, enabled: true, aiPaused: false, lastSeenAt: Date.now() };
+    const result = await new DecisionEngine({ classify: async () => ({ decision: "IGNORE", confidence: 1, reason: "quiet", delayMs: 0, needsWeb: false, needsMedia: false, responseStyle: "short_casual" as const }) } as unknown as ProviderRouter).decide(message, group, { group, recentMessages: [], memories: [], personality: loadConfig({ NODE_ENV: "test" }).personality }, { botName: "Kola", alwaysReplyToAllowedDm: true });
+    expect(result.plan.decision).toBe("REPLY");
   });
 
   it("recognizes a request to stop repeating a topic", () => {
@@ -236,7 +243,7 @@ describe("decision safety helpers", () => {
       generateResponse: async () => undefined,
     };
     const config = loadConfig({ NODE_ENV: "test", AI_OPERATION_TIMEOUT_MS: "5000", PROVIDER_COOLDOWN_MS: "60000" });
-    config.aiOperationTimeoutMs = 20;
+    config.aiOperationTimeouts.classifyMs = 20;
     const router = new ProviderRouter(new FileStore(`/tmp/provider-operation-timeout-${Date.now()}`), config, [pending]);
     const input = { messageText: "hello", messageType: "text", directed: true, context: {} as ContextSnapshot };
     const startedAt = Date.now();

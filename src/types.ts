@@ -132,9 +132,8 @@ export interface AppConfig {
   phoenixVisionModel: string;
   phoenixTextModelPool?: readonly string[];
   phoenixVisionModelPool?: readonly string[];
-  aiRequestTimeoutMs: number;
-  aiOperationTimeoutMs: number;
-  phoenixAttemptTimeoutMs: number;
+  aiAttemptTimeouts: { classifyMs: number; replyMs: number };
+  aiOperationTimeouts: { classifyMs: number; replyMs: number };
   qdrantUrl?: string;
   qdrantApiKey?: string;
   qdrantCollection: string;

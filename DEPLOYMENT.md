@@ -93,8 +93,14 @@ PHOENIX_API_KEY=<FastAPI router key>
 PHOENIX_API_BASE_URL=https://concerned-swordfish-suhailtechlnfo-01fd2de0.koyeb.app
 PHOENIX_PRIMARY_MODEL=gpt-6-astra
 PHOENIX_SECONDARY_MODEL=gpt-5.6-sol
-AI_REQUEST_TIMEOUT_MS=12000
-AI_OPERATION_TIMEOUT_MS=20000
+# Per-attempt HTTP timeout per model (ms). classify is short JSON; reply/research get room for long output.
+# Defaults: classify 15000, reply 60000. Unset per-op values fall back to AI_REQUEST_TIMEOUT_MS.
+AI_CLASSIFY_ATTEMPT_TIMEOUT_MS=15000
+AI_REPLY_ATTEMPT_TIMEOUT_MS=60000
+# Total budget across the whole failover walk (ms). Defaults: classify 45000, reply 120000.
+# Unset per-op values fall back to AI_OPERATION_TIMEOUT_MS.
+AI_CLASSIFY_OPERATION_TIMEOUT_MS=45000
+AI_REPLY_OPERATION_TIMEOUT_MS=120000
 TAVILY_API_KEY=<Tavily key>
 TAVILY_MAX_RESULTS=5
 PROVIDER_FAILURE_THRESHOLD=3

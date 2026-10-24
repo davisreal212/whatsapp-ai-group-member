@@ -25,9 +25,15 @@ export interface ProviderInput {
   targetLanguage?: string;
 }
 
-export const DEFAULT_AI_REQUEST_TIMEOUT_MS = 12_000;
-export const DEFAULT_AI_OPERATION_TIMEOUT_MS = 45_000;
-export const DEFAULT_PHOENIX_ATTEMPT_TIMEOUT_MS = 10_000;
+// Per-attempt HTTP timeouts. classify is short JSON (~15s is plenty); reply/research and any
+// long generation get 60s+ so a slow-but-healthy model is not cut off or benched for being thorough.
+export interface OperationTimeouts {
+  classifyMs: number;
+  replyMs: number;
+}
+export const DEFAULT_ATTEMPT_TIMEOUTS: OperationTimeouts = { classifyMs: 15_000, replyMs: 60_000 };
+// Whole-operation budget across the failover walk. Classify walks ~3 models at 15s; reply gets 120s.
+export const DEFAULT_OPERATION_TIMEOUTS: OperationTimeouts = { classifyMs: 45_000, replyMs: 120_000 };
 
 export interface AIProvider {
   readonly name: string;
@@ -54,7 +60,11 @@ abstract class BaseProvider implements AIProvider {
   abstract readonly name: string;
   abstract readonly available: boolean;
 
-  constructor(readonly model: string, protected readonly apiKey: string | undefined, readonly fallbackModel?: string, protected readonly requestTimeoutMs = DEFAULT_AI_REQUEST_TIMEOUT_MS) {}
+  constructor(readonly model: string, protected readonly apiKey: string | undefined, readonly fallbackModel?: string, protected readonly timeouts = DEFAULT_ATTEMPT_TIMEOUTS) {}
+
+  protected timeoutFor(json: boolean): number {
+    return json ? this.timeouts.classifyMs : this.timeouts.replyMs;
+  }
 
   async classify(input: ProviderInput): Promise<DecisionPlan> {
     const text = await this.complete(this.classificationPrompt(input), true);
@@ -160,8 +170,8 @@ export class GeminiProvider extends BaseProvider {
   readonly name = "gemini";
   readonly available: boolean;
 
-  constructor(model: string, apiKey?: string, requestTimeoutMs = DEFAULT_AI_REQUEST_TIMEOUT_MS) {
-    super(model, apiKey, undefined, requestTimeoutMs);
+  constructor(model: string, apiKey?: string, timeouts = DEFAULT_ATTEMPT_TIMEOUTS) {
+    super(model, apiKey, undefined, timeouts);
     this.available = Boolean(apiKey);
   }
 
@@ -176,7 +186,7 @@ export class GeminiProvider extends BaseProvider {
           contents: [{ role: "user", parts: [{ text: prompt }] }],
           generationConfig: json ? { responseMimeType: "application/json", temperature: 0.1 } : { temperature: 0.65 },
         }),
-        signal: AbortSignal.timeout(this.requestTimeoutMs),
+        signal: AbortSignal.timeout(this.timeoutFor(json)),
       },
     );
     if (!response.ok) throw new Error(`Gemini returned HTTP ${response.status}`);
@@ -196,9 +206,9 @@ export class OpenAICompatibleProvider extends BaseProvider {
     model: string,
     apiKey?: string,
     fallbackModel?: string,
-    requestTimeoutMs = DEFAULT_AI_REQUEST_TIMEOUT_MS,
+    timeouts = DEFAULT_ATTEMPT_TIMEOUTS,
   ) {
-    super(model, apiKey, fallbackModel, requestTimeoutMs);
+    super(model, apiKey, fallbackModel, timeouts);
     this.available = Boolean(apiKey);
   }
 
@@ -223,7 +233,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
             messages: [{ role: "user", content: prompt }],
             ...(json ? { response_format: { type: "json_object" } } : {}),
           }),
-          signal: AbortSignal.timeout(this.requestTimeoutMs),
+          signal: AbortSignal.timeout(this.timeoutFor(json)),
         });
         if (!response.ok) {
           const failure = `${this.name} model ${model} returned HTTP ${response.status}`;
@@ -255,14 +265,12 @@ export class PhoenixPoolProvider extends BaseProvider {
   private readonly baseUrl: string;
   private readonly pool: string[];
   private readonly health: ModelHealth;
-  private readonly attemptTimeoutMs: number;
 
-  constructor(baseUrl: string, pool: readonly string[], apiKey: string | undefined, cooldownMs: number, requestTimeoutMs = DEFAULT_AI_REQUEST_TIMEOUT_MS, attemptTimeoutMs = DEFAULT_PHOENIX_ATTEMPT_TIMEOUT_MS) {
-    super(pool[0] ?? "phoenix", apiKey, undefined, requestTimeoutMs);
+  constructor(baseUrl: string, pool: readonly string[], apiKey: string | undefined, cooldownMs: number, timeouts = DEFAULT_ATTEMPT_TIMEOUTS) {
+    super(pool[0] ?? "phoenix", apiKey, undefined, timeouts);
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.pool = [...pool];
     this.health = new ModelHealth(cooldownMs);
-    this.attemptTimeoutMs = Math.max(3_000, attemptTimeoutMs);
     this.available = Boolean(apiKey) && this.pool.length > 0;
   }
 
@@ -279,7 +287,7 @@ export class PhoenixPoolProvider extends BaseProvider {
           method: "POST",
           headers: { "content-type": "application/json", "X-API-Key": this.apiKey },
           body: JSON.stringify({ model, message: prompt, temperature: json ? 0.1 : 0.65 }),
-          signal: AbortSignal.timeout(this.attemptTimeoutMs),
+          signal: AbortSignal.timeout(this.timeoutFor(json)),
         });
         if (!response.ok) throw new Error(`Phoenix ${model} returned HTTP ${response.status}`);
         const body = await response.json() as { response?: unknown };
@@ -307,9 +315,9 @@ export class PhoenixProvider extends BaseProvider {
     baseUrl: string,
     model: string,
     apiKey?: string,
-    requestTimeoutMs = DEFAULT_AI_REQUEST_TIMEOUT_MS,
+    timeouts = DEFAULT_ATTEMPT_TIMEOUTS,
   ) {
-    super(model, apiKey, undefined, requestTimeoutMs);
+    super(model, apiKey, undefined, timeouts);
     this.baseUrl = baseUrl.replace(/\/$/, "");
     this.available = Boolean(apiKey);
   }
@@ -322,7 +330,7 @@ export class PhoenixProvider extends BaseProvider {
       method: "POST",
       headers: { "content-type": "application/json", "X-API-Key": this.apiKey },
       body: JSON.stringify({ model: this.model, message: prompt, temperature: json ? 0.1 : 0.65 }),
-      signal: AbortSignal.timeout(this.requestTimeoutMs),
+      signal: AbortSignal.timeout(this.timeoutFor(json)),
     });
     if (!response.ok) throw new Error(`Phoenix ${this.model} returned HTTP ${response.status}`);
     const body = await response.json() as { response?: unknown };
@@ -338,18 +346,18 @@ export class ProviderRouter {
   constructor(private readonly store: Store, config: AppConfig, providers?: AIProvider[]) {
     this.failureThreshold = config.providerFailureThreshold;
     this.cooldownMs = config.providerCooldownMs;
-    this.operationTimeoutMs = config.aiOperationTimeoutMs;
+    this.operationTimeouts = config.aiOperationTimeouts;
     this.providers = providers ?? [
-      new PhoenixPoolProvider(config.phoenixApiBaseUrl, config.phoenixTextModelPool ?? PHOENIX_TEXT_MODEL_POOL, config.phoenixApiKey, config.providerCooldownMs, config.aiRequestTimeoutMs, config.phoenixAttemptTimeoutMs),
-      new OpenAICompatibleProvider("groq", "https://api.groq.com/openai/v1", config.groqModel, config.groqApiKey, undefined, config.aiRequestTimeoutMs),
-      new GeminiProvider(config.geminiModel, config.geminiApiKey, config.aiRequestTimeoutMs),
-      new OpenAICompatibleProvider("openrouter", "https://openrouter.ai/api/v1", config.openRouterModel, config.openRouterApiKey, "z-ai/glm-5.2:free", config.aiRequestTimeoutMs),
+      new PhoenixPoolProvider(config.phoenixApiBaseUrl, config.phoenixTextModelPool ?? PHOENIX_TEXT_MODEL_POOL, config.phoenixApiKey, config.providerCooldownMs, config.aiAttemptTimeouts),
+      new OpenAICompatibleProvider("groq", "https://api.groq.com/openai/v1", config.groqModel, config.groqApiKey, undefined, config.aiAttemptTimeouts),
+      new GeminiProvider(config.geminiModel, config.geminiApiKey, config.aiAttemptTimeouts),
+      new OpenAICompatibleProvider("openrouter", "https://openrouter.ai/api/v1", config.openRouterModel, config.openRouterApiKey, "z-ai/glm-5.2:free", config.aiAttemptTimeouts),
     ];
   }
 
   private readonly failureThreshold: number;
   private readonly cooldownMs: number;
-  private readonly operationTimeoutMs: number;
+  private readonly operationTimeouts: OperationTimeouts;
 
   async classify(input: ProviderInput, groupId?: string): Promise<DecisionPlan | undefined> {
     return this.tryProviders("classify", input, groupId, this.providers);
@@ -383,7 +391,7 @@ export class ProviderRouter {
     groupId: string | undefined,
     providers: AIProvider[],
   ): Promise<T extends "classify" ? DecisionPlan | undefined : string | undefined> {
-    const deadline = Date.now() + this.operationTimeoutMs;
+    const deadline = Date.now() + (operation === "classify" ? this.operationTimeouts.classifyMs : this.operationTimeouts.replyMs);
     for (const provider of providers) {
       if (!provider.available) continue;
       if (this.isCircuitOpen(provider)) continue;
