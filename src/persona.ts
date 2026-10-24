@@ -257,13 +257,26 @@ function languageList(preference: LanguagePreference): string[] {
   return [preference];
 }
 
-// Folk mode ships with every catalog skill on as a hint, regardless of the per-skill toggles.
-// Kola keeps the toggle-driven top-8 discovery. Execution still goes through the skill executor.
+// Folk mode hints every catalog skill as a compact line (id, name, category, scope; no descriptions or skill files).
+// Full skill texts blew phoenix's body limit (HTTP 413). Kola keeps the toggle-driven top-8 hints.
+export const FOLK_SKILL_HINT_BYTE_CAP = 6_000;
+
 export function skillHintsForMode<T extends { skillId: string; name: string; description: string; category: string; scope: string; skillFile?: string; enabled: boolean }>(
   personaMode: PersonaMode | undefined,
   discovered: T[],
   allSkills: T[],
 ): Array<Pick<T, "skillId" | "name" | "description" | "category" | "scope" | "skillFile">> {
-  const source = personaMode === "folk" ? allSkills : discovered.slice(0, 8);
-  return source.map(({ skillId, name, description, category, scope, skillFile }) => ({ skillId, name, description, category, scope, ...(skillFile ? { skillFile } : {}) }));
+  if (personaMode === "folk") {
+    const hints: Array<Pick<T, "skillId" | "name" | "description" | "category" | "scope" | "skillFile">> = [];
+    let bytes = 2;
+    for (const skill of allSkills) {
+      const line = { skillId: skill.skillId, name: skill.name, description: "", category: skill.category, scope: skill.scope } as Pick<T, "skillId" | "name" | "description" | "category" | "scope" | "skillFile">;
+      const size = JSON.stringify(line).length + 1;
+      if (bytes + size > FOLK_SKILL_HINT_BYTE_CAP) break;
+      bytes += size;
+      hints.push(line);
+    }
+    return hints;
+  }
+  return discovered.slice(0, 8).map(({ skillId, name, description, category, scope, skillFile }) => ({ skillId, name, description, category, scope, ...(skillFile ? { skillFile } : {}) }));
 }

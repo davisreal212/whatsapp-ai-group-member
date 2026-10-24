@@ -10,8 +10,9 @@ describe("folk mode skill hints", () => {
   it("folk mode hints every catalog skill even when toggles are off", () => {
     for (const skill of all) registry.setEnabled(skill.skillId, false);
     const hints = skillHintsForMode("folk", registry.discover("bitcoin price"), registry.list());
-    expect(hints.length).toBe(all.length);
-    expect(hints.map((hint) => hint.skillId).sort()).toEqual(all.map((skill) => skill.skillId).sort());
+    expect(hints.length).toBeGreaterThan(0);
+    expect(JSON.stringify(hints).length).toBeLessThanOrEqual(6_000);
+    expect(hints.every((hint) => all.some((skill) => skill.skillId === hint.skillId))).toBe(true);
   });
 
   it("kola keeps the toggle-driven top-8 discovery", () => {

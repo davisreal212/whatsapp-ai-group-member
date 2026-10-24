@@ -276,6 +276,7 @@ export class PhoenixPoolProvider extends BaseProvider {
 
   protected async complete(prompt: string, json: boolean): Promise<string> {
     if (!this.apiKey) throw new Error("Phoenix API key is not configured");
+    if (process.env.LOG_LEVEL === "debug") console.debug(`[providers] prompt bytes=${Buffer.byteLength(prompt, "utf8")} json=${json}`);
     const now = Date.now();
     const up = this.pool.filter((model) => this.health.isUp(model, now));
     // If every model is down, still try the pool in order so a recovering model gets a chance.
