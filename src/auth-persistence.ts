@@ -2,6 +2,8 @@ import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 import { neon } from "@neondatabase/serverless";
 
+type NeonLike = (strings: TemplateStringsArray, ...values: unknown[]) => Promise<unknown>;
+
 // Mirrors the Baileys multi-file auth directory into durable storage so a
 // Render restart (ephemeral disk) does not log the WhatsApp session out.
 export interface AuthPersistence {
@@ -11,6 +13,10 @@ export interface AuthPersistence {
   restore(dir: string): Promise<boolean>;
   // Removes the durable snapshot.
   clear(): Promise<void>;
+  // Single-writer lease so two instances (e.g. overlapping Render deploys) never run the same WhatsApp session.
+  acquireLease?(owner: string, ttlMs: number): Promise<boolean>;
+  renewLease?(owner: string, ttlMs: number): Promise<boolean>;
+  releaseLease?(owner: string): Promise<void>;
 }
 
 export type AuthSnapshot = Map<string, Buffer>;
@@ -46,7 +52,10 @@ export function createNeonAuthPersistence(databaseUrl: string): AuthPersistence 
   const sql = neon(databaseUrl);
   let schemaReady: Promise<void> | undefined;
   const ensureSchema = () => {
-    schemaReady ??= sql`CREATE TABLE IF NOT EXISTS whatsapp_auth_files (name text PRIMARY KEY, content bytea NOT NULL, updated_at bigint NOT NULL)`.then(() => undefined);
+    schemaReady ??= (async () => {
+      await sql`CREATE TABLE IF NOT EXISTS whatsapp_auth_files (name text PRIMARY KEY, content bytea NOT NULL, updated_at bigint NOT NULL)`;
+      await sql`CREATE TABLE IF NOT EXISTS whatsapp_session_lease (name text PRIMARY KEY, owner text NOT NULL, expires_at bigint NOT NULL)`;
+    })();
     return schemaReady;
   };
 
@@ -74,5 +83,26 @@ export function createNeonAuthPersistence(databaseUrl: string): AuthPersistence 
       await ensureSchema();
       await sql`DELETE FROM whatsapp_auth_files`;
     },
+    async acquireLease(owner, ttlMs) {
+      await ensureSchema();
+      return claimLease(sql as unknown as NeonLike, owner, ttlMs);
+    },
+    async renewLease(owner, ttlMs) {
+      return claimLease(sql as unknown as NeonLike, owner, ttlMs);
+    },
+    async releaseLease(owner) {
+      await ensureSchema();
+      await sql`DELETE FROM whatsapp_session_lease WHERE name = 'primary' AND owner = ${owner}`;
+    },
   };
+}
+
+// Takes or renews the lease when it is free, expired, or already ours. Returns true when this owner holds it.
+async function claimLease(sql: NeonLike, owner: string, ttlMs: number): Promise<boolean> {
+  const now = Date.now();
+  const rows = (await sql`INSERT INTO whatsapp_session_lease (name, owner, expires_at) VALUES ('primary', ${owner}, ${now + ttlMs})
+    ON CONFLICT (name) DO UPDATE SET owner = EXCLUDED.owner, expires_at = EXCLUDED.expires_at
+    WHERE whatsapp_session_lease.expires_at < ${now} OR whatsapp_session_lease.owner = EXCLUDED.owner
+    RETURNING owner`) as Array<{ owner: string }>;
+  return rows.length > 0;
 }

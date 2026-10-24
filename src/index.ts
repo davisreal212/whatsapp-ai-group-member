@@ -48,6 +48,7 @@ async function main(): Promise<void> {
   process.once("SIGTERM", () => void shutdown());
 }
 
+process.on("unhandledRejection", (error) => console.error(`[process] unhandled rejection: ${error instanceof Error ? error.message : "unknown"}`));
 main().catch((error) => {
   console.error(error instanceof Error ? error.message : error);
   process.exitCode = 1;

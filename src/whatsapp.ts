@@ -53,6 +53,11 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
   private pairingPhoneNumber?: string;
   private credentialsSave = Promise.resolve();
   private manuallyDisconnected = false;
+  private readonly instanceId = crypto.randomUUID();
+  private leaseTimer?: ReturnType<typeof setInterval>;
+  private leaseRetryTimer?: ReturnType<typeof setTimeout>;
+  private replacedCount = 0;
+  private static readonly LEASE_TTL_MS = 3 * 60_000;
 
   constructor(
     private readonly authDir: string,
@@ -88,6 +93,24 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
         await this.requestPairingCode(this.socket, this.pairingPhoneNumber);
       }
       return;
+    }
+    if (this.authPersistence?.acquireLease) {
+      // Only one instance may hold the WhatsApp session. An overlapping deploy or stale process waits here
+      // instead of connecting with the same creds, which makes WhatsApp reply 440 and both sides flap.
+      const held = await this.authPersistence.acquireLease(this.instanceId, BaileysWhatsAppAdapter.LEASE_TTL_MS).catch((error) => {
+        console.error(`[whatsapp] lease acquire failed: ${error instanceof Error ? error.message : "unknown"}`);
+        return false;
+      });
+      if (!held) {
+        console.log("[whatsapp] session lease held by another instance; retrying in 30s");
+        if (this.leaseRetryTimer) clearTimeout(this.leaseRetryTimer);
+        this.leaseRetryTimer = setTimeout(() => {
+          this.leaseRetryTimer = undefined;
+          void this.connect(this.pairingPhoneNumber).catch(() => undefined);
+        }, 30_000);
+        return;
+      }
+      this.startLeaseRenewal();
     }
     if (this.authPersistence) {
       try {
@@ -185,7 +208,36 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     if (this.pairingPhoneNumber && !state.creds.registered) await this.requestPairingCode(socket, this.pairingPhoneNumber);
   }
 
+  private startLeaseRenewal(): void {
+    if (this.leaseTimer || !this.authPersistence?.renewLease) return;
+    this.leaseTimer = setInterval(() => {
+      void this.authPersistence!.renewLease!(this.instanceId, BaileysWhatsAppAdapter.LEASE_TTL_MS).then(async (ok) => {
+        if (ok) return;
+        // Another instance took the lease: stop our socket so we do not fight it.
+        console.error("[whatsapp] lease lost to another instance; disconnecting this copy");
+        this.stopLeaseRenewal();
+        const socket = this.socket;
+        this.socket = undefined;
+        this.isOpen = false;
+        socket?.end(undefined);
+      }).catch(() => undefined);
+    }, 60_000);
+  }
+
+  private stopLeaseRenewal(): void {
+    if (this.leaseTimer) clearInterval(this.leaseTimer);
+    this.leaseTimer = undefined;
+  }
+
+  private async releaseLease(): Promise<void> {
+    this.stopLeaseRenewal();
+    if (this.leaseRetryTimer) clearTimeout(this.leaseRetryTimer);
+    this.leaseRetryTimer = undefined;
+    await this.authPersistence?.releaseLease?.(this.instanceId).catch(() => undefined);
+  }
+
   async disconnect(): Promise<void> {
+    await this.releaseLease();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
     this.manuallyDisconnected = true;
@@ -224,6 +276,7 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
   }
 
   async stop(): Promise<void> {
+    await this.releaseLease();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
     this.manuallyDisconnected = true;
@@ -353,6 +406,7 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
       this.isOpen = true;
       this.authRegistered = true;
       this.reconnectAttempts = 0;
+      this.replacedCount = 0;
       await this.store.setConnection("CONNECTED");
       const identities = [socket.user?.id, socket.user?.jid, socket.user?.lid].filter((value): value is string => Boolean(value));
       if (identities.length) await this.events.onIdentity?.([...new Set(identities)]);
@@ -383,6 +437,31 @@ export class BaileysWhatsAppAdapter implements OutboundTransport {
     }
     if (this.reconnectAttempts >= 5) {
       await this.store.setConnection("REQUIRES_REPAIR");
+      return;
+    }
+    // 440 = WhatsApp replaced this session with another login. Reconnecting immediately only kicks the other
+    // client and loops, so back off hard and give up after a few replacements.
+    if (statusCode === 440) {
+      this.replacedCount += 1;
+      if (this.replacedCount > 3) {
+        this.stopLeaseRenewal();
+        await this.store.setConnection("REQUIRES_REPAIR");
+        await this.store.addLog({
+          id: crypto.randomUUID(),
+          event: "whatsapp.session_replaced",
+          level: "error",
+          details: { replacedCount: this.replacedCount },
+          createdAt: Date.now(),
+        });
+        return;
+      }
+      this.reconnectAttempts += 1;
+      await this.store.setConnection("RECONNECTING");
+      const delay = 5 * 60_000 + Math.floor(Math.random() * 30_000);
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = undefined;
+        void this.connect(this.pairingPhoneNumber).catch(() => undefined);
+      }, delay);
       return;
     }
     this.reconnectAttempts += 1;
