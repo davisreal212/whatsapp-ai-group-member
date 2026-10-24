@@ -90,9 +90,9 @@ GROQ_MODEL=openai/gpt-oss-20b
 OPENROUTER_API_KEY=<optional>
 OPENROUTER_MODEL=z-ai/glm-5.2:free
 PHOENIX_API_KEY=<FastAPI router key>
-PHOENIX_API_BASE_URL=https://fastapi-ai-koyeb-app-production.up.railway.app
-PHOENIX_PRIMARY_MODEL=deepseek-v4-flash
-PHOENIX_SECONDARY_MODEL=glm-5.3
+PHOENIX_API_BASE_URL=https://concerned-swordfish-suhailtechlnfo-01fd2de0.koyeb.app
+PHOENIX_PRIMARY_MODEL=gpt-6-astra
+PHOENIX_SECONDARY_MODEL=gpt-5.6-sol
 AI_REQUEST_TIMEOUT_MS=12000
 AI_OPERATION_TIMEOUT_MS=20000
 TAVILY_API_KEY=<Tavily key>
@@ -157,7 +157,7 @@ The pinned dependency is `@whiskeysockets/baileys@6.7.24`. That version exports 
 - The deployed image includes the `skills/` library with one documented `SKILL.md` contract per catalog entry. New entries must be added to `src/skill-catalog.ts` and regenerated with `npm run skills:sync`; model skill hints are curated from that registry and cannot grant permissions or claim actions.
 - The service writes protected application-state snapshots under `DATA_DIR/backups` on startup and on the configured interval. Back up the persistent volume separately; it contains the WhatsApp auth state and local application state.
 - Set `AUDIO_REPLY_MODE=adaptive` with `TTS_API_KEY` or `ELEVENLABS_API_KEY` to reply to voice notes with audio when the provider and adapter support it. ElevenLabs also provides speech-to-text fallback for incoming voice notes. Synthesis failures fall back to text.
-- Set `PHOENIX_API_KEY`, `PHOENIX_API_BASE_URL`, `PHOENIX_PRIMARY_MODEL=deepseek-v4-flash`, and `PHOENIX_SECONDARY_MODEL=glm-5.3` to put the Phoenix FastAPI router ahead of the other AI providers. The two Phoenix models share the same circuit-aware fallback path.
+- Set `PHOENIX_API_KEY`, `PHOENIX_API_BASE_URL`, `PHOENIX_PRIMARY_MODEL=gpt-6-astra`, and `PHOENIX_SECONDARY_MODEL=gpt-5.6-sol` to put the Phoenix FastAPI router ahead of the other AI providers. The two Phoenix models share the same circuit-aware fallback path.
 - Memory retrieval is bounded by the `MEMORY_*_LIMIT` variables and maintenance marks old memories stale or archived using the configured day thresholds. Set `EMBEDDING_PROVIDER=gemini`, `GEMINI_API_KEY`, and `QDRANT_URL` only when semantic retrieval is ready; vector updates are queued durably and retried after restarts or provider failures.
 - `EMBEDDING_DIMENSIONS` must match the configured Qdrant collection. If an existing collection uses another vector size, set a new `QDRANT_COLLECTION` name and let the service create it before reindexing; the relational memory path remains available while semantic search is unavailable.
 - On startup, the vector worker creates the Qdrant keyword payload indexes used by scoped memory filters (`scopeId`, `scopeType`, `memoryType`, and `sourceMemberId`), including for an existing collection.

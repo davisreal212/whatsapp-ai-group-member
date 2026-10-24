@@ -129,6 +129,7 @@ export interface AppConfig {
   phoenixApiBaseUrl: string;
   phoenixPrimaryModel: string;
   phoenixSecondaryModel: string;
+  phoenixVisionModel: string;
   aiRequestTimeoutMs: number;
   aiOperationTimeoutMs: number;
   qdrantUrl?: string;

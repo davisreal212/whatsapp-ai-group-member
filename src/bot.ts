@@ -11,7 +11,7 @@ import type { Store } from "./store.js";
 import { normalizeMessage } from "./normalize.js";
 import type { DiscoveredDirectMessage, DiscoveredGroup } from "./whatsapp.js";
 import { TaskService } from "./tasks.js";
-import { ElevenLabsSpeechToTextProvider, ElevenLabsTextToSpeechProvider, FallbackSpeechToTextProvider, FallbackTextToSpeechProvider, GeminiVisionProvider, GroqSpeechToTextProvider, MediaProcessor, OpenAITextToSpeechProvider } from "./media.js";
+import { ElevenLabsSpeechToTextProvider, ElevenLabsTextToSpeechProvider, FallbackSpeechToTextProvider, FallbackTextToSpeechProvider, FallbackVisionProvider, GeminiVisionProvider, GroqSpeechToTextProvider, MediaProcessor, PhoenixVisionProvider, OpenAITextToSpeechProvider } from "./media.js";
 import { BackupService } from "./backup.js";
 import { KeyedJobQueue } from "./queue.js";
 import { formatNigeriaDateTime, NIGERIA_TIME_ZONE } from "./time.js";
@@ -75,7 +75,7 @@ export class BotRuntime {
     this.decisions = new DecisionEngine(this.providers);
     this.actions = new ActionService(store, config, transport);
     this.tasks = new TaskService(store, config, transport);
-    this.media = new MediaProcessor(new FallbackSpeechToTextProvider([new GroqSpeechToTextProvider(config.groqApiKey), new ElevenLabsSpeechToTextProvider(config.elevenLabsApiKey, "scribe_v1", config.elevenLabsApiBaseUrl)]), new GeminiVisionProvider(config.geminiApiKey, config.geminiModel), new FallbackTextToSpeechProvider([new ElevenLabsTextToSpeechProvider(config.elevenLabsApiKey, config.elevenLabsVoiceId, config.elevenLabsTtsModel, config.elevenLabsApiBaseUrl), new OpenAITextToSpeechProvider(config.ttsApiKey, config.ttsBaseUrl, config.ttsModel, config.ttsVoice)]), config.mediaDownloadsPerHour);
+    this.media = new MediaProcessor(new FallbackSpeechToTextProvider([new GroqSpeechToTextProvider(config.groqApiKey), new ElevenLabsSpeechToTextProvider(config.elevenLabsApiKey, "scribe_v1", config.elevenLabsApiBaseUrl)]), new FallbackVisionProvider([new PhoenixVisionProvider(config.phoenixApiBaseUrl, config.phoenixApiKey, config.phoenixVisionModel), new GeminiVisionProvider(config.geminiApiKey, config.geminiModel)]), new FallbackTextToSpeechProvider([new ElevenLabsTextToSpeechProvider(config.elevenLabsApiKey, config.elevenLabsVoiceId, config.elevenLabsTtsModel, config.elevenLabsApiBaseUrl), new OpenAITextToSpeechProvider(config.ttsApiKey, config.ttsBaseUrl, config.ttsModel, config.ttsVoice)]), config.mediaDownloadsPerHour);
     this.voiceCalls = new ElevenLabsWhatsAppCallService({
       apiKey: config.elevenLabsApiKey,
       agentId: config.elevenLabsAgentId,

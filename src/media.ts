@@ -274,6 +274,90 @@ async function providerError(response: Response, label: string): Promise<string>
   return `${label} returned HTTP ${response.status}${detail ? `: ${detail}` : ""}`;
 }
 
+export class PhoenixVisionProvider implements VisionProvider {
+  readonly name = "phoenix-vision";
+  readonly available: boolean;
+
+  constructor(private readonly apiBaseUrl: string, private readonly apiKey?: string, private readonly model = "gpt-5.6-sol") {
+    this.available = Boolean(apiKey);
+  }
+
+  async analyze(media: DownloadedMedia, context: VisionAnalysisContext = {}): Promise<VisionResult> {
+    if (!this.apiKey) throw new Error("Phoenix API key is not configured");
+    const mimeType = normalizeVisionMimeType(media.mimeType);
+    const mediaLabel = context.messageType === "sticker" || mimeType === "image/webp" ? "WhatsApp sticker or image" : "image";
+    const caption = context.caption?.trim().slice(0, 500);
+    const instruction = [
+      `Inspect this ${mediaLabel} as a literal visual inspection tool.`,
+      "Describe only what is visibly present: objects, people, colors, layout, and legible text.",
+      "Do not invent details, identities, brands, locations, or events that cannot be seen. Lower confidence when unclear.",
+      caption ? `User caption for context only: ${caption}` : "",
+      "Return only JSON with description, ocrText, confidence (0..1), animalSpecies (cat, dog, other, unclear, or none), and animalEvidence.",
+    ].filter(Boolean).join(" ");
+    const parsed = await this.requestVision(media, mimeType, instruction);
+    if (!parsed) throw new Error("Phoenix vision returned no text");
+    if (typeof parsed.description !== "string" || !parsed.description.trim()) throw new Error("Phoenix vision returned no description");
+    const confidence = typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence) ? Math.min(1, Math.max(0, parsed.confidence)) : 0.6;
+    const explicitAnimal = normalizeAnimalSpecies(parsed.animalSpecies);
+    const description = parsed.description.trim().slice(0, 2_000);
+    const ocr = typeof parsed.ocrText === "string" && parsed.ocrText.trim() ? { ocrText: parsed.ocrText.trim().slice(0, 2_000) } : {};
+    if (explicitAnimal === "cat" || explicitAnimal === "dog" || animalFromDescription(description)) {
+      return { description: conservativeAnimalDescription(description), ...ocr, confidence: Math.min(confidence, 0.35), animalSpecies: "unclear" };
+    }
+    return { description, ...ocr, confidence, ...(explicitAnimal ? { animalSpecies: explicitAnimal } : {}) };
+  }
+
+  private async requestVision(media: DownloadedMedia, mimeType: string, instruction: string): Promise<ParsedVision | undefined> {
+    const dataUrl = `data:${mimeType};base64,${media.data.toString("base64")}`;
+    const response = await fetch(`${this.apiBaseUrl.replace(/\/$/, "")}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-API-Key": this.apiKey as string },
+      body: JSON.stringify({ model: this.model, input: [{ role: "user", content: [{ type: "input_text", text: instruction }, { type: "input_image", image_url: dataUrl }] }] }),
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!response.ok) throw new Error(`Phoenix vision returned HTTP ${response.status}`);
+    const body = await response.json() as { output_text?: unknown };
+    return typeof body.output_text === "string" && body.output_text.trim() ? parseVisionJson(body.output_text) : undefined;
+  }
+}
+
+export class FallbackVisionProvider implements VisionProvider {
+  readonly name: string;
+  readonly available: boolean;
+
+  private readonly providers: VisionProvider[];
+
+  constructor(providers: VisionProvider[]) {
+    this.providers = providers.filter((p) => p.available);
+    this.available = this.providers.length > 0;
+    this.name = this.providers.map((p) => p.name).join(">") || "none";
+  }
+
+  async analyze(media: DownloadedMedia, context: VisionAnalysisContext = {}): Promise<VisionResult> {
+    const failures: string[] = [];
+    for (const provider of this.providers) {
+      try {
+        return await provider.analyze(media, context);
+      } catch (error) {
+        failures.push(`${provider.name}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    throw new Error(failures.join("; ") || "No vision provider is configured");
+  }
+
+  async verifyMatch(media: DownloadedMedia, query: string): Promise<{ match: boolean; confidence: number }> {
+    for (const provider of this.providers) {
+      if (!provider.verifyMatch) continue;
+      try {
+        return await provider.verifyMatch(media, query);
+      } catch {
+        // try next provider
+      }
+    }
+    return { match: true, confidence: 0.5 };
+  }
+}
+
 export class OpenAITextToSpeechProvider implements TextToSpeechProvider {
   readonly name = "openai-tts";
   readonly available: boolean;
